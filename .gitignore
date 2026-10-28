@@ -1,0 +1,44 @@
+﻿
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+auth.json
+*credentials*.json
+*.token
+.siwc*/
+.codex/
+siwc_sessions/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+
+# JavaScript
+node_modules/
+.next/
+dist/
+build/
+out/
+
+# Runtime data
+logs/
+tmp/
+temp/
+*.log
+uploads/
+media/
+story_data/
+mongodb_data/
+redis_data/
+backups/
+
+# Editor / OS
+.vscode/.ropeproject
+.DS_Store
+Thumbs.db
