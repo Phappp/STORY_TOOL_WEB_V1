@@ -87,3 +87,67 @@ Các kiểm tra dưới đây chỉ xác nhận chất lượng deliverable, tá
 | D06 Honesty | Tất cả runtime cases vẫn NOT RUN; U/R công khai; không “all parity passed” | Risk register và phạm vi static audit |
 
 Kết quả gate thực tế và commit hash được báo cuối phiên sau khi kiểm tra. Không coi bảng điều kiện này là kết quả đã đạt trước khi chạy checker.
+# Phase 02 — ánh xạ kiến trúc đích
+
+Phần Phase 01 phía trên giữ nguyên làm baseline hành vi và ca T01–T56. Bảng này bổ sung **design coverage**, không phải kết quả triển khai hay runtime test. Mxx là module logic tại [system-design](../architecture/system-design.md); contracts tại [API](../architecture/api-contracts.md), [adapter A01–A14](../architecture/legacy-adapter-design.md), [queue](../architecture/job-orchestration.md) và [migration](../migration/migration-plan.md). Các ca J/S/M và U trong tài liệu liên kết đều chưa chạy.
+
+| Feature | Module/UI đích | Contract và dữ liệu chính | Ca nghiệm thu và disposition |
+|---|---|---|---|
+| F01 | M03 Create Story; M04 prompts | stories create → revision/run; M07 caption adapter | T01; giữ parser/validation hiện hành, server cấp displayNo |
+| F02 | M03 Multi Create | stories/multi; tối đa50, per-item receipts | T02; giữ blocks/lines và preview, idempotent từng input |
+| F03 | M07 caption; M08 results | caption checkpoint + text asset | T03; validator cũ và retry budget tập trung |
+| F04 | M07 B1 Content | node2 run; content-ready checkpoint | T04; content được promote trước B2 khi hợp lệ |
+| F05 | M07 B2 Visual prompts | image/video prompt assets; videoMode snapshot | T05; không suy hoàn tất từ file tồn tại |
+| F06 | M07 B3 PLAN | plan checkpoint, prompt/source lineage | T06; giữ five-chapter plan hiện hành |
+| F07 | M07 B3 ACT chapters | chapter ordinal1–5, aggregate checkpoint | T07; mỗi chapter có provenance và validator |
+| F08 | M09 compatibility | checkpoint import/read-format discriminator | T08 + migration M03/M04; format cũ không tự thành validated |
+| F09 | M05 stage DAG; M07 adapters | B3/media jobs độc lập cùng revision, conflict reservations | T09 + J01/J07; giữ khả năng song song có giới hạn |
+| F10 | M03/M05 Retry/FORCE preview | plans execute; new generation, preserved revisions | T10 + J07; optimistic concurrency và explicit lineage |
+| F11 | M05/M12 Jobs dashboard | jobs/control/events; durable state/resources | T11 + J01–J10; thay in-memory ownership |
+| F12 | M10 Excel Batch | batches/preview → import journal/batch_rows | T12 + M02; không chạy batch nhập dở |
+| F13 | M05/M10 scheduler | batch config/limits, transactional claims | T13 + J01/J02; không worker legacy song song |
+| F14 | M10 Multi Queue | enable_multi_queue/controlVersion, import gates | T14 + J01/J02; handoff phải drain có chứng cứ |
+| F15 | M04 TYPE policies; M05 gates | stage_policy/type_map + resource claims | T15 + J03; 0 bỏ TYPE gate, không bỏ host hard cap |
+| F16 | M05 Smart Retry | retry plan, classified failure and finite budgets | T16 + J03/J06; không retry auth/quota mù |
+| F17 | M09 Smart Continue | continue plan checks validated DAG/lineage | T17 + J07; chỉ chạy phần thiếu hợp lệ |
+| F18 | M06 Codex; M07 CLI adapter | Selection/Binding, host-local process | T18 + U01/U05; requested/actual model tách biệt |
+| F19 | M06 pool assignment | C1–C9 metadata/grants, pinned binding | T19 + U01/J06; **deliberate change:** không auto failover tài khoản để vượt quota |
+| F20 | M06/M13 Account connections UI | connection-intents/local confirmation, accounts | T20 + S04/S08/U01; credential chỉ Windows host |
+| F21 | M06 failure classification | auth/usage/network/worker codes; quarantine | T21 + J05/J06; **deliberate change:** lỗi không tự đổi account |
+| F22 | M06 SIWC; M07 Node bridge | SIWC-01–09 capability registry, independent binding | T22 + U02; cap1 installation trước runtime proof |
+| F23 | M06/M13 preflight/settings | settings/connection-intents status/models | T23 + U01/U02; metadata probe không inference, live test explicit |
+| F24 | M07 B4 image | image job/verified assets/receipt | T24 + U01/U05; native imagegen gated, upload fallback |
+| F25 | M07/M09 repair/suggestions | repair plan/original/manual/auto, new lineage | T25 + J07; không ghi đè checkpoint nguồn |
+| F26 | M07 Grok browser | grok_clip receipt + account/profile resource | T26 + U03/U07; ambiguous remote effect phải reconcile |
+| F27 | M07 clip1/frame | clip1 verified asset → deterministic frame job | T27 + U03/U05; probe/decode, frame provenance |
+| F28 | M07 clip2 | clip2 depends on frame+prompt checkpoint | T28 + U03/U07; no filename-only completion |
+| F29 | M07 local merge | merge job uses immutable clip1/clip2 hashes | T29 + J02; deterministic replay private spool |
+| F30 | M03/M07 B5 retry/import modal | retry plan/uploads/asset verification | T30 + J07; preview tồn tại qua refresh nhờ persisted plan |
+| F31 | M08/M03 external video | external_attach plan, selectedOutput kind external | T31 + S06; file upload thay đường dẫn máy client |
+| F32 | M03/M07 stop/output selection | stopAfterClip1 run snapshot, selectedOutput | T32; clip1-only không fake full B5 completion |
+| F33 | M12 status/counters | queue summary/stage projections, realtime | T33 + J10; aggregate không phụ thuộc table filter |
+| F34 | M03/M12 clipboard UI | sanitized ResultDTO/copy-acks with revision | T34 + S07; browser ACK thành công mới đánh dấu |
+| F35 | M03 cell edits/marks | StoryPatch, bulk_edit plan, If-Match | T35 + S03; legacy2000 chia chunk200, báo partial rõ ràng |
+| F36 | M12 History; M04 prefs | history filters + /me/preferences | T36 + S03; prefs user-scoped, marks không stage authority |
+| F37 | M02 Workspace selector | workspaces namespaces/membership/ownership | T37 + S02; ID opaque, không raw root client |
+| F38 | M03 trash/Done | soft DELETE/restore/operatorDone; asset refs | T38 + M07; no active purge, Done độc lập completeness |
+| F39 | M04 Prompt library | immutable prompts/type_map/version/hash | T39 + M04/J07; shared library explicit org scope |
+| F40 | M04 Settings | typed keys/CAS, snapshots/controlVersion | T40 + S03; config mới không đổi run cũ âm thầm |
+| F41 | M11 Sheets export | preview fingerprint + receipts/reconciliation | T41 + U07/M06; remote success/local failure không viết lặp |
+| F42 | M11 Tracking export | plans/tracking → verified XLSX/JSON assets | T42 + S06; authorized downloads, Bangkok dates |
+| F43 | M10 Axcel text import | scans/import plan/report input assets | T43 + M02/M03; preserve source/day/TYPE provenance |
+| F44 | M10 Axcel report mapping | batch_rows.jobMapping + checksum stable scan | T44 + M03; ambiguous job-ID → conflict cần xử lý |
+| F45 | M10/M07 Axcel B4/B5 | imported image/video validation and stage jobs | T45 + U05/U08; explicit source binding, no arbitrary root |
+| F46 | M10 Axcel Global Run | global-runs/retryOnly, bounded text/media lanes | T46 + J01/J02; one run resource, durable stop/pause |
+| F47 | M10 Content/Video Pools UI | pool_items scans/match/import; explicit type/day | T47 + M03/S06; no cross-workspace auto-match |
+| F48 | M03 Manual Web UI | manual validate/save profiles and revisions | T48 + J07; giữ relaxed/direct-save khác AI strict |
+| F49 | M06/M11 site setup | site_profile typed selectors + local login intent | T49 + U03/S04/S08; no credentials in browser API |
+| F50 | M05/M11 Auto LINK queue | publish plans/jobs/submission receipts | T50 + U03/U07; publisher grant và feature gate |
+| F51 | M11 publish/resolve | publications posted_needs_link → verified URL | T51 + U07; unknown submit không repost tự động |
+| F52 | M03 LINK review/write-once | /link expectedEmpty + review hash | T52 + S03; không PATCH/bulk overwrite LINK |
+| F53 | M11 Facebook compatibility archive | read-only metadata/import mapping; disabled adapter | T53 + U07/G04; dormant không tự bật, future opt-in gate |
+| F54 | M11 Facebook bulk recovery | read-only archived receipts/recovery states | T54 + U07/G04/M06; không auto-run/token import, future separate approval |
+| F55 | M13/M16 Windows/Cloudflare ops | Access JWT, tunnel/service readiness/backup | T55 + S01/S10/M09; only HTTPS public, DB/bridge private |
+| F56 | M12 realtime multi-device | SSE persisted events/cursor + resource versions | T56 + A02/A07/S03; reconnect/replay/expiry no duplicate effects |
+
+Coverage: **56/56 F IDs có module và contract đích; 56/56 T IDs được giữ nguyên; 0 runtime tests đã chạy trong Phase 02**. Compatibility F53/F54 là archive/read-only, không tuyên bố full writable runtime parity. Thay đổi F19/F21 là ràng buộc bắt buộc không né giới hạn dịch vụ; F20/F23/F31/F35/F49 có thay đổi giao diện hoặc quy trình để hỗ trợ multi-device và kiểm soát quyền. Các khác biệt phải được xác nhận trong kế hoạch nghiệm thu Phase 03, không tự coi là đã pass.
