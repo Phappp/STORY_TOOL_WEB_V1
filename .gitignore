@@ -18,6 +18,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .coverage
+*.tsbuildinfo
 
 # JavaScript
 node_modules/
@@ -35,6 +36,7 @@ uploads/
 media/
 story_data/
 mongodb_data/
+.data/
 redis_data/
 backups/
 
