@@ -1,5 +1,7 @@
-# Development database
+﻿# Development database
 
-Phase 03 uses the separate MongoDB database `story_tool_web_dev` and never imports legacy data. MongoDB is optional for mock API pages, but `/health/ready` returns `503` while the configured database cannot be reached.
+This project uses MongoDB Community 8.x at `127.0.0.1:27018`, replica set `storytool-dev`, database `story_tool_web_dev`, with data and logs under `.data/mongo-dev/`. The existing Windows MongoDB service on port 27017 is outside this project's ownership and must remain untouched. No production or legacy data is imported.
 
-`init-dev-replica.ps1` initializes a local single-node replica set when `mongod` is installed. It binds only to `127.0.0.1`.
+Run `start-dev-mongodb.ps1` to start or verify the project instance, `status-dev-mongodb.ps1` to confirm process ownership and PRIMARY, and `stop-dev-mongodb.ps1` for graceful shutdown. The scripts bind to loopback and refuse occupied ports, foreign PIDs, and existing data directories without a matching project ownership marker. They do not install software or modify Windows services. `init-dev-replica.ps1` is a compatibility entry point for startup.
+
+MongoDB authentication is intentionally not configured for this local-only development replica set. Do not expose port 27018 to a LAN or tunnel. App readiness verifies `storytool-dev` PRIMARY and schema initialization; it returns `503` after database loss and retries on later probes.

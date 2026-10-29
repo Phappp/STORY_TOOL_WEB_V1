@@ -37,12 +37,14 @@ def mongo_adapter(request: Request) -> MongoAdapter:
 @app.get("/health/live", response_model=HealthStatus, tags=["health"])
 async def live(request: Request) -> HealthStatus:
     adapter = mongo_adapter(request)
+    await adapter.check_liveness()
     return HealthStatus(status="ok", service=settings.app_name, environment=settings.app_env, database=adapter.status.state, detail="process is running; " + adapter.status.detail)
 
 
 @app.get("/health/ready", response_model=HealthStatus, tags=["health"])
 async def ready(request: Request) -> HealthStatus:
     adapter = mongo_adapter(request)
+    await adapter.check_readiness()
     if adapter.is_ready:
         return HealthStatus(status="ok", service=settings.app_name, environment=settings.app_env, database="connected", detail=adapter.status.detail)
     response = HealthStatus(status="unavailable", service=settings.app_name, environment=settings.app_env, database="unavailable", detail=adapter.status.detail)

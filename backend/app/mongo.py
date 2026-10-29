@@ -18,6 +18,7 @@ class MongoAdapter:
         self.client = None
         self.database = None
         self.status = MongoStatus()
+        self._probe_lock = asyncio.Lock()
 
     async def connect(self) -> MongoStatus:
         try:
@@ -62,6 +63,46 @@ class MongoAdapter:
             await asyncio.to_thread(self.client.close)
             self.client = None
             self.database = None
+
+    async def check_readiness(self) -> MongoStatus:
+        """Probe the actual dev replica set and reconnect after an outage."""
+        async with self._probe_lock:
+            if self.client is None:
+                return await self.connect()
+            try:
+                hello = await asyncio.wait_for(
+                    asyncio.to_thread(self.client.admin.command, "hello"),
+                    timeout=max(2.0, self.settings.mongodb_timeout_ms / 1000 * 2),
+                )
+                if hello.get("setName") != "storytool-dev":
+                    raise ValueError("MongoDB server is not the storytool-dev replica set")
+                if not hello.get("isWritablePrimary"):
+                    raise ValueError("storytool-dev has no writable PRIMARY")
+                self.status = MongoStatus("connected", f"database={self.settings.mongodb_db}; replicaSet=storytool-dev; state=PRIMARY")
+            except Exception as exc:
+                safe_reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+                self.status = MongoStatus("unavailable", f"MongoDB unavailable: {safe_reason[:160]}")
+                if self.client is not None:
+                    self.client.close()
+                self.client = None
+                self.database = None
+            return self.status
+
+    async def check_liveness(self) -> MongoStatus:
+        """Refresh reported database state without making process liveness depend on Mongo."""
+        if self.client is None:
+            return self.status
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self.client.admin.command, "ping"),
+                timeout=max(2.0, self.settings.mongodb_timeout_ms / 1000 * 2),
+            )
+        except Exception:
+            self.status = MongoStatus("unavailable", "MongoDB unavailable: health probe failed")
+            self.client.close()
+            self.client = None
+            self.database = None
+        return self.status
 
     @property
     def is_ready(self) -> bool:
