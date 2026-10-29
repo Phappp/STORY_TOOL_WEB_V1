@@ -18,6 +18,7 @@ from pymongo import ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from .models import JobCreate, SettingsDTO, StoryCreate, StoryPatch, WorkspaceCreate, WorkspacePatch
+from .batch import now, parse_excel
 
 ORG_ID = "00000000-0000-4000-8000-000000000001"
 ACTOR_ID = "00000000-0000-4000-8000-000000000002"
@@ -336,6 +337,54 @@ class MongoRepositories:
             except DuplicateKeyError:
                 raise RepositoryError("VERSION_CONFLICT", "Settings changed concurrently.", 412) from None
         return {"key": key, "value": value, "version": document["revision"], "updated_at": now}
+
+    async def preview_batch(self, workspace_id: str, content: bytes, filename: str) -> dict[str, Any]:
+        return await self._run(self._preview_batch, workspace_id, content, filename)
+
+    def _preview_batch(self, workspace_id, content, filename):
+        self._membership(workspace_id, "editor")
+        parsed = parse_excel(content, filename)
+        existing = {x["inputHash"] for x in self.db.batch_rows.find({**_BASE_FILTER, "workspaceId": workspace_id}, {"inputHash": 1})}
+        for row in parsed["rows"]:
+            if row["input_hash"] in existing and "DUPLICATE_SOURCE" not in row["errors"]:
+                row["errors"].append("DUPLICATE_SOURCE")
+        parsed["errors"] = [{"row_no": row["row_no"], "codes": row["errors"]} for row in parsed["rows"] if row["errors"]]
+        parsed["valid_count"] = sum(not row["errors"] and row["enabled"] for row in parsed["rows"])
+        parsed["duplicate_count"] = sum("DUPLICATE_SOURCE" in row["errors"] for row in parsed["rows"])
+        return parsed
+
+    async def confirm_batch(self, workspace_id: str, preview: dict[str, Any], key: str) -> dict[str, Any]:
+        return await self._run(self._confirm_batch, workspace_id, preview, key)
+
+    def _confirm_batch(self, workspace_id, preview, key):
+        self._membership(workspace_id, "editor")
+        source_hash = preview["source_hash"]
+        route = f"POST:/workspaces/{workspace_id}/batches"
+        previous = self.db.batches.find_one({**_BASE_FILTER, "workspaceId": workspace_id, "sourceHash": source_hash})
+        if previous:
+            return {"id": previous["_id"], "replayed": True, "counts": previous["counts"], "state": previous["state"]}
+        batch_id, timestamp = str(uuid4()), _now()
+        batch = {"_id": batch_id, "schemaVersion": 1, "orgId": ORG_ID, "workspaceId": workspace_id, "version": 1, "createdAt": timestamp, "updatedAt": timestamp, "createdBy": ACTOR_ID, "sourceAssetId": str(uuid4()), "sourceFilename": preview["filename"][:180], "sourceHash": source_hash, "kind": "excel", "importState": "importing", "state": "idle", "config": {"mode": "excel"}, "counts": {"total": len(preview["rows"]), "imported": 0, "duplicate": preview.get("duplicate_count", 0), "failed": len(preview["errors"])}}
+        try:
+            with self.db.client.start_session() as session:
+                with session.start_transaction():
+                    self.db.batches.insert_one(batch, session=session)
+                    for row in preview["rows"]:
+                        document = {"_id": str(uuid4()), "schemaVersion": 1, "orgId": ORG_ID, "workspaceId": workspace_id, "version": 1, "createdAt": timestamp, "updatedAt": timestamp, "createdBy": ACTOR_ID, "batchId": batch_id, "rowNo": row["row_no"], "inputHash": row["input_hash"], "input": row["input"], "type": row["type"], "enabled": row["enabled"], "state": "error" if row["errors"] else "pending", "errors": row["errors"]}
+                        self.db.batch_rows.insert_one(document, session=session)
+                    self.db.batches.update_one({"_id": batch_id}, {"$set": {"importState": "complete", "updatedAt": _now()}, "$inc": {"version": 1}}, session=session)
+        except DuplicateKeyError:
+            existing = self.db.batches.find_one({**_BASE_FILTER, "workspaceId": workspace_id, "sourceHash": source_hash})
+            if existing: return {"id": existing["_id"], "replayed": True, "counts": existing["counts"], "state": existing["state"]}
+            raise
+        batch["importState"] = "complete"
+        return {"id": batch_id, "replayed": False, "counts": batch["counts"], "state": "idle"}
+
+    async def list_batches(self, workspace_id: str, limit: int) -> list[dict[str, Any]]:
+        return await self._run(lambda: [{"id": x["_id"], "filename": x.get("sourceFilename", ""), "state": x["state"], "import_state": x["importState"], "counts": x.get("counts", {}), "version": x["version"], "created_at": x["createdAt"]} for x in self.db.batches.find({**_BASE_FILTER, "workspaceId": workspace_id}).sort("createdAt", -1).limit(limit)])
+
+    async def get_batch_rows(self, workspace_id: str, batch_id: str) -> list[dict[str, Any]]:
+        return await self._run(lambda: [{"row_no": x["rowNo"], "input": x["input"], "type": x["type"], "state": x["state"], "story_id": x.get("storyId"), "errors": x.get("errors", [])} for x in self.db.batch_rows.find({**_BASE_FILTER, "workspaceId": workspace_id, "batchId": batch_id}).sort("rowNo", 1)])
 
 
 def time_order(value: datetime) -> int:

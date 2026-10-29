@@ -157,3 +157,6 @@ Phase 04 provides the persistence/API/UI foundation for F01 manual Story records
 ## Phase 05 runtime disposition
 
 The Phase 05 UI maps supported persistence behavior to Stories/History/Settings/Prompts shell components. F01/F11/F37/F38/F40 slices are interactive through the Phase 04 APIs. Legacy generation, chapters, media, provider, export, publishing and scheduler controls remain disabled with explicit explanations; pending UI is not treated as parity completion.
+## Phase 06 runtime disposition
+
+F12 Excel Batch now has development-only preview and persistent Batch/row metadata for `.xlsx/.xlsm` Input/TYPE workbooks. F43/F44 report mapping, row-to-Story creation, queued handoff, scheduler and Axcel media flows remain pending explicit import policy and later phases.

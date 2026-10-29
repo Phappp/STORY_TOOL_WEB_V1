@@ -6,7 +6,7 @@ import re
 from typing import Any
 from uuid import UUID
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import FastAPI, Header, HTTPException, Query, Request, status, UploadFile, File, Form
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -197,6 +197,25 @@ def create_app(config: Settings | None = None) -> FastAPI:
         stories = await repo.list_stories(chosen, 200, None, "active", None, None)
         jobs = await repo.list_jobs(chosen, 200, None, None, None)
         return envelope({"workspace": workspace, "stories": stories["items"], "jobs": jobs["items"], "metrics": {"stories": len(stories["items"]), "queued_jobs": sum(1 for job in jobs["items"] if job["state"] == "queued"), "running_jobs": sum(1 for job in jobs["items"] if job["state"] == "running")}, "source": "mongodb"}, request)
+
+    @application.post("/api/v1/workspaces/{workspace_id}/batches/preview", tags=["batches"])
+    async def preview_batch(workspace_id: UUID, request: Request, file: UploadFile = File(...)):
+        content = await file.read()
+        result = await (await repositories(request)).preview_batch(str(workspace_id), content, file.filename or "upload.xlsx")
+        return envelope(result, request)
+
+    @application.post("/api/v1/workspaces/{workspace_id}/batches", status_code=201, tags=["batches"])
+    async def confirm_batch(workspace_id: UUID, request: Request, preview: dict[str, Any], idempotency_key: str | None = Header(None, alias="Idempotency-Key")):
+        key = require_idempotency(idempotency_key)
+        return envelope(await (await repositories(request)).confirm_batch(str(workspace_id), preview, key), request)
+
+    @application.get("/api/v1/workspaces/{workspace_id}/batches", tags=["batches"])
+    async def list_batches(workspace_id: UUID, request: Request, limit: int = Query(50, ge=1, le=200)):
+        return envelope({"items": await (await repositories(request)).list_batches(str(workspace_id), limit), "next_cursor": None, "limit": limit}, request)
+
+    @application.get("/api/v1/workspaces/{workspace_id}/batches/{batch_id}/rows", tags=["batches"])
+    async def batch_rows(workspace_id: UUID, batch_id: UUID, request: Request):
+        return envelope(await (await repositories(request)).get_batch_rows(str(workspace_id), str(batch_id)), request)
 
     application.state.settings = settings
     return application
