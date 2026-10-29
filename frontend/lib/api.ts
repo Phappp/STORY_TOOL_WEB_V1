@@ -1,25 +1,33 @@
 export type StageState = "pending" | "queued" | "running" | "complete" | "blocked" | "error";
-export type JobState = "queued" | "running" | "succeeded" | "failed" | "blocked";
-
 export type StageView = { step: "B1" | "B2" | "B3" | "B4" | "B5"; state: StageState };
-export type Story = {
-  id: string;
-  display_no: number;
-  title: string;
-  type: string;
-  lifecycle: "active" | "trashed" | "archived";
-  updated_at: string;
-  stages: StageView[];
-};
-export type Job = { id: string; story_id: string; stage: string; state: JobState; progress: number; updated_at: string };
+export type Workspace = { id: string; workspace_id: string; name: string; slug: string; timezone: string; mode: "active" | "archive" | "maintenance"; ownership: "legacy" | "none" | "web"; admission: boolean; version: number; created_at: string; updated_at: string };
+export type Story = { id: string; workspace_id: string; version: number; created_at: string; updated_at: string; display_no: number; title: string; seed: string; type: string; source: string; scope: string; lifecycle: "active" | "trashed" | "archived"; revision_id: string; generation: number; operator_done: boolean; stages: StageView[] };
+export type JobState = "queued" | "waiting_dependencies" | "leasing" | "running" | "retry_wait" | "paused" | "blocked" | "awaiting_operator" | "cancelling" | "cancelled" | "succeeded" | "failed" | "needs_reconciliation" | "superseded";
+export type Job = { id: string; workspace_id: string; version: number; created_at: string; updated_at: string; story_id: string; stage: string; state: JobState; progress: number; attempts: number; binding: { provider: "none" } };
+export type Page<T> = { items: T[]; next_cursor: string | null; limit: number };
+export type Settings = { key: "ui"; value: { columns: string[]; copyFields: string[]; theme: "system" | "dark" | "light" }; version: number; updated_at: string };
+type Envelope<T> = { data: T; meta: { requestId: string; serverTime: string; schemaVersion: number; idempotentReplay?: boolean } };
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000/api/v1";
 
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, { headers: { Accept: "application/json" }, cache: "no-store" });
-  if (!response.ok) throw new Error(`API request failed (${response.status})`);
-  return response.json() as Promise<T>;
+async function request<T>(path: string, init?: RequestInit): Promise<{ data: T; replayed: boolean }> {
+  const response = await fetch(`${apiBase}${path}`, { ...init, headers: { Accept: "application/json", ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers }, cache: "no-store" });
+  const body = await response.json().catch(() => null) as Envelope<T> | { error?: { message?: string }; detail?: { detail?: string } } | null;
+  if (!response.ok) {
+    const reason = body && "error" in body ? body.error?.message : body && "detail" in body ? body.detail?.detail : undefined;
+    throw new Error(reason ?? `API request failed (${response.status})`);
+  }
+  return { data: (body as Envelope<T>).data, replayed: Boolean((body as Envelope<T>).meta?.idempotentReplay) };
 }
 
-export function getStories(): Promise<Story[]> { return getJson<Story[]>("/stories"); }
-export function getJobs(): Promise<Job[]> { return getJson<Job[]>("/jobs"); }
+function idempotencyHeaders(): HeadersInit { return { "Idempotency-Key": crypto.randomUUID() }; }
+
+export async function getWorkspaces(): Promise<Workspace[]> { return (await request<Page<Workspace>>("/workspaces")).data.items; }
+export async function createWorkspace(body: { name: string; slug: string; timezone: string; storage_location_alias: string }): Promise<Workspace> { return (await request<Workspace>("/workspaces", { method: "POST", headers: idempotencyHeaders(), body: JSON.stringify(body) })).data; }
+export async function getStories(workspaceId: string, search = ""): Promise<Story[]> { const query = new URLSearchParams({ limit: "100" }); if (search) query.set("search", search); return (await request<Page<Story>>(`/workspaces/${workspaceId}/stories?${query}`)).data.items; }
+export async function createStory(workspaceId: string, body: { seed: string; type: string; prompt_version_id: string; scope: "caption" }): Promise<Story> { return (await request<Story>(`/workspaces/${workspaceId}/stories`, { method: "POST", headers: idempotencyHeaders(), body: JSON.stringify({ ...body, source: "manual", auto_start: false }) })).data; }
+export async function updateStory(workspaceId: string, story: Story, body: { type?: string; operator_done?: boolean }): Promise<Story> { return (await request<Story>(`/workspaces/${workspaceId}/stories/${story.id}`, { method: "PATCH", headers: { "If-Match": `"${story.version}"` }, body: JSON.stringify(body) })).data; }
+export async function getJobs(workspaceId: string): Promise<Job[]> { return (await request<Page<Job>>(`/workspaces/${workspaceId}/jobs?limit=100`)).data.items; }
+export async function createJob(workspaceId: string, storyId: string): Promise<Job> { return (await request<Job>(`/workspaces/${workspaceId}/jobs`, { method: "POST", headers: idempotencyHeaders(), body: JSON.stringify({ story_id: storyId, stage: "manual_save" }) })).data; }
+export async function getSettings(workspaceId: string): Promise<Settings> { return (await request<Settings>(`/workspaces/${workspaceId}/settings/ui`)).data; }
+export async function putSettings(workspaceId: string, settings: Settings): Promise<Settings> { return (await request<Settings>(`/workspaces/${workspaceId}/settings/ui`, { method: "PUT", headers: { "If-Match": `"${settings.version}"` }, body: JSON.stringify({ value: settings.value }) })).data; }

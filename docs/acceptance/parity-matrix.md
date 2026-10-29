@@ -151,3 +151,6 @@ Phần Phase 01 phía trên giữ nguyên làm baseline hành vi và ca T01–T5
 | F56 | M12 realtime multi-device | SSE persisted events/cursor + resource versions | T56 + A02/A07/S03; reconnect/replay/expiry no duplicate effects |
 
 Coverage: **56/56 F IDs có module và contract đích; 56/56 T IDs được giữ nguyên; 0 runtime tests đã chạy trong Phase 02**. Compatibility F53/F54 là archive/read-only, không tuyên bố full writable runtime parity. Thay đổi F19/F21 là ràng buộc bắt buộc không né giới hạn dịch vụ; F20/F23/F31/F35/F49 có thay đổi giao diện hoặc quy trình để hỗ trợ multi-device và kiểm soát quyền. Các khác biệt phải được xác nhận trong kế hoạch nghiệm thu Phase 03, không tự coi là đã pass.
+## Phase 04 runtime disposition
+
+Phase 04 provides the persistence/API/UI foundation for F01 manual Story records, F11 durable queued Job/event reads, F37 workspace selector and scoped namespaces, F38 soft trash/restore, and F40 typed settings with CAS. The dashboard reads MongoDB instead of mock arrays. Workflow execution, providers/media, exports/publishing, realtime SSE and operations remain disabled or unimplemented by design; 56/56 mapping coverage does not mean full runtime parity.

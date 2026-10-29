@@ -25,8 +25,9 @@ class MongoAdapter:
             from pymongo import MongoClient
             from pymongo.uri_parser import parse_uri
 
-            if self.settings.mongodb_db != "story_tool_web_dev":
-                raise ValueError("MONGODB_DB must be story_tool_web_dev")
+            allowed_test_database = self.settings.app_env == "test" and __import__("re").fullmatch(r"story_tool_web_test_[a-f0-9]{12}", self.settings.mongodb_db)
+            if self.settings.mongodb_db != "story_tool_web_dev" and not allowed_test_database:
+                raise ValueError("MONGODB_DB must be story_tool_web_dev or an explicitly namespaced Phase 04 test database")
             parsed = parse_uri(self.settings.mongodb_uri)
             if parsed.get("username") or parsed.get("password"):
                 raise ValueError("development MongoDB URI must not contain credentials")
