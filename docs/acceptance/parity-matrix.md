@@ -154,3 +154,6 @@ Coverage: **56/56 F IDs có module và contract đích; 56/56 T IDs được gi�
 ## Phase 04 runtime disposition
 
 Phase 04 provides the persistence/API/UI foundation for F01 manual Story records, F11 durable queued Job/event reads, F37 workspace selector and scoped namespaces, F38 soft trash/restore, and F40 typed settings with CAS. The dashboard reads MongoDB instead of mock arrays. Workflow execution, providers/media, exports/publishing, realtime SSE and operations remain disabled or unimplemented by design; 56/56 mapping coverage does not mean full runtime parity.
+## Phase 05 runtime disposition
+
+The Phase 05 UI maps supported persistence behavior to Stories/History/Settings/Prompts shell components. F01/F11/F37/F38/F40 slices are interactive through the Phase 04 APIs. Legacy generation, chapters, media, provider, export, publishing and scheduler controls remain disabled with explicit explanations; pending UI is not treated as parity completion.
