@@ -43,3 +43,9 @@ Phase 06 is **PARTIAL / BLOCKED for full import acceptance** until dedicated par
 - **Deferred:** queued-job handoff, scheduler, worker execution, cursor pagination and auto-refresh scroll preservation remain later work.
 
 The existing Phase 06 parser contract remains `.xlsx` and `.xlsm`, with required `Input` and `TYPE` headers and optional `Enabled`, `Comment`, `LINK`, `prompt_id` and `job_id` provenance columns. Preview is non-mutating and confirm is source-hash idempotent.
+
+## Phase 06B verification
+
+- MongoDB dev was restored with `database/start-dev-mongodb.ps1` after ownership checks. It uses project PID/config, loopback `127.0.0.1:27018`, replica set `storytool-dev`; port 27017 was not touched.
+- Backend regression after recovery: 18 passed, 1 existing deprecation warning.
+- Row-to-Story mutation remains blocked pending owner approval of additive Story provenance schema and migration. See `docs/architecture/row-to-story-decision.md`.

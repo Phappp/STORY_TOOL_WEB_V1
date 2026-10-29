@@ -164,3 +164,7 @@ F12 Excel Batch now has development-only preview and persistent Batch/row metada
 ## Phase 06A update
 
 F12 Batch UI now supports workspace-scoped upload, preview, validation summary, confirm, history and row detail. Row-to-Story provenance remains BLOCKED pending approved Story schema fields and migration. F43/F44 and scheduler handoff remain deferred.
+
+## Phase 06B update
+
+F12 Batch parser, persistence and UI are implemented. Row-to-Story creation is BLOCKED pending explicit approval of provenance fields/migration. No parity claim is made for Story creation, Story?Batch links, or executable handoff.
