@@ -27,8 +27,11 @@ def test_dev_replica_primary_validators_and_indexes() -> None:
         database = client["story_tool_web_dev"]
         ensure_schema(database)
         listed = database.command({"listCollections": 1})["cursor"]["firstBatch"]
+        assert {item["name"] for item in listed} == set(COLLECTIONS)
         validators = sum(1 for item in listed if "$jsonSchema" in item.get("options", {}).get("validator", {}))
         assert validators == len(COLLECTIONS)
+        index_count = sum(len(list(database[name].list_indexes())) for name in COLLECTIONS)
+        assert index_count == 35
         assert "uq_orgId_workspaceId_displayNo" in {index["name"] for index in database["stories"].list_indexes()}
         with pytest.raises(OperationFailure) as error:
             database["stories"].insert_one({"_id": "invalid-test-document"})

@@ -46,9 +46,11 @@ class MongoAdapter:
             hello = await asyncio.wait_for(asyncio.to_thread(self.client.admin.command, "hello"), timeout=2.0)
             if hello.get("setName") != "storytool-dev":
                 raise ValueError("MongoDB server is not the storytool-dev replica set")
+            if not hello.get("isWritablePrimary"):
+                raise ValueError("storytool-dev has no writable PRIMARY")
             self.database = self.client[self.settings.mongodb_db]
             await asyncio.wait_for(asyncio.to_thread(ensure_schema, self.database), timeout=5.0)
-            self.status = MongoStatus("connected", f"database={self.settings.mongodb_db}")
+            self.status = MongoStatus("connected", f"database={self.settings.mongodb_db}; replicaSet=storytool-dev; state=PRIMARY")
         except Exception as exc:  # startup diagnostics must preserve a safe, bounded reason
             safe_reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
             self.status = MongoStatus("unavailable", f"MongoDB unavailable: {safe_reason[:160]}")

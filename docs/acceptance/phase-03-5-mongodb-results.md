@@ -42,3 +42,7 @@ Project branch: `phase-03-5-mongodb`, based on Phase 03 commit `abe5be0c32736294
 MongoDB development infrastructure is provisioned and its own PRIMARY, schema, indexes, and process restart persistence were verified. Phase 03.5 is **PARTIAL** because FastAPI readiness behavior has not been exercised over HTTP and backend automated tests could not run without dependencies. Do not treat `/health/ready` 200/503 as proven, and do not start persistence-backed Phase 04 work until the pinned backend requirements can be installed in the project virtual environment and the HTTP checks and test suite pass with MongoDB both running and stopped.
 
 No raw credential, token, cookie, connection password, or production data was added to project files. MongoDB remains unauthenticated by design only for this loopback development instance; never expose it to LAN or tunnel access.
+
+## Phase 03.6 follow-up
+
+The previously unverified backend HTTP/readiness and automated test checks were completed in Phase 03.6. FastAPI returned 200/200 with Mongo PRIMARY, 200/503 during the owned dev database outage, and 200/200 after restart/reconnect. The backend suite passed 15 tests with MongoDB integration enabled. See [Phase 03.6 backend results](./phase-03-6-backend-results.md) for exact dependency, TLS, and test evidence.

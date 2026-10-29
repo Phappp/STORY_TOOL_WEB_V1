@@ -23,6 +23,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-backend.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run-frontend.ps1
 ```
 
+On Windows hosts with the verified Avast HTTPS-scanning root used for this environment, `setup-dev.ps1` configures pip to use a CA bundle inside `.venv` that combines pip's certifi roots with that exact Windows-trusted root. It does not change the Windows certificate store or disable TLS verification. On hosts without that root, it leaves pip defaults unchanged.
+
 Open `http://127.0.0.1:3000`. `/health/live` reports process health and the latest database probe; `/health/ready` returns HTTP 503 unless MongoDB is available and schema initialization succeeded.
 
 ## Isolated development MongoDB

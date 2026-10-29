@@ -117,7 +117,7 @@ def test_readiness_retries_connection_after_startup_outage(monkeypatch) -> None:
     adapter = MongoAdapter(Settings())
     calls = 0
 
-    async def recover(adapter):
+    async def recover():
         nonlocal calls
         calls += 1
         adapter.status = MongoStatus("connected", "database=story_tool_web_dev; replicaSet=storytool-dev")
@@ -127,3 +127,27 @@ def test_readiness_retries_connection_after_startup_outage(monkeypatch) -> None:
     result = asyncio.run(adapter.check_readiness())
     assert result.state == "connected"
     assert calls == 1
+
+
+def test_readiness_rejects_secondary_replica(monkeypatch) -> None:
+    class FakeAdmin:
+        def command(self, _name):
+            return {"setName": "storytool-dev", "isWritablePrimary": False}
+
+    class FakeClient:
+        admin = FakeAdmin()
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    async def fake_to_thread(function, *args, **kwargs):
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr("app.mongo.asyncio.to_thread", fake_to_thread)
+    adapter = MongoAdapter(Settings())
+    adapter.client = FakeClient()
+    result = asyncio.run(adapter.check_readiness())
+    assert result.state == "unavailable"
+    assert "no writable PRIMARY" in result.detail
+    assert adapter.client is None
