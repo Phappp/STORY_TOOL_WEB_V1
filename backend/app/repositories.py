@@ -358,6 +358,8 @@ class MongoRepositories:
 
     def _confirm_batch(self, workspace_id, preview, key):
         self._membership(workspace_id, "editor")
+        if len(preview.get("rows", [])) > 25:
+            raise RepositoryError("IMPORT_CHUNK_REQUIRED", "Phase 06C limits one transactional import to 25 rows.", 422)
         source_hash = preview["source_hash"]
         route = f"POST:/workspaces/{workspace_id}/batches"
         previous = self.db.batches.find_one({**_BASE_FILTER, "workspaceId": workspace_id, "sourceHash": source_hash})
@@ -369,15 +371,25 @@ class MongoRepositories:
             with self.db.client.start_session() as session:
                 with session.start_transaction():
                     self.db.batches.insert_one(batch, session=session)
+                    imported = 0
                     for row in preview["rows"]:
                         document = {"_id": str(uuid4()), "schemaVersion": 1, "orgId": ORG_ID, "workspaceId": workspace_id, "version": 1, "createdAt": timestamp, "updatedAt": timestamp, "createdBy": ACTOR_ID, "batchId": batch_id, "rowNo": row["row_no"], "inputHash": row["input_hash"], "input": row["input"], "type": row["type"], "enabled": row["enabled"], "state": "error" if row["errors"] else "pending", "errors": row["errors"]}
+                        if not row["errors"] and row["enabled"]:
+                            counter = self.db.workspaces.find_one_and_update({**_BASE_FILTER, "_id": workspace_id}, {"$inc": {"displayCounter": 1, "version": 1}, "$set": {"updatedAt": _now()}}, return_document=ReturnDocument.AFTER, session=session)
+                            story_id = str(uuid4())
+                            story = {"_id": story_id, "schemaVersion": 2, "orgId": ORG_ID, "workspaceId": workspace_id, "version": 1, "createdAt": timestamp, "updatedAt": timestamp, "createdBy": ACTOR_ID, "displayNo": counter["displayCounter"], "title": row["input"].splitlines()[0][:200] or "Untitled story", "seed": row["input"], "source": "axcel", "activeRevisionId": str(uuid4()), "generation": 0, "type": row["type"], "commentChoice": "", "operatorDone": False, "lifecycle": "active", "stages": [{"state": "pending"} for _ in range(5)], "control": {"epoch": 0, "reservations": []}, "scope": "caption", "importProvenance": {"batchId": batch_id, "batchRowId": document["_id"], "sourceHash": source_hash, "importedAt": timestamp}, "importMetadata": {"comment": row.get("comment", ""), "link": row.get("link", "")}}
+                            self.db.stories.insert_one(story, session=session)
+                            document["storyId"] = story_id
+                            document["state"] = "done"
+                            imported += 1
                         self.db.batch_rows.insert_one(document, session=session)
-                    self.db.batches.update_one({"_id": batch_id}, {"$set": {"importState": "complete", "updatedAt": _now()}, "$inc": {"version": 1}}, session=session)
+                    self.db.batches.update_one({"_id": batch_id}, {"$set": {"importState": "complete", "updatedAt": _now(), "counts.imported": imported}, "$inc": {"version": 1}}, session=session)
         except DuplicateKeyError:
             existing = self.db.batches.find_one({**_BASE_FILTER, "workspaceId": workspace_id, "sourceHash": source_hash})
             if existing: return {"id": existing["_id"], "replayed": True, "counts": existing["counts"], "state": existing["state"]}
             raise
         batch["importState"] = "complete"
+        batch["counts"]["imported"] = sum(1 for row in preview["rows"] if not row["errors"] and row["enabled"])
         return {"id": batch_id, "replayed": False, "counts": batch["counts"], "state": "idle"}
 
     async def list_batches(self, workspace_id: str, limit: int) -> list[dict[str, Any]]:

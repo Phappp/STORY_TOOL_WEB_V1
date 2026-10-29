@@ -30,7 +30,7 @@ def test_persistence_story_job_workspace_settings_and_isolation() -> None:
         ensure_schema(db)
         listed = db.command({"listCollections": 1})["cursor"]["firstBatch"]
         assert {item["name"] for item in listed} == set(COLLECTIONS)
-        assert sum(len(list(db[name].list_indexes())) for name in COLLECTIONS) == 44
+        assert sum(len(list(db[name].list_indexes())) for name in COLLECTIONS) == 45
         workspace = __import__("asyncio").run(repo.create_workspace(WorkspaceCreate(name="Phase 04 Test", slug=f"phase04-test-{uuid4().hex[:10]}", storage_location_alias="local-development")))
         workspace_id = workspace["id"]
         story = __import__("asyncio").run(repo.create_story(workspace_id, StoryCreate(seed="Integration story seed", type="General", prompt_version_id=uuid4())))

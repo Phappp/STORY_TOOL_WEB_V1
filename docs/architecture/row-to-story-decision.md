@@ -45,3 +45,7 @@ The main risks are accidental duplicate creation, putting Comment/LINK into the 
 ## Approval gates
 
 Before implementing mutation, the owner must approve: (1) provenance fields and their immutable ownership, (2) Comment/LINK destination, (3) unique/idempotency key semantics, (4) transaction chunk size and reconciliation behavior, and (5) the versioned migration and rollback plan. Until then, the safe implementation remains Batch + Batch Row persistence and UI with an explicit “Batch saved — Story not created” message.
+
+## Approval recorded
+
+On 2026-10-29 the project owner approved the Row-to-Story contract: immutable `stories.importProvenance`, separate `stories.importMetadata`, one Story per workspace/batch/row, bounded MongoDB transactions of at most 25 Stories, and additive versioned migration with dry-run/backup/rollback. The implementation in Phase 06C follows that approval and does not create Jobs or invoke workers.

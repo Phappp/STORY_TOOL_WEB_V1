@@ -49,3 +49,7 @@ The existing Phase 06 parser contract remains `.xlsx` and `.xlsm`, with required
 - MongoDB dev was restored with `database/start-dev-mongodb.ps1` after ownership checks. It uses project PID/config, loopback `127.0.0.1:27018`, replica set `storytool-dev`; port 27017 was not touched.
 - Backend regression after recovery: 18 passed, 1 existing deprecation warning.
 - Row-to-Story mutation remains blocked pending owner approval of additive Story provenance schema and migration. See `docs/architecture/row-to-story-decision.md`.
+
+## Phase 06C implementation
+
+Owner approval is recorded in `docs/architecture/row-to-story-decision.md`. Stories now accept additive immutable `importProvenance` and separate `importMetadata`; `ensure_schema` adds a sparse unique provenance index and remains validator-compatible with legacy Stories. Confirm creates enabled valid rows as pending Stories inside the MongoDB transaction, links `batch_rows.storyId`, preserves Comment/LINK in import metadata, and rejects imports over the approved 25-row transaction bound. Invalid or disabled rows do not create Stories or Jobs.
