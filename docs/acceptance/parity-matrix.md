@@ -172,3 +172,7 @@ F12 Batch parser, persistence and UI are implemented. Row-to-Story creation is B
 ## Phase 06C parity update
 
 F12 Row-to-Story is implemented for approved enabled valid rows with immutable provenance and separate import metadata. Disabled/invalid rows remain Batch Rows. No executable Job or AI call is created. F12 is backed by MongoDB integration and idempotency smoke evidence; full browser E2E remains environment-dependent.
+
+## Phase 06D status
+
+F12 backend repository behavior is verified. Live HTTP and browser evidence are incomplete and remain acceptance blockers. Phase 07 is not started.

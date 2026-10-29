@@ -53,3 +53,7 @@ The existing Phase 06 parser contract remains `.xlsx` and `.xlsm`, with required
 ## Phase 06C implementation
 
 Owner approval is recorded in `docs/architecture/row-to-story-decision.md`. Stories now accept additive immutable `importProvenance` and separate `importMetadata`; `ensure_schema` adds a sparse unique provenance index and remains validator-compatible with legacy Stories. Confirm creates enabled valid rows as pending Stories inside the MongoDB transaction, links `batch_rows.storyId`, preserves Comment/LINK in import metadata, and rejects imports over the approved 25-row transaction bound. Invalid or disabled rows do not create Stories or Jobs.
+
+## Phase 06D acceptance update
+
+Repository-level Row-to-Story behavior remains PASS from Phase 06C. Live HTTP Batch flow and browser E2E are PARTIAL/SKIP in Phase 06D because the multipart harness and browser page did not complete; no full parity acceptance claim is made.
