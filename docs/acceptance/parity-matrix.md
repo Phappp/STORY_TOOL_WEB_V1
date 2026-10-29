@@ -160,3 +160,7 @@ The Phase 05 UI maps supported persistence behavior to Stories/History/Settings/
 ## Phase 06 runtime disposition
 
 F12 Excel Batch now has development-only preview and persistent Batch/row metadata for `.xlsx/.xlsm` Input/TYPE workbooks. F43/F44 report mapping, row-to-Story creation, queued handoff, scheduler and Axcel media flows remain pending explicit import policy and later phases.
+
+## Phase 06A update
+
+F12 Batch UI now supports workspace-scoped upload, preview, validation summary, confirm, history and row detail. Row-to-Story provenance remains BLOCKED pending approved Story schema fields and migration. F43/F44 and scheduler handoff remain deferred.

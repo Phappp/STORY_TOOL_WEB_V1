@@ -34,3 +34,12 @@ Validation includes file size (5 MiB), extension, empty workbook, required `Inpu
 The current implementation deliberately does not create Stories from imported rows yet because the Phase 02 contract requires an explicit transactional import plan and Story revision/source policy. Preview and row persistence are safe; confirm currently persists Batch/rows only. A follow-up decision is required before enabling row-to-Story creation and queued Job handoff. Frontend Batch management UI and browser tests remain to be completed. Status Board cursor pagination and auto-refresh scroll-preservation remain in the Phase 05 backlog.
 
 Phase 06 is **PARTIAL / BLOCKED for full import acceptance** until dedicated parser/API integration tests and the row-to-Story policy are approved. Scheduler and AI execution remain out of scope.
+
+## Phase 06A disposition
+
+- **Completed and tested:** Batch navigation, workspace-scoped upload, `.xlsx/.xlsm` preview, validation summary, confirm action, persisted batch history and row detail UI. Frontend typecheck, lint and production build pass.
+- **Implemented but untested:** Browser automation for the full upload/confirm flow and dedicated HTTP batch integration tests are not present in this environment.
+- **Blocked by approval/schema:** Row-to-Story creation is not enabled. The current Story schema has no approved provenance fields for `batchId`, `rowId`, `sourceHash`, Comment or LINK, and the Phase 06 confirm implementation intentionally persists only Batch and Batch Row records. Therefore the UI states “Batch luu thành công — chua t?o Story” and does not claim Story import completion.
+- **Deferred:** queued-job handoff, scheduler, worker execution, cursor pagination and auto-refresh scroll preservation remain later work.
+
+The existing Phase 06 parser contract remains `.xlsx` and `.xlsm`, with required `Input` and `TYPE` headers and optional `Enabled`, `Comment`, `LINK`, `prompt_id` and `job_id` provenance columns. Preview is non-mutating and confirm is source-hash idempotent.
