@@ -130,8 +130,19 @@ def _copy_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
     return {"id": sid, "field": field_name, "request_id": request_id, "text": text}, ""
 
 
-def apply_event(ctx: Ctx, event) -> Outcome:
-    """Một event grid -> Outcome (dòng log, story cần chọn, trang cần nhảy tới, nội dung copy)."""
+def batch_ids(raw) -> tuple[list[str], str]:
+    """Chính sách batch dùng chung: tối đa MAX_BATCH bài/lần, phần còn lại nói rõ chứ không âm thầm bỏ."""
+    all_ids = [str(i) for i in raw if str(i)] if isinstance(raw, (list, tuple)) else []
+    if len(all_ids) <= MAX_BATCH:
+        return all_ids, ""
+    return all_ids[:MAX_BATCH], f"Batch chỉ chạy tối đa {MAX_BATCH} bài/lần — {len(all_ids) - MAX_BATCH} bài để lượt sau."
+
+
+def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
+    """Một event grid -> Outcome (dòng log, story cần chọn, trang cần nhảy tới, nội dung copy).
+
+    on_batch(sid, i, n) chỉ để grid báo tiến trình từng bài; bỏ trống thì chạy y hệt.
+    """
     out = Outcome()
     if not isinstance(event, dict):
         return out
@@ -144,14 +155,14 @@ def apply_event(ctx: Ctx, event) -> Outcome:
         elif source == "run_all":
             out.lines, out.touched = _run_all(ctx, sid), [sid]
         elif source == "batch_run":
-            raw = event.get("ids")
-            all_ids = [str(i) for i in raw if str(i)] if isinstance(raw, (list, tuple)) else []
-            ids = all_ids[:MAX_BATCH]
-            if len(all_ids) > MAX_BATCH:
-                out.lines.append(f"Batch chỉ chạy tối đa {MAX_BATCH} bài/lần — {len(all_ids) - MAX_BATCH} bài để lượt sau.")
-            for bid in ids:
+            ids, note = batch_ids(event.get("ids"))
+            if note:
+                out.lines.append(note)
+            for i, bid in enumerate(ids, start=1):
                 out.lines += _run_all(ctx, bid)
                 out.touched.append(bid)
+                if on_batch is not None:
+                    on_batch(bid, i, len(ids))
         elif source == "copy_request":
             payload, why = _copy_payload(ctx, sid, str(event.get("field") or ""), str(event.get("request_id") or ""))
             out.copy, out.lines = payload, ([why] if why else [])

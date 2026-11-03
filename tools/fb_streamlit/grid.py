@@ -4,6 +4,7 @@ Component chỉ gửi event về Python; mọi việc thật do grid_actions.app
 nên state hiển thị luôn đọc lại từ folder story (không có bản sao trong session).
 """
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,9 @@ KEY = "fb_story_grid"
 LOG_LIMIT = 8
 MODE_COMPONENT = "Grid (component)"
 MODE_NATIVE = "Bảng nút (native)"
+PREFS_FILE = ".fbtool-grid-prefs.json"
+REFRESH_KEY = "grid_refresh"
+REFRESH_SECONDS = 5
 
 STEP_LABELS = {"b1": "▶ B1", "b2": "▶ B2", "b3": "▶ B3"}
 STATE_LABELS = {stories.PENDING: "chờ", stories.DONE: "xong", stories.RUNNING: "đang chạy",
@@ -32,6 +36,36 @@ def component():
     if _component is None:
         _component = components.declare_component(COMPONENT_NAME, path=str(FRONTEND))
     return _component
+
+
+def load_prefs(root: Path) -> dict:
+    """Prefs của workspace — file ẩn, hỏng hay chưa có thì coi như rỗng (không chặn grid)."""
+    try:
+        data = json.loads((Path(root) / PREFS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_prefs(root: Path, prefs: dict) -> None:
+    try:
+        (Path(root) / PREFS_FILE).write_text(json.dumps(prefs, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        st.caption(f"Không lưu được prefs grid: {exc}")
+
+
+def refresh_toggle(root: Path) -> bool:
+    """Nút Bật/Tắt tự làm mới — đọc từ file prefs của workspace, ghi lại khi khác."""
+    if st.session_state.get("grid_prefs_root") != str(root):  # đổi workspace -> lấy prefs của workspace mới
+        st.session_state["grid_prefs_root"] = str(root)
+        st.session_state[REFRESH_KEY] = bool(load_prefs(root).get("auto_refresh"))
+    on = st.toggle(f"Tự làm mới grid ({REFRESH_SECONDS}s)", key=REFRESH_KEY,
+                   help="Bật: mỗi 5 giây đọc lại folder story. Tắt khi không muốn màn hình nhảy.")
+    prefs = load_prefs(root)
+    if bool(prefs.get("auto_refresh")) is not bool(on):
+        prefs["auto_refresh"] = bool(on)
+        save_prefs(root, prefs)
+    return bool(on)
 
 
 def _when(ts: float) -> str:
@@ -61,7 +95,14 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
 
 
 def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
+    if str(event.get("source") or "") == "batch_run":  # batch là việc dài -> cần thấy từng bài đang chạy
+        return run_batch(ctx, event)
     out = ga.apply_event(ctx, event)
+    _collect(out, event)
+    return out
+
+
+def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + lines)[-LOG_LIMIT:]
     if str(event.get("source") or "") == "copy_request":
@@ -73,6 +114,21 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
         st.session_state["select_story"] = out.select
     if out.nav:
         st.session_state["pending_nav"] = out.nav
+
+
+def run_batch(ctx: ga.Ctx, event: dict) -> ga.Outcome:
+    """Chạy batch tuần tự, tiến trình hiện ngay trên grid (tối đa ga.MAX_BATCH bài/lần)."""
+    ids, _note = ga.batch_ids(event.get("ids"))
+    total = max(len(ids), 1)
+    with st.status(f"Chạy batch {total} bài (tối đa {ga.MAX_BATCH}/lần)", expanded=True) as status:
+        bar = st.progress(0.0, text=f"0/{total} bài")
+
+        def tick(sid: str, i: int, n: int) -> None:
+            bar.progress(i / n, text=f"{i}/{n} bài · {sid}")
+
+        out = ga.apply_event(ctx, event, on_batch=tick)
+        status.update(label=f"Batch xong: {len(out.touched)}/{total} bài", state="complete", expanded=False)
+    _collect(out, event)
     return out
 
 
@@ -145,7 +201,9 @@ def render_native(ctx: ga.Ctx, rows: list[dict]) -> None:
         _after(ctx, {"source": "archive", "id": sid})
         st.rerun()
     picked = st.multiselect("Bài chạy batch", ids, format_func=lambda i: labels[i], key="native_batch")
-    if st.button(f"⚡ Chạy {min(len(picked), ga.MAX_BATCH)} bài đã chọn (tối đa {ga.MAX_BATCH})",
+    n_run = min(len(picked), ga.MAX_BATCH)
+    skip = len(picked) - n_run
+    if st.button(f"⚡ Chạy {n_run} bài đã chọn" + (f" — {skip} bài để lượt sau" if skip else ""),
                  disabled=not picked, key="native_batch_run"):
         _after(ctx, {"source": "batch_run", "ids": picked})
         st.rerun()
@@ -169,17 +227,26 @@ def copy_blocks(ctx: ga.Ctx, sid: str) -> None:
             st.code(str(story.get("link") or "") or "(trống)")
 
 
-def render(ctx: ga.Ctx) -> None:
-    st.subheader("Grid story")
-    st.caption(f"Workspace: `{ctx.root}` — mỗi ô là file thật trong folder story (`caption.txt`, `image.png`, `seo.md`).")
+def _body(ctx: ga.Ctx, mode: str) -> None:
+    """Phần vẽ lại khi tự làm mới — nằm trong fragment, chỉ đọc folder nên không có state riêng."""
     outcome = consume_event(ctx)
     show_log()
     if outcome is not None and outcome.nav:
-        st.rerun()  # nút ✎: nhảy sang trang Tạo bài với bài vừa chọn
-    mode = st.radio("Kiểu hiển thị", (MODE_COMPONENT, MODE_NATIVE), key="grid_mode", horizontal=True,
-                    help="Component cần mở grid trong trình duyệt; bảng nút là đường lùi khi component lỗi.")
+        st.rerun(scope="app")  # nút ✎: nhảy sang trang Tạo bài với bài vừa chọn
     if mode == MODE_COMPONENT:
         if render_component(ctx):
             return
         st.warning(f"Grid component không chạy được ({st.session_state.get('grid_component_error')}) — chuyển sang bảng nút.")
     render_native(ctx, rows_for(ctx))
+
+
+def render(ctx: ga.Ctx) -> None:
+    st.subheader("Grid story")
+    st.caption(f"Workspace: `{ctx.root}` — mỗi ô là file thật trong folder story (`caption.txt`, `image.png`, `seo.md`).")
+    auto = refresh_toggle(ctx.root)
+    mode = st.radio("Kiểu hiển thị", (MODE_COMPONENT, MODE_NATIVE), key="grid_mode", horizontal=True,
+                    help="Component cần mở grid trong trình duyệt; bảng nút là đường lùi khi component lỗi.")
+    if auto:
+        st.fragment(_body, run_every=REFRESH_SECONDS)(ctx, mode)
+    else:
+        _body(ctx, mode)

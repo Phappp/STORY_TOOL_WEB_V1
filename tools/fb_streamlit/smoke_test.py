@@ -374,6 +374,12 @@ check("batch chỉ chạy tối đa 5 bài và nói rõ phần bị bỏ",
 check("batch bỏ qua story thiếu input mà không crash",
       ga.apply_event(gctx, {"source": "batch_run", "ids": [sid_empty]}).lines[0].count("input.txt") == 1)
 
+seen_batch = []
+out = ga.apply_event(gctx, {"source": "batch_run", "ids": sid_extra[:3]},
+                     on_batch=lambda bid, i, n: seen_batch.append((bid, i, n)))
+check("batch báo tiến trình từng bài theo đúng thứ tự",
+      seen_batch == [(s, i, 3) for i, s in enumerate(sid_extra[:3], start=1)] and len(out.touched) == 3)
+
 out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Caption", "request_id": "r1"})
 check("copy_request trả đúng nội dung caption.txt",
       out.copy == {"id": sid_ok, "field": "Caption", "request_id": "r1", "text": (ga_root / sid_ok / "caption.txt").read_text(encoding="utf-8")})
@@ -424,6 +430,14 @@ stories.save_story(ga_root, sid_ok, old)
 check("running treo > 15 phút thành stale", ga.step_states(ga_root, sid_ok)["b1"] == ga.STALE)
 check("rows_for cũng đưa stale vào ô hiển thị",
       next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_ok)["states"]["b1"] == ga.STALE)
+
+# --- P2e: prefs của workspace (nút tự làm mới) ---
+fbgrid.save_prefs(ga_root, {"auto_refresh": True})
+check("prefs grid lưu file ẩn trong workspace, đọc lại đúng",
+      (ga_root / fbgrid.PREFS_FILE).is_file() and fbgrid.load_prefs(ga_root) == {"auto_refresh": True})
+(ga_root / fbgrid.PREFS_FILE).write_text("không phải json", encoding="utf-8")
+check("prefs hỏng -> coi như rỗng, grid vẫn đọc được folder",
+      fbgrid.load_prefs(ga_root) == {} and bool(fbgrid.rows_for(gctx)))
 
 prov.chat, prov.codex_generate_image = real_chat, real_codex
 images.download_ref, images.search_images = real_download, real_search
@@ -583,6 +597,39 @@ codes = [c.value or "" for c in at_cn.code]
 check("Grid native: khối copy hiện đủ 4 nội dung, Link trống ghi rõ",
       not at_cn.exception and "CAPTION TỪ FILE" in codes and "INPUT GỐC CỦA BÀI COPY" in codes
       and codes.count("(trống)") == 2)
+
+# --- P2e AppTest: nút tự làm mới (prefs theo workspace) + batch inline có tiến trình ---
+at_tg = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_tg.session_state["nav_page"] = "Grid"
+at_tg.run()
+tg = next((t for t in at_tg.toggle if t.key == fbgrid.REFRESH_KEY), None)
+check("Grid có nút tự làm mới, mặc định tắt", tg is not None and not at_tg.exception and not tg.value)
+if tg is not None:
+    tg.set_value(True).run()
+    check("bật tự làm mới -> lưu prefs của workspace",
+          not at_tg.exception and fbgrid.load_prefs(smoke_root) == {"auto_refresh": True}
+          and at_tg.session_state.get(fbgrid.REFRESH_KEY) is True)
+    check("grid vẽ trong fragment (run_every 5s) không lỗi",
+          any("Grid story" in (h.value or "") for h in at_tg.subheader))
+    tg.set_value(False).run()
+    check("tắt tự làm mới ghi lại prefs", fbgrid.load_prefs(smoke_root) == {"auto_refresh": False})
+
+batch_sids = [stories.create_story(smoke_root, f"Batch UI {i}")["id"] for i in range(ga.MAX_BATCH + 1)]
+at_bc = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_bc.session_state["nav_page"] = "Grid"
+at_bc.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+at_bc.session_state[fbgrid.KEY] = {"event_id": "evt-batch-1", "source": "batch_run", "ids": batch_sids}
+at_bc.run()
+logs = at_bc.session_state.get("grid_log", [])
+check("batch 6 bài: chạy 5, nói rõ 1 bài để lượt sau",
+      not at_bc.exception and any("để lượt sau" in line for line in logs)
+      and sum("input.txt" in line for line in logs) == ga.MAX_BATCH
+      and not any((smoke_root / s / "caption.txt").exists() for s in batch_sids))
+check("batch có khung tiến trình inline (st.status + st.progress)",
+      len(at_bc.status) == 1 and len(at_bc.progress) == 1)
+at_bc.run()
+check("event batch cũ không chạy lại ở rerun sau",
+      len(at_bc.session_state.get("grid_log", [])) == len(logs) and not at_bc.exception)
 
 # --- AppTest: B3 format selector + copy block ---
 at_fmt = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
