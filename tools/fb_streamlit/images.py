@@ -1,10 +1,44 @@
 import json
 import os
 import re
+import shutil
+import time
+import zlib
+from pathlib import Path
 
 import httpx
 
+from db import DATA_DIR
 from providers import http_verify
+
+REFS_DIR = DATA_DIR / "refs"
+GEN_DIR = DATA_DIR / "images"
+
+
+def download_ref(url: str) -> Path:
+    REFS_DIR.mkdir(parents=True, exist_ok=True)
+    r = httpx.get(url, follow_redirects=True, timeout=60, verify=http_verify())
+    if r.status_code >= 400:
+        raise RuntimeError(f"Tải ảnh gốc lỗi HTTP {r.status_code}")
+    ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}.get(
+        r.headers.get("content-type", "").split(";")[0].strip().lower(), ".img")
+    dest = REFS_DIR / f"url_{zlib.crc32(url.encode()):08x}{ext}"
+    dest.write_bytes(r.content)
+    return dest
+
+
+def save_ref_upload(uploaded) -> Path:
+    REFS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = REFS_DIR / f"up_{uploaded.name}"
+    dest.write_bytes(uploaded.getbuffer())
+    return dest
+
+
+def save_generated_image(src: Path, post_id) -> Path:
+    GEN_DIR.mkdir(parents=True, exist_ok=True)
+    dest = GEN_DIR / f"{post_id or 'tmp'}_{int(time.time())}{src.suffix or '.png'}"
+    shutil.copy2(src, dest)
+    return dest
 
 
 def extract_keywords(text: str) -> list[str]:

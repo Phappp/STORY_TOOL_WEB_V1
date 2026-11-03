@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import httpx
@@ -113,9 +114,10 @@ def _codex_chat(prompt: str, system: str) -> str:
     binary = _codex_bin()
     workdir = Path(tempfile.mkdtemp(prefix="codex_exec_"))
     out_file = workdir / "last_message.txt"
-    cmd = [binary, "exec", "--skip-git-repo-check", "--output-last-message", str(out_file), full_prompt]
+    # prompt qua stdin: shim .CMD của npm trên Windows làm hỏng prompt đa dòng khi truyền tham số vị trí
+    cmd = [binary, "exec", "--skip-git-repo-check", "--output-last-message", str(out_file), "-"]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, cwd=str(workdir), encoding="utf-8", errors="replace")
+        proc = subprocess.run(cmd, input=full_prompt, capture_output=True, text=True, timeout=900, cwd=str(workdir), encoding="utf-8", errors="replace")
     except subprocess.TimeoutExpired as exc:
         raise ProviderError("Codex CLI chạy quá 15 phút.") from exc
     if out_file.exists():
@@ -123,6 +125,54 @@ def _codex_chat(prompt: str, system: str) -> str:
     if proc.returncode != 0:
         raise ProviderError(f"Codex CLI exit {proc.returncode}: {(proc.stderr or proc.stdout)[-400:]}")
     return (proc.stdout or "").strip()
+
+
+def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> Path:
+    """Codex CLI imagegen: ảnh được CLI tự lưu vào ~/.codex/generated_images, tool đọc file mới nhất sau lúc gọi.
+    Attach '-i' hay bị proxy bỏ rơi → thử có reference trước, lỗi thì tự retry không reference."""
+    exe = _codex_bin()
+    gen_root = Path.home() / ".codex" / "generated_images"
+    start = time.time()
+    full = (
+        "Generate an image based on this description using your image generation capability. "
+        "If a reference image is attached, transform it according to the description. "
+        "Report the saved image path. Description: " + prompt_text.strip()
+    )
+    workdir = Path(tempfile.mkdtemp(prefix="codex_img_"))
+
+    def attempt(refs):
+        cmd = [exe, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write"]
+        for rf in refs:
+            cmd += ["-i", str(rf)]
+        cmd.append("-")  # prompt qua stdin (shim .CMD hỏng prompt đa dòng ở tham số vị trí)
+        try:
+            proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=timeout, cwd=str(workdir), encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired as exc:
+            raise ProviderError("Codex imagegen chạy quá thời gian cho phép.") from exc
+        candidates = []
+        if gen_root.exists():
+            for f in gen_root.rglob("*.png"):
+                try:
+                    if f.stat().st_mtime >= start - 2:
+                        candidates.append(f)
+                except OSError:
+                    continue
+        if candidates:
+            return max(candidates, key=lambda f: f.stat().st_mtime)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        for m in reversed(re.findall(r"[A-Za-z]:[^\s\"'<>|]*\.png", out)):
+            pth = Path(m)
+            if pth.exists():
+                return pth
+        return None
+
+    refs = [r for r in ref_files if Path(r).exists()]
+    src = attempt(refs)
+    if src is None and refs:
+        src = attempt([])
+    if src is None:
+        raise ProviderError("Codex imagegen không tạo ra file ảnh (kể cả retry không reference).")
+    return src
 
 
 def codex_login_status() -> str:

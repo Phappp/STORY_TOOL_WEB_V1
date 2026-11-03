@@ -112,6 +112,17 @@ def step_provider_model(rows, step):
     return provider, model
 
 
+def collect_refs() -> list:
+    refs = []
+    url = (st.session_state.get("img_ref_url") or "").strip()
+    if url:
+        refs.append(images.download_ref(url))
+    up = st.session_state.get("img_ref_file")
+    if up is not None:
+        refs.append(images.save_ref_upload(up))
+    return refs
+
+
 def generation_controls(c):
     """Provider + model cho bước hiện tại; trả về (provider_row, model_str)."""
     rows = provider_rows(c)
@@ -236,10 +247,27 @@ def page_create(c):
         caption_now = cap or st.session_state.get("caption_draft") or post["caption"]
         ctx = prompt_context(post, caption_now)
 
+        img_prompt = (st.session_state.get("imggen_prompt") or "").strip() or caption_now
+        codex_row = p2 if (p2 and p2["kind"] == "codex_cli") else next((r for r in rows.values() if r["kind"] == "codex_cli"), None)
+        try:
+            ref_paths = collect_refs()
+        except Exception as exc:
+            ref_paths = []
+            steps_log.append(f"Ảnh gốc LỖI: {exc}")
+
         def b2_task():
-            if not (p2 and (preset["keyword_prompt"] or "").strip()):
-                return ["B2 ảnh: bỏ qua (thiếu provider hoặc prompt)"], [], []
             lines, kws, picked = [], [], []
+            if codex_row is not None and img_prompt:
+                try:
+                    src = prov.codex_generate_image(img_prompt, ref_paths)
+                    dest = images.save_generated_image(src, post["id"])
+                    return [f"B2: tạo ảnh Codex OK → {dest}"], [], [
+                        {"url": str(dest), "thumb": str(dest), "alt": img_prompt[:60], "source": "codex_imagegen"},
+                    ]
+                except prov.ProviderError as exc:
+                    lines.append(f"B2 codex lỗi — fallback stock: {str(exc)[:150]}")
+            if not (p2 and (preset["keyword_prompt"] or "").strip()):
+                return lines or ["B2 ảnh: bỏ qua (không có Codex imagegen hoặc thiếu prompt từ khóa)"], kws, picked
             try:
                 raw = prov.chat(p2, m2, gen_prompt(preset["keyword_prompt"], ctx))
                 kws = images.extract_keywords(raw)
@@ -251,9 +279,9 @@ def page_create(c):
                         continue
                     if found:
                         picked.append(found[0])
-                lines.append(f"B2: {len(kws)} từ khóa, {len(picked)} ảnh (đổi/tách ở mục B2)")
+                lines.append(f"B2 stock: {len(kws)} từ khóa, {len(picked)} ảnh (đổi/tách ở mục B2)")
             except prov.ProviderError as exc:
-                lines.append(f"B2 LỖI: {exc}")
+                lines.append(f"B2 stock LỖI: {exc}")
             return lines, kws, picked
 
         def b3_task():
@@ -315,12 +343,50 @@ def page_create(c):
             db.update_post(c, st.session_state["post_id"], caption=caption)
             st.success("Đã tạo bài + lưu caption.")
 
-    st.subheader("B2 · Ảnh liên quan (song song với B3 khi chạy ⚡)")
+    st.subheader("B2 · Ảnh — tạo bằng Codex imagegen (song song với B3 khi chạy ⚡)")
     st.session_state["active_step"] = "keyword"
     provider_kw, model_kw = generation_controls(c)
-    kw1, kw2 = st.columns([1, 3])
-    with kw1:
-        if st.button("AI tạo từ khóa ảnh"):
+    if "imggen_prompt" not in st.session_state:
+        st.session_state["imggen_prompt"] = ""
+    b2a, b2b = st.columns([4, 2])
+    with b2a:
+        if st.button("🎨 Tạo ảnh (Codex imagegen)"):
+            prompt = (st.session_state.get("imggen_prompt") or "").strip() or (st.session_state.get("caption_draft") or "").strip()
+            if not prompt:
+                st.error("Cần prompt tạo ảnh — nhập tay hoặc bấm 'Đồng bộ caption → prompt'.")
+            else:
+                codex_row = provider_kw if (provider_kw and provider_kw["kind"] == "codex_cli") else next((r for r in provider_rows(c).values() if r["kind"] == "codex_cli"), None)
+                if codex_row is None:
+                    st.error("Chưa có provider Codex CLI — thêm ở trang Providers.")
+                else:
+                    post = ensure_post()
+                    try:
+                        refs = collect_refs()
+                    except Exception as exc:
+                        refs = []
+                        st.warning(f"Không dùng được ảnh gốc: {exc}")
+                    with st.spinner("Codex đang tạo ảnh (có thể mất vài phút)…"):
+                        try:
+                            src = prov.codex_generate_image(prompt, refs)
+                            dest = images.save_generated_image(src, post["id"])
+                            merged = {img["url"]: img for img in st.session_state.get("saved_images", [])}
+                            merged[str(dest)] = {"url": str(dest), "thumb": str(dest), "alt": prompt[:60], "source": "codex_imagegen"}
+                            st.session_state["saved_images"] = list(merged.values())
+                            db.update_post(c, post["id"], images=st.session_state["saved_images"])
+                            st.success(f"Đã tạo ảnh: {dest}")
+                        except prov.ProviderError as exc:
+                            st.error(str(exc))
+    with b2b:
+        if st.button("Đồng bộ caption → prompt"):
+            st.session_state["imggen_prompt"] = st.session_state.get("caption_draft", "")
+            st.rerun()
+    img_prompt_text = st.text_area("Prompt tạo ảnh (mô tả cảnh, phong cách, không khí…)", key="imggen_prompt", height=110)
+    ref_url = st.text_input("URL ảnh gốc (tùy chọn — Codex biến đổi theo prompt)", key="img_ref_url")
+    ref_file = st.file_uploader("…hoặc upload ảnh gốc (tùy chọn)", type=["png", "jpg", "jpeg", "webp"], key="img_ref_file")
+
+    with st.expander("Phương án phụ: tìm ảnh stock (Unsplash/Pexels)"):
+        kw1 = st.columns([1])[0]
+        if kw1.button("AI tạo từ khóa ảnh"):
             if provider_kw is None:
                 st.error("Chọn provider trước.")
             elif not (preset["keyword_prompt"] or "").strip():
@@ -333,34 +399,48 @@ def page_create(c):
                         st.session_state["keywords_text"] = ", ".join(images.extract_keywords(raw))
                     except prov.ProviderError as exc:
                         st.error(str(exc))
-    keywords_text = st.text_input("Từ khóa (cách nhau bởi dấu phẩy — sửa tay được)", key="keywords_text")
-    kw_list = [k.strip() for k in keywords_text.split(",") if k.strip()]
-    if kw_list:
-        chosen_kw = st.selectbox("Tìm ảnh bằng từ khóa nào", kw_list)
-        if st.button("Tìm ảnh"):
-            try:
-                st.session_state["image_results"] = images.search_images(chosen_kw)
-            except Exception as exc:
-                st.error(f"Tìm ảnh lỗi: {exc}")
-    results = st.session_state.get("image_results", [])
-    if results:
-        cols = st.columns(4)
-        saved_urls = {img["url"] for img in st.session_state.get("saved_images", [])}
-        for idx, img in enumerate(results):
-            with cols[idx % 4]:
-                st.image(img["thumb"], caption=img["alt"][:40] or None)
-                st.checkbox("Chọn", value=img["url"] in saved_urls, key=f"img_pick_{chosen_kw}_{idx}", label=f"chọn #{idx + 1}")
-        if st.button("Lưu ảnh đã chọn"):
-            picked = [img for idx, img in enumerate(results) if st.session_state.get(f"img_pick_{chosen_kw}_{idx}")]
-            merged = {img["url"]: img for img in st.session_state.get("saved_images", [])}
-            for img in picked:
-                merged[img["url"]] = img
-            st.session_state["saved_images"] = list(merged.values())
-            if st.session_state.get("post_id"):
-                db.update_post(c, st.session_state["post_id"], images=st.session_state["saved_images"])
-            st.success(f"Đã lưu {len(st.session_state['saved_images'])} ảnh.")
-    if st.session_state.get("saved_images"):
-        st.caption("Ảnh đã chọn: " + ", ".join(img["url"] for img in st.session_state["saved_images"]))
+        keywords_text = st.text_input("Từ khóa (cách nhau bởi dấu phẩy — sửa tay được)", key="keywords_text")
+        kw_list = [k.strip() for k in keywords_text.split(",") if k.strip()]
+        chosen_kw = None
+        if kw_list:
+            chosen_kw = st.selectbox("Tìm ảnh bằng từ khóa nào", kw_list)
+            if st.button("Tìm ảnh"):
+                try:
+                    st.session_state["image_results"] = images.search_images(chosen_kw)
+                except Exception as exc:
+                    st.error(f"Tìm ảnh lỗi: {exc}")
+        results = st.session_state.get("image_results", [])
+        if results:
+            cols = st.columns(4)
+            saved_urls = {img["url"] for img in st.session_state.get("saved_images", [])}
+            for idx, img in enumerate(results):
+                with cols[idx % 4]:
+                    try:
+                        st.image(img["thumb"], caption=img["alt"][:40] or None)
+                    except Exception:
+                        st.caption(img["alt"][:40] or img["url"])
+                    st.checkbox("Chọn", value=img["url"] in saved_urls, key=f"img_pick_{chosen_kw}_{idx}", label=f"chọn #{idx + 1}")
+            if st.button("Lưu ảnh đã chọn"):
+                picked = [img for idx, img in enumerate(results) if st.session_state.get(f"img_pick_{chosen_kw}_{idx}")]
+                merged = {img["url"]: img for img in st.session_state.get("saved_images", [])}
+                for img in picked:
+                    merged[img["url"]] = img
+                st.session_state["saved_images"] = list(merged.values())
+                if st.session_state.get("post_id"):
+                    db.update_post(c, st.session_state["post_id"], images=st.session_state["saved_images"])
+                st.success(f"Đã lưu {len(st.session_state['saved_images'])} ảnh.")
+
+    saved = st.session_state.get("saved_images", [])
+    if saved:
+        st.markdown("**Ảnh đã lưu**")
+        gcols = st.columns(4)
+        for idx, img in enumerate(saved):
+            with gcols[idx % 4]:
+                try:
+                    st.image(img["thumb"] or img["url"], caption=img.get("alt") or img["source"])
+                except Exception:
+                    st.caption(img["url"])
+        st.caption("Nguồn: " + ", ".join(img["url"] for img in saved))
 
     st.subheader("B3 · Bài SEO (song song với B2 khi chạy ⚡)")
     st.session_state["active_step"] = "seo"
