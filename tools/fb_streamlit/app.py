@@ -227,6 +227,7 @@ def page_create(c):
         st.session_state["caption_draft"] = post["caption"] if post else ""
         st.session_state["seo_draft"] = post["seo_text"] if post else ""
         st.session_state["image_results"] = []
+        st.session_state["b0_ref_paths"] = []
         st.session_state["saved_images"] = json.loads(post["images"]) if post and post["images"] else []
         st.session_state["keywords_text"] = ", ".join(json.loads(post["keywords"])) if post and post["keywords"] != "[]" else ""
 
