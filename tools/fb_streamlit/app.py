@@ -15,6 +15,7 @@ except ImportError:
     pass
 
 import db
+import fb_import
 import images
 import providers as prov
 
@@ -145,6 +146,67 @@ def generation_controls(c):
 
 # ---------- page: Tạo bài ----------
 
+def b0_import_block():
+    """B0: trích caption + ảnh từ link FB, bắt buộc preview rồi mới đưa vào bài."""
+    st.subheader("B0 · Import từ link bài viết/reel FB (chỉ bài công khai)")
+    col_url, col_btn = st.columns([4, 1])
+    with col_url:
+        fb_url = st.text_input("Link bài viết / reel Facebook", key="fb_import_url", placeholder="https://www.facebook.com/reel/…")
+    with col_btn:
+        st.write("")
+        do_extract = st.button("🔗 Trích + preview", help="Chỉ trích và hiện preview — chưa đụng vào bài")
+
+    if do_extract:
+        try:
+            with st.spinner("Đang trích từ link FB…"):
+                data = fb_import.extract(fb_url)
+            for img in data["images"]:
+                try:
+                    img["local"] = str(images.download_ref(img["url"]))
+                except Exception as exc:
+                    img["local"] = ""
+                    data["note"] = (data["note"] + f" · không lưu được ảnh: {exc}")[:300]
+            st.session_state["fb_import"] = data
+            st.session_state["fb_import_caption"] = data["caption"]
+        except Exception as exc:
+            st.session_state.pop("fb_import", None)
+            st.error(f"Trích lỗi: {exc}\n\nGroup bài này có thể cần đăng nhập (riêng tư / trong group).")
+
+    data = st.session_state.get("fb_import")
+    if not data:
+        return
+    meta = f"Nguồn: {data['method']}"
+    if data.get("stats"):
+        meta += f" · {data['stats']}"
+    if data.get("note"):
+        meta += f" · ⚠ {data['note']}"
+    st.caption(meta)
+
+    prev_text, prev_imgs = st.columns([3, 2])
+    with prev_text:
+        st.text_area("Caption trích được (đã bỏ link — sửa tay được)", key="fb_import_caption", height=180)
+    with prev_imgs:
+        if data["images"]:
+            for img in data["images"][:4]:
+                try:
+                    st.image(img["local"] or img["thumb"], caption=img["alt"] or None)
+                except Exception:
+                    st.caption(f"Không xem được ảnh: {(img['url'] or '')[:80]}")
+        else:
+            st.info("Link không cho ảnh nào — bạn vẫn upload ảnh gốc ở B2.")
+    use_col, _ = st.columns([1, 4])
+    with use_col:
+        if st.button("✅ Đưa caption + ảnh vào bài", help="Caption vào ô Input để B1 viết lại; ảnh vào danh sách ảnh của bài"):
+            cap_txt = (st.session_state.get("fb_import_caption") or "").strip()
+            st.session_state["details_field"] = cap_txt
+            merged = {img["url"]: img for img in st.session_state.get("saved_images", [])}
+            for img in data["images"]:
+                src = img["local"] or img["url"]
+                merged[src] = {"url": src, "thumb": src, "alt": img["alt"], "source": "fb_import"}
+            st.session_state["saved_images"] = list(merged.values())
+            st.success("Đã đưa caption vào Input (B1 sẽ viết lại từ đây) và ảnh vào danh sách ảnh — bấm ⚡ hoặc chạy từng bước.")
+
+
 def page_create(c):
     posts = db.list_posts(c)
     presets = db.list_presets(c)
@@ -175,6 +237,8 @@ def page_create(c):
         key="create_preset",
     )
     preset = preset_map[pid]
+
+    b0_import_block()
 
     st.subheader("Input — nội dung gốc")
     st.session_state["active_step"] = "input"
