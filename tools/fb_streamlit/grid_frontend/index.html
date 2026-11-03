@@ -9,11 +9,11 @@
     --bg:#fff; --text:#31333f; --muted:#6b7280; --border:rgba(49,51,63,.18);
     --header:#f7f8fa; --hover:#fafafa;
     --pending:#eef0f3; --pending-t:#667085;
+    --queued:#f3ecfd; --queued-t:#6b3fa0;
     --done:#e6f6ec; --done-t:#0a7f3f;
     --running:#e8f1ff; --running-t:#175fa8;
     --error:#fdecec; --error-t:#c62828;
     --missing:#fff4e0; --missing-t:#a8650c;
-    --stale:#f3ecfd; --stale-t:#6b3fa0;
   }
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; background:transparent; color:var(--text);
@@ -22,21 +22,26 @@
   .bar { display:flex; gap:10px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); background:var(--header); }
   .bar .count { color:var(--muted); margin-left:auto; }
   .scroll { max-height:520px; overflow:auto; }
-  table { width:100%; min-width:1130px; border-collapse:separate; border-spacing:0; table-layout:fixed; }
+  table { width:100%; min-width:1080px; border-collapse:separate; border-spacing:0; table-layout:fixed; }
   thead th { position:sticky; top:0; z-index:3; background:var(--header); text-align:left;
     font-weight:600; padding:7px 8px; border-bottom:1px solid var(--border); white-space:nowrap; user-select:none; }
   tbody td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:middle;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:38px; }
   tbody tr:hover td { background:var(--hover); }
+  tbody tr.queued td { background:#fbf7ff; }
   th.c, td.c { text-align:center; }
-  th.step, td.step { width:104px; text-align:center; }
-  th.pick, td.pick { width:34px; text-align:center; }
-  th.id, td.id { width:96px; font-family:ui-monospace,Consolas,monospace; }
-  th.img, td.img { width:58px; text-align:center; }
-  th.status, td.status { width:70px; text-align:center; }
-  th.when, td.when { width:92px; color:var(--muted); }
-  th.act, td.act { width:140px; }
+  th.steps, td.steps { width:92px; text-align:center; }
+  th.pick, td.pick { width:30px; text-align:center; }
+  th.q, td.q { width:40px; text-align:center; }
+  th.id, td.id { width:92px; font-family:ui-monospace,Consolas,monospace; }
+  th.img, td.img { width:48px; text-align:center; }
+  th.status, td.status { width:66px; text-align:center; }
+  th.link, td.link { width:168px; }
+  th.when, td.when { width:88px; color:var(--muted); }
+  th.act, td.act { width:134px; }
   th.copy, td.copy { width:212px; }
+  a.link { color:var(--running-t); text-decoration:none; }
+  a.link:hover { text-decoration:underline; }
   button.copy { font-size:11px; padding:2px 5px; height:22px; margin-right:3px; }
   button.copy.off { opacity:.4; }
   button.copy.wait { opacity:.6; }
@@ -46,9 +51,21 @@
     font-size:11px; font-weight:600; background:var(--pending); color:var(--pending-t); cursor:default; }
   .chip.done { background:var(--done); color:var(--done-t); }
   .chip.running { background:var(--running); color:var(--running-t); }
-  .chip.error { background:var(--error); color:var(--error-t); }
+  .chip.error, .chip.stale { background:var(--error); color:var(--error-t); }
   .chip.missing { background:var(--missing); color:var(--missing-t); }
-  .chip.stale { background:var(--stale); color:var(--stale-t); }
+  .chip.queued { background:var(--queued); color:var(--queued-t); }
+  /* 3 ô vuông B1 B2 B3 trong một cột — màu là trạng thái, chữ là tên bước */
+  button.sq { width:26px; height:22px; padding:0; margin-right:2px; border-radius:5px; border:1px solid transparent;
+    font-size:10px; font-weight:700; background:var(--pending); color:var(--pending-t); cursor:pointer; }
+  button.sq:hover { filter:brightness(.97); }
+  button.sq.done { background:var(--done); color:var(--done-t); }
+  button.sq.running { background:var(--running); color:var(--running-t); }
+  button.sq.error { background:var(--error); color:var(--error-t); }
+  button.sq.missing { background:var(--missing); color:var(--missing-t); }
+  button.sq.queued { background:var(--queued); color:var(--queued-t); }
+  button.sq.stale { background:var(--error); color:var(--error-t); border-style:dashed; }
+  button.q { width:26px; padding:0; }
+  button.q.on { background:var(--queued); color:var(--queued-t); border-color:rgba(107,63,160,.35); font-weight:700; }
   .badge { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; background:var(--pending); color:var(--pending-t); }
   .badge.posted { background:var(--done); color:var(--done-t); }
   button.b { border:1px solid var(--border); background:#fff; border-radius:6px; cursor:pointer;
@@ -73,10 +90,11 @@ const COMPONENT_READY = "streamlit:componentReady";
 const SET_FRAME_HEIGHT = "streamlit:setFrameHeight";
 const MAX_BATCH = 5;
 
-const STATE_LABEL = { pending: "chờ", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
+const STATE_LABEL = { pending: "chưa chạy", queued: "đợi", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
 const STEP_TITLE = { b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
 const COPY_FIELDS = ["Caption", "Bài SEO", "Input", "Link"];
 const COPY_SHORT = { "Caption": "Caption", "Bài SEO": "SEO", "Input": "Input", "Link": "Link" };
+const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy · xanh dương đang chạy · xanh lá xong · đỏ lỗi · đỏ nét đứt treo >15 phút · cam mất file";
 
 function sendMessage(type, data) {
   window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data || {}), "*");
@@ -194,15 +212,38 @@ function maybeAutoCopy() {
   doCopy(b, String(r.text || ""));
 }
 
-function stepCell(row, step) {
-  const td = el("td", "step");
-  const state = String((row.states || {})[step] || "pending");
-  const chip = el("span", "chip " + state, STATE_LABEL[state] || state);
-  const detail = String((row.detail || {})[step] || "");
-  chip.title = STEP_TITLE[step] + ": " + (detail || (STATE_LABEL[state] || state));
-  td.appendChild(chip);
-  td.appendChild(button("▶", "Chạy " + STEP_TITLE[step] + " cho bài này",
-    () => send({ source: "run_step", id: row.id, step }), "play"));
+function stepsCell(row) {
+  const td = el("td", "steps");
+  ["b1", "b2", "b3"].forEach(step => {
+    const state = String((row.states || {})[step] || "pending");
+    const detail = String((row.detail || {})[step] || "");
+    const b = button(step.toUpperCase(), STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state) +
+      (detail ? " · " + detail : "") + " — bấm để chạy bước này",
+      () => send({ source: "run_step", id: row.id, step }), "sq " + state);
+    td.appendChild(b);
+  });
+  return td;
+}
+
+function queueCell(row) {
+  const td = el("td", "q");
+  const queued = !!row.queued;
+  td.appendChild(button(queued ? String(row.queue_pos || "·") : "＋",
+    queued ? "Bỏ bài khỏi hàng đợi" : "Thêm bài vào hàng đợi (xếp trên cùng, chạy bằng ⚡ Chạy hàng đợi)",
+    () => send({ source: queued ? "queue_remove" : "queue_add", id: row.id }), "q" + (queued ? " on" : "")));
+  return td;
+}
+
+function linkCell(row) {
+  const td = el("td", "link");
+  const raw = String(row.link || "");
+  if (!raw.trim()) { td.appendChild(el("span", "muted", "—")); return td; }
+  const a = el("a", "link", raw.replace(/^https?:\/\//, "").replace(/\/$/, ""));
+  a.href = raw;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.title = raw;
+  td.appendChild(a);
   return td;
 }
 
@@ -224,7 +265,9 @@ function trashButton(row) {
 }
 
 function rowNode(row) {
-  const tr = el("tr");
+  const tr = el("tr", row.queued ? "queued" : "");
+
+  tr.appendChild(queueCell(row));
 
   const pick = el("td", "pick");
   const box = document.createElement("input");
@@ -240,7 +283,7 @@ function rowNode(row) {
   tr.appendChild(pick);
 
   const id = el("td", "id", row.id);
-  id.title = String(row.link || row.id);
+  id.title = String(row.topic || row.id);
   tr.appendChild(id);
 
   const topic = el("td", "topic", row.topic || "(chưa đặt chủ đề)");
@@ -248,9 +291,7 @@ function rowNode(row) {
   if (!row.has_input) topic.style.color = "var(--muted)";
   tr.appendChild(topic);
 
-  tr.appendChild(stepCell(row, "b1"));
-  tr.appendChild(stepCell(row, "b2"));
-  tr.appendChild(stepCell(row, "b3"));
+  tr.appendChild(stepsCell(row));
 
   const img = el("td", "img");
   img.appendChild(el("span", row.image ? "chip done" : "chip", row.image ? "có" : "—"));
@@ -259,6 +300,8 @@ function rowNode(row) {
   const status = el("td", "status");
   status.appendChild(el("span", row.status === "posted" ? "badge posted" : "badge", row.status || "draft"));
   tr.appendChild(status);
+
+  tr.appendChild(linkCell(row));
 
   tr.appendChild(el("td", "when", row.updated || ""));
 
@@ -283,6 +326,20 @@ function batchButton() {
   return b;
 }
 
+function queueIds() {
+  return rows().filter(r => r.queued).map(r => String(r.id));
+}
+
+function queueButton() {
+  const b = button("⚡ Chạy hàng đợi", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #", () => {
+    const ids = queueIds();
+    if (ids.length) send({ source: "batch_run", ids });
+  });
+  b.id = "queuerun";
+  b.disabled = true;
+  return b;
+}
+
 function updateBar() {
   const b = document.getElementById("batch");
   if (!b) return;
@@ -292,6 +349,15 @@ function updateBar() {
   b.title = n > MAX_BATCH
     ? "Tối đa " + MAX_BATCH + " bài/lần — " + (n - MAX_BATCH) + " bài để lượt sau"
     : "Chạy pipeline cho các bài đã chọn, tuần tự";
+  const q = document.getElementById("queuerun");
+  if (q) {
+    const ids = queueIds();
+    q.disabled = ids.length === 0;
+    q.textContent = "⚡ Chạy hàng đợi (" + Math.min(ids.length, MAX_BATCH) + "/" + ids.length + ")";
+    q.title = ids.length > MAX_BATCH
+      ? "Tối đa " + MAX_BATCH + " bài/lần — " + (ids.length - MAX_BATCH) + " bài để lượt sau"
+      : "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #";
+  }
   const all = document.getElementById("pickall");
   if (all) all.checked = rows().length > 0 && rows().every(r => PICKED.has(String(r.id)));
 }
@@ -325,6 +391,7 @@ function render(args) {
   allWrap.appendChild(all);
   allWrap.appendChild(el("span", "muted", " chọn tất cả"));
   bar.appendChild(batchButton());
+  bar.appendChild(queueButton());
   bar.appendChild(allWrap);
   bar.appendChild(el("span", "count", rows().length + " bài" + (MODEL.workspace ? " · " + MODEL.workspace : "")));
   wrap.appendChild(bar);
@@ -335,8 +402,8 @@ function render(args) {
     const scroll = el("div", "scroll");
     const table = document.createElement("table");
     const head = el("tr");
-    [["pick", ""], ["id", "story"], ["topic", "chủ đề"], ["step", "B1"], ["step", "B2"], ["step", "B3"],
-     ["img", "ảnh"], ["status", "status"], ["when", "sửa lúc"], ["copy", "copy"], ["act", ""]].forEach(pair => {
+    [["q", "#"], ["pick", ""], ["id", "story"], ["topic", "chủ đề"], ["steps", "B1 B2 B3"],
+     ["img", "ảnh"], ["status", "status"], ["link", "Link"], ["when", "sửa lúc"], ["copy", "copy"], ["act", ""]].forEach(pair => {
       head.appendChild(el("th", pair[0], pair[1]));
     });
     const thead = el("thead");
@@ -349,7 +416,7 @@ function render(args) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "▶ chạy 1 bước · ⚡ chạy đủ pipeline · copy lấy chữ vào clipboard (chỉ xin nội dung khi bấm) · ✎ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục)"));
+    "màu ô B1 B2 B3: " + LEGEND + " — bấm ô để chạy đúng bước đó · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · copy lấy chữ vào clipboard (chỉ xin nội dung khi bấm) · ✎ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục)"));
   root.appendChild(wrap);
   unmarkSent();
   updateBar();

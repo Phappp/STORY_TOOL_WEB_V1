@@ -17,10 +17,17 @@ import stories
 MAX_BATCH = 5
 STALE_SECONDS = 15 * 60
 STALE = "stale"
+QUEUED = "queued"
 
 COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link")
 STEP_NAMES = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
 ALL_STEPS = ("b1", "b2", "b3")
+
+BUCKET_LABEL = {"error": "Lỗi", "waiting": "Chờ chạy", "running": "Đang chạy", "done": "Xong"}
+BUCKET_ORDER = {"error": 0, "waiting": 1, "running": 2, "done": 3}
+FILTERS = ("Tất cả", BUCKET_LABEL["waiting"], BUCKET_LABEL["running"], BUCKET_LABEL["error"], BUCKET_LABEL["done"])
+FILTER_BUCKET = {label: key for key, label in BUCKET_LABEL.items()}
+FILTER_BUCKET[FILTERS[0]] = ""
 
 
 @dataclass
@@ -59,6 +66,54 @@ def step_states(root: Path, sid: str, now: float | None = None) -> dict:
             state = STALE
         out[step] = state
     return out
+
+
+def display_states(root: Path, sid: str, now: float | None = None) -> dict:
+    """state để tô màu ô: pending của bài đã vào hàng đợi thành 'queued' (tím), không ghi ngược vào story.json."""
+    states = step_states(root, sid, now=now)
+    if not stories.load_story(root, sid).get("queued"):
+        return states
+    return {step: (QUEUED if state == stories.PENDING else state) for step, state in states.items()}
+
+
+def bucket(states: dict) -> str:
+    """Nhóm việc của cả bài — 'treo' tính luôn vào 'lỗi' vì tiến trình đã chết giữa chừng."""
+    values = list(states.values())
+    if any(state in (stories.ERROR, STALE) for state in values):
+        return "error"
+    if any(state == stories.RUNNING for state in values):
+        return "running"
+    if values and all(state == stories.DONE for state in values):
+        return "done"
+    return "waiting"
+
+
+def queue_sort(rows: list[dict]) -> list[dict]:
+    """Bài đã đánh dấu lên đầu theo đúng thứ tự bấm (FIFO), phần còn lại xếp theo nhóm việc rồi id."""
+    return sorted(rows, key=lambda r: (0 if r.get("queued") else 1,
+                                       float(r.get("queued_at") or 0) if r.get("queued") else BUCKET_ORDER.get(r.get("bucket"), 1),
+                                       str(r["id"])))
+
+
+def with_positions(rows: list[dict]) -> list[dict]:
+    """Gán vị trí hàng đợi 1..n cho bài đã đánh dấu; bài ngoài hàng đợi giữ 0."""
+    n = 0
+    for row in rows:
+        if row.get("queued"):
+            n += 1
+            row["queue_pos"] = n
+        else:
+            row["queue_pos"] = 0
+    return rows
+
+
+def queue_ids(rows: list[dict]) -> list[str]:
+    return [str(r["id"]) for r in rows if r.get("queued")]
+
+
+def filter_rows(rows: list[dict], choice: str) -> list[dict]:
+    key = FILTER_BUCKET.get(str(choice or FILTERS[0]), "")
+    return [r for r in rows if not key or r.get("bucket") == key]
 
 
 def preset_for(ctx: Ctx, story: dict):
@@ -166,6 +221,21 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "copy_request":
             payload, why = _copy_payload(ctx, sid, str(event.get("field") or ""), str(event.get("request_id") or ""))
             out.copy, out.lines = payload, ([why] if why else [])
+        elif source == "queue_add":
+            if stories.load_story(ctx.root, sid).get("queued"):
+                out.lines = [f"{sid}: đã ở trong hàng đợi — vị trí giữ nguyên."]
+            else:
+                stories.update_story(ctx.root, sid, queued=True, queued_at=time.time())
+                out.lines, out.touched = [f"{sid}: vào hàng đợi (bấm ⚡ Chạy hàng đợi để làm tuần tự)."], [sid]
+        elif source == "queue_remove":
+            stories.update_story(ctx.root, sid, queued=False)
+            out.lines, out.touched = [f"{sid}: bỏ khỏi hàng đợi."], [sid]
+        elif source == "queue_clear":
+            ids = [s for s in stories.list_story_ids(ctx.root) if stories.load_story(ctx.root, s).get("queued")]
+            for qid in ids:
+                stories.update_story(ctx.root, qid, queued=False)
+            out.lines = [f"Đã bỏ {len(ids)} bài khỏi hàng đợi." if ids else "Hàng đợi đang trống — chưa có bài nào để bỏ."]
+            out.touched = ids
         elif source == "mark_posted":
             stories.update_story(ctx.root, sid, status="posted")
             out.lines, out.touched = [f"{sid}: status = posted."], [sid]

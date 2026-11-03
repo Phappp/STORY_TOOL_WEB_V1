@@ -25,8 +25,12 @@ REFRESH_KEY = "grid_refresh"
 REFRESH_SECONDS = 5
 
 STEP_LABELS = {"b1": "▶ B1", "b2": "▶ B2", "b3": "▶ B3"}
-STATE_LABELS = {stories.PENDING: "chờ", stories.DONE: "xong", stories.RUNNING: "đang chạy",
+STATE_LABELS = {stories.PENDING: "chưa chạy", ga.QUEUED: "đợi", stories.DONE: "xong", stories.RUNNING: "đang chạy",
                 stories.ERROR: "lỗi", stories.MISSING: "mất file", ga.STALE: "treo"}
+# Bảng nút (native) không tô màu được từng ô như component, nên dùng ký hiệu + chú giải.
+STATE_GLYPH = {stories.PENDING: "·", ga.QUEUED: "◇", stories.DONE: "✓", stories.RUNNING: "▶",
+               stories.ERROR: "✗", stories.MISSING: "!", ga.STALE: "⏱"}
+LEGEND = "◇ đợi (đã vào hàng đợi) · · chưa chạy · ▶ đang chạy · ✓ xong · ✗ lỗi · ⏱ treo >15 phút · ! mất file"
 
 _component = None
 
@@ -73,11 +77,12 @@ def _when(ts: float) -> str:
 
 
 def rows_for(ctx: ga.Ctx) -> list[dict]:
-    """Chỉ đủ dữ liệu cho ô grid; state qua ga.step_states nên 'treo >15 phút' hiện đúng là stale."""
+    """Chỉ đủ dữ liệu cho ô grid; state qua ga.display_states nên 'treo >15 phút' hiện đúng là stale."""
     out = []
     for sid in stories.list_story_ids(ctx.root):
         summary = stories.story_summary(ctx.root, sid)
-        states = ga.step_states(ctx.root, sid)
+        story = stories.load_story(ctx.root, sid)
+        states = ga.display_states(ctx.root, sid)
         out.append({
             "id": sid,
             "topic": summary["topic"],
@@ -87,11 +92,15 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "image": summary["image"],
             "detail": summary["detail"],
             "states": states,
+            "bucket": ga.bucket(states),
+            "queued": bool(story.get("queued")),
+            "queued_at": float(story.get("queued_at") or 0),
+            "queue_pos": 0,
             "updated": _when(summary["updated_at"]),
-            "copyable": {"Caption": states["b1"] == stories.DONE, "Bài SEO": states["b3"] == stories.DONE,
+            "copyable": {"Caption": summary["b1"] == stories.DONE, "Bài SEO": summary["b3"] == stories.DONE,
                          "Input": summary["has_input"], "Link": bool(summary["link"].strip())},
         })
-    return out
+    return ga.with_positions(ga.queue_sort(out))
 
 
 def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
@@ -149,10 +158,10 @@ def show_log() -> None:
         st.caption("· " + line)
 
 
-def render_component(ctx: ga.Ctx) -> bool:
+def render_component(ctx: ga.Ctx, rows: list[dict]) -> bool:
     """Vẽ grid bằng component; trả False nếu component không dùng được."""
     try:
-        component()(rows=rows_for(ctx), workspace=str(ctx.root),
+        component()(rows=rows, workspace=str(ctx.root),
                     copy_response=st.session_state.get("grid_copy_response") or {},
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
@@ -167,21 +176,26 @@ def row_label(row: dict) -> str:
             f"B1 {STATE_LABELS.get(s['b1'], s['b1'])} · B2 {STATE_LABELS.get(s['b2'], s['b2'])} · B3 {STATE_LABELS.get(s['b3'], s['b3'])}")
 
 
-def render_native(ctx: ga.Ctx, rows: list[dict]) -> None:
+def _short_link(link: str) -> str:
+    return str(link or "").replace("https://", "").replace("http://", "").rstrip("/")
+
+
+def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = None) -> None:
     if not rows:
-        st.info("Workspace này chưa có story nào — mở trang Tạo bài, hoặc vào Cấu hình ▸ Workspace chọn folder khác.")
+        st.info("Workspace này chưa có story nào (hoặc bộ lọc đang che hết) — mở trang Tạo bài, hoặc vào Cấu hình ▸ Workspace chọn folder khác.")
         return
     st.dataframe(
-        [{"story": r["id"], "chủ đề": r["topic"] or "(chưa đặt)",
-          "B1": STATE_LABELS.get(r["states"]["b1"], r["states"]["b1"]),
-          "B2": STATE_LABELS.get(r["states"]["b2"], r["states"]["b2"]),
-          "B3": STATE_LABELS.get(r["states"]["b3"], r["states"]["b3"]),
-          "ảnh": "có" if r["image"] else "—", "status": r["status"], "sửa lúc": r["updated"]}
+        [{"#": r["queue_pos"] or "", "story": r["id"], "chủ đề": r["topic"] or "(chưa đặt)",
+          "B1 B2 B3": " ".join(f"{step.upper()} {STATE_GLYPH.get(r['states'][step], '?')}" for step in ("b1", "b2", "b3")),
+          "ảnh": "có" if r["image"] else "—", "status": r["status"],
+          "Link": _short_link(r["link"]) or "—", "sửa lúc": r["updated"]}
          for r in rows],
         width="stretch", hide_index=True,
     )
+    st.caption(LEGEND)
     ids = [r["id"] for r in rows]
     labels = {r["id"]: row_label(r) for r in rows}
+    by_id = {r["id"]: r for r in rows}
     sid = st.selectbox("Bài để thao tác", ids, format_func=lambda i: labels[i], key="native_pick")
     cols = st.columns(7)
     for col, step in zip(cols[:3], ("b1", "b2", "b3"), strict=True):
@@ -200,6 +214,23 @@ def render_native(ctx: ga.Ctx, rows: list[dict]) -> None:
     if cols[6].button("🗑 Vào .trash", key="native_archive", help="Kéo folder ngược ra ngoài .trash là khôi phục"):
         _after(ctx, {"source": "archive", "id": sid})
         st.rerun()
+
+    in_queue = bool(by_id[sid]["queued"])
+    queued_ids = ga.queue_ids(all_rows if all_rows is not None else rows)
+    qcols = st.columns(3)
+    if qcols[0].button("✕ Bỏ hàng đợi" if in_queue else "➕ Vào hàng đợi", key="native_queue_toggle",
+                       help="Bài trong hàng đợi nổi lên đầu grid và được ⚡ Chạy hàng đợi làm tuần tự"):
+        _after(ctx, {"source": "queue_remove" if in_queue else "queue_add", "id": sid})
+        st.rerun()
+    if qcols[1].button(f"⚡ Chạy hàng đợi ({min(len(queued_ids), ga.MAX_BATCH)}/{len(queued_ids)})",
+                       disabled=not queued_ids, key="native_queue_run",
+                       help=f"Chạy tuần tự, tối đa {ga.MAX_BATCH} bài/lần"):
+        _after(ctx, {"source": "batch_run", "ids": queued_ids})
+        st.rerun()
+    if qcols[2].button(f"Bỏ hết hàng đợi ({len(queued_ids)})", disabled=not queued_ids, key="native_queue_clear"):
+        _after(ctx, {"source": "queue_clear"})
+        st.rerun()
+
     picked = st.multiselect("Bài chạy batch", ids, format_func=lambda i: labels[i], key="native_batch")
     n_run = min(len(picked), ga.MAX_BATCH)
     skip = len(picked) - n_run
@@ -227,26 +258,36 @@ def copy_blocks(ctx: ga.Ctx, sid: str) -> None:
             st.code(str(story.get("link") or "") or "(trống)")
 
 
-def _body(ctx: ga.Ctx, mode: str) -> None:
+def _body(ctx: ga.Ctx) -> None:
     """Phần vẽ lại khi tự làm mới — nằm trong fragment, chỉ đọc folder nên không có state riêng."""
     outcome = consume_event(ctx)
     show_log()
     if outcome is not None and outcome.nav:
         st.rerun(scope="app")  # nút ✎: nhảy sang trang Tạo bài với bài vừa chọn
-    if mode == MODE_COMPONENT:
-        if render_component(ctx):
+    all_rows = rows_for(ctx)
+    choice = str(st.session_state.get("grid_filter") or ga.FILTERS[0])
+    rows = ga.filter_rows(all_rows, choice)
+    if choice != ga.FILTERS[0]:
+        st.caption(f"Lọc “{choice}”: {len(rows)}/{len(all_rows)} bài trong workspace.")
+    if str(st.session_state.get("grid_mode") or MODE_COMPONENT) == MODE_COMPONENT:
+        if render_component(ctx, rows):
             return
         st.warning(f"Grid component không chạy được ({st.session_state.get('grid_component_error')}) — chuyển sang bảng nút.")
-    render_native(ctx, rows_for(ctx))
+    render_native(ctx, rows, all_rows)
 
 
 def render(ctx: ga.Ctx) -> None:
     st.subheader("Grid story")
     st.caption(f"Workspace: `{ctx.root}` — mỗi ô là file thật trong folder story (`caption.txt`, `image.png`, `seo.md`).")
     auto = refresh_toggle(ctx.root)
-    mode = st.radio("Kiểu hiển thị", (MODE_COMPONENT, MODE_NATIVE), key="grid_mode", horizontal=True,
-                    help="Component cần mở grid trong trình duyệt; bảng nút là đường lùi khi component lỗi.")
+    col_mode, col_filter = st.columns(2)
+    with col_mode:
+        st.radio("Kiểu hiển thị", (MODE_COMPONENT, MODE_NATIVE), key="grid_mode", horizontal=True,
+                 help="Component cần mở grid trong trình duyệt; bảng nút là đường lùi khi component lỗi.")
+    with col_filter:
+        st.selectbox("Lọc bài", list(ga.FILTERS), key="grid_filter",
+                     help="Bài lỗi lên đầu, rồi chờ chạy, đang chạy, xong. Bài đã vào hàng đợi luôn ở trên cùng.")
     if auto:
-        st.fragment(_body, run_every=REFRESH_SECONDS)(ctx, mode)
+        st.fragment(_body, run_every=REFRESH_SECONDS)(ctx)
     else:
-        _body(ctx, mode)
+        _body(ctx)

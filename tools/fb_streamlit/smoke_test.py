@@ -401,12 +401,43 @@ check("event rác -> không làm gì", out.lines == [] and out.copy is None)
 out = ga.apply_event(gctx, {"source": "archive", "id": sid_extra[5]})
 check("archive dời folder vào .trash", not (ga_root / sid_extra[5]).exists() and any(p.name.startswith(sid_extra[5] + "__") for p in (ga_root / ".trash").iterdir()))
 
+# --- P3a: hàng đợi + bucket + state tô màu ---
+sid_q = stories.create_story(ga_root, "Bài vào hàng đợi", input_text="nội dung hàng đợi")["id"]
+out = ga.apply_event(gctx, {"source": "queue_add", "id": sid_q})
+story_q = stories.load_story(ga_root, sid_q)
+check("queue_add ghi cờ queued + mốc thời gian vào story.json",
+      story_q.get("queued") is True and float(story_q.get("queued_at") or 0) > 0 and out.touched == [sid_q])
+first_ts = float(story_q["queued_at"])
+out = ga.apply_event(gctx, {"source": "queue_add", "id": sid_q})
+check("queue_add lần 2 giữ nguyên vị trí, không coi là việc mới",
+      float(stories.load_story(ga_root, sid_q)["queued_at"]) == first_ts and not out.touched
+      and "đã ở trong hàng đợi" in out.lines[0])
+out = ga.apply_event(gctx, {"source": "queue_remove", "id": sid_q})
+check("queue_remove bỏ cờ queued", stories.load_story(ga_root, sid_q).get("queued") is False and out.touched == [sid_q])
+ga.apply_event(gctx, {"source": "queue_add", "id": sid_q})
+check("display_states tô pending của bài trong hàng đợi thành 'queued' mà không ghi vào story.json",
+      ga.display_states(ga_root, sid_q)["b1"] == ga.QUEUED
+      and (stories.load_story(ga_root, sid_q).get("b1") or {}).get("state") == stories.PENDING)
+check("display_states không đổi state của bài đã xong", ga.display_states(ga_root, sid_ok)["b1"] == stories.DONE)
+ga.apply_event(gctx, {"source": "queue_add", "id": sid_ok})
+out = ga.apply_event(gctx, {"source": "queue_clear"})
+check("queue_clear bỏ hết hàng đợi và nói rõ số bài",
+      not any(stories.load_story(ga_root, s).get("queued") for s in (sid_q, sid_ok)) and "2 bài" in out.lines[0])
+check("queue_clear trên hàng đợi trống báo không có gì để bỏ",
+      "chưa có bài nào" in ga.apply_event(gctx, {"source": "queue_clear"}).lines[0])
+check("bucket: treo tính là lỗi, đủ 3 bước mới là xong",
+      ga.bucket({"b1": "done", "b2": "done", "b3": "done"}) == "done"
+      and ga.bucket({"b1": "error", "b2": "done", "b3": "done"}) == "error"
+      and ga.bucket({"b1": ga.STALE, "b2": "pending", "b3": "pending"}) == "error"
+      and ga.bucket({"b1": "running", "b2": "pending", "b3": "pending"}) == "running"
+      and ga.bucket({"b1": "pending", "b2": ga.QUEUED, "b3": "done"}) == "waiting")
+
 # --- P2c: grid.rows_for — dữ liệu cho component đọc từ folder story ---
 import grid as fbgrid
 
 rows_grid = fbgrid.rows_for(gctx)
 check("rows_for liệt kê đúng danh sách story còn trong workspace",
-      [r["id"] for r in rows_grid] == stories.list_story_ids(ga_root) and rows_grid)
+      sorted(r["id"] for r in rows_grid) == stories.list_story_ids(ga_root) and rows_grid)
 r_ok = next(r for r in rows_grid if r["id"] == sid_ok)
 check("rows_for mang đủ ô cho grid",
       {"id", "topic", "status", "link", "has_input", "image", "detail", "states", "updated"} <= set(r_ok))
@@ -421,6 +452,29 @@ check("rows_for báo ô copy theo nội dung thật",
 stories.update_story(ga_root, sid_ok, link="https://www.facebook.com/x/posts/1")
 check("copyable Link bật khi story có link",
       next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_ok)["copyable"]["Link"] is True)
+
+# --- P3b: thứ tự hàng đợi + nhóm việc trong dữ liệu grid ---
+ga.apply_event(gctx, {"source": "queue_add", "id": sid_ok})
+ga.apply_event(gctx, {"source": "queue_add", "id": sid_q})
+rows_q = fbgrid.rows_for(gctx)
+check("rows_for xếp bài đã đánh dấu lên đầu theo thứ tự bấm và đánh số vị trí",
+      [r["id"] for r in rows_q[:2]] == [sid_ok, sid_q] and [r["queue_pos"] for r in rows_q[:2]] == [1, 2]
+      and all(r["queue_pos"] == 0 for r in rows_q[2:]))
+check("mỗi dòng mang theo nhóm việc để lọc", all(r["bucket"] in ga.BUCKET_LABEL for r in rows_q))
+check("lọc chia hết bài theo nhóm, không sót không trùng",
+      sum(len(ga.filter_rows(rows_q, label)) for label in ga.FILTERS[1:]) == len(rows_q)
+      and sid_ok in [r["id"] for r in ga.filter_rows(rows_q, "Xong")]
+      and sid_empty in [r["id"] for r in ga.filter_rows(rows_q, "Chờ chạy")]
+      and ga.filter_rows(rows_q, "Tất cả") == rows_q)
+check("bài ngoài hàng đợi xếp theo nhóm việc rồi id",
+      [r["id"] for r in ga.filter_rows(rows_q, "Xong")][1:] == sorted(r["id"] for r in ga.filter_rows(rows_q, "Xong")[1:]))
+ga.apply_event(gctx, {"source": "queue_clear"})
+(ga_root / sid_extra[1] / "seo.md").unlink()
+stories.update_story(ga_root, sid_extra[1], b3={"state": stories.DONE})
+r_miss = next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_extra[1])
+check("bài báo done mà mất file hiện 'mất file' và vẫn tính là chờ chạy",
+      r_miss["states"]["b3"] == stories.MISSING and r_miss["bucket"] == "waiting")
+stories.save_step_text(ga_root, sid_extra[1], "b3", "SEO khôi phục sau test")
 
 stories.set_step_state(ga_root, sid_ok, "b1", "running")
 check("running còn mới hiện running", ga.step_states(ga_root, sid_ok)["b1"] == "running")
@@ -630,6 +684,58 @@ check("batch có khung tiến trình inline (st.status + st.progress)",
 at_bc.run()
 check("event batch cũ không chạy lại ở rerun sau",
       len(at_bc.session_state.get("grid_log", [])) == len(logs) and not at_bc.exception)
+
+# --- P3b AppTest: hàng đợi trên grid + lọc theo nhóm việc ---
+q_sid = stories.create_story(smoke_root, "Bài chờ hàng đợi", input_text="nội dung chờ")["id"]
+at_gq = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_gq.session_state["nav_page"] = "Grid"
+at_gq.session_state["grid_mode"] = fbgrid.MODE_NATIVE
+at_gq.session_state["native_pick"] = q_sid
+at_gq.run()
+btn_add = next((b for b in at_gq.button if b.label == "➕ Vào hàng đợi"), None)
+check("Grid native có nút vào hàng đợi, nút chạy bị chặn khi hàng đợi trống",
+      btn_add is not None and not at_gq.exception
+      and any(b.label == "⚡ Chạy hàng đợi (0/0)" and b.disabled for b in at_gq.button))
+if btn_add is not None:
+    btn_add.click().run()
+    check("bấm vào hàng đợi -> story.json có cờ queued, nút đổi thành bỏ",
+          not at_gq.exception and stories.load_story(smoke_root, q_sid).get("queued") is True
+          and any(b.label == "✕ Bỏ hàng đợi" for b in at_gq.button))
+btn_qr = next((b for b in at_gq.button if "Chạy hàng đợi" in b.label), None)
+check("nút chạy hàng đợi nói đúng số bài sẽ làm và hết bị chặn",
+      btn_qr is not None and btn_qr.label == "⚡ Chạy hàng đợi (1/1)" and not btn_qr.disabled)
+btn_rm = next((b for b in at_gq.button if b.label == "✕ Bỏ hàng đợi"), None)
+if btn_rm is not None:
+    btn_rm.click().run()
+    check("bấm bỏ hàng đợi -> cờ queued tắt, nút chạy chặn lại",
+          not at_gq.exception and stories.load_story(smoke_root, q_sid).get("queued") is False
+          and any(b.label == "⚡ Chạy hàng đợi (0/0)" and b.disabled for b in at_gq.button))
+
+at_gf = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_gf.session_state["nav_page"] = "Grid"
+at_gf.session_state["grid_mode"] = fbgrid.MODE_NATIVE
+at_gf.session_state["grid_filter"] = "Xong"
+at_gf.run()
+check("lọc 'Xong' khi chưa có bài xong: grid nói rõ che hết, không vẽ bảng rỗng",
+      not at_gf.exception and any("chưa có story nào" in (i.value or "") for i in at_gf.info)
+      and any("Lọc “Xong”: 0/" in (c.value or "") for c in at_gf.caption))
+
+at_gu = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_gu.session_state["nav_page"] = "Grid"
+at_gu.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-queue-1", "source": "queue_add", "id": q_sid}
+at_gu.run()
+check("Grid component: event queue_add được tiêu thụ 1 lần",
+      not at_gu.exception and stories.load_story(smoke_root, q_sid).get("queued") is True
+      and len(at_gu.session_state.get("grid_log", [])) == 1)
+at_gu.run()
+check("Grid component: queue_add cũ không chạy lại ở rerun sau",
+      not at_gu.exception and len(at_gu.session_state.get("grid_log", [])) == 1)
+at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-queue-2", "source": "queue_clear"}
+at_gu.run()
+check("Grid component: queue_clear bỏ hết hàng đợi của workspace",
+      not at_gu.exception and not any(stories.load_story(smoke_root, s).get("queued")
+                                      for s in stories.list_story_ids(smoke_root)))
 
 # --- AppTest: B3 format selector + copy block ---
 at_fmt = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
