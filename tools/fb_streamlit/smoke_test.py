@@ -106,6 +106,27 @@ if b0_url is not None:
         b0_extract.click().run()
         check("B0 bad link shows error, no crash", not at.exception and len(at.error) > 0)
 
+# B0 apply: caption vào Input, ảnh chỉ staging làm reference
+seed_ref = str(Path(__file__).parent / "requirements.txt")
+at_b0 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_b0.session_state["fb_import"] = {
+    "caption": "Caption bài FB",
+    "images": [{"url": "https://lookaside.fbsbx.com/x.jpg", "thumb": "https://lookaside.fbsbx.com/x.jpg", "alt": "a", "source": "fb_og_image", "local": seed_ref}],
+    "method": "og", "note": "", "title": "T", "stats": "", "link": "https://www.facebook.com/x/posts/1",
+}
+at_b0.session_state["saved_images"] = []
+at_b0.session_state["fb_import_caption"] = "Caption bài FB"  # do_extract luôn điền ô này khi trích
+at_b0.run()
+apply_btn = next((b for b in at_b0.button if "Đưa caption" in b.label), None)
+check("B0 apply button appears after preview", apply_btn is not None)
+if apply_btn is not None:
+    apply_btn.click().run()
+    check("B0 apply no crash", not at_b0.exception)
+    check("B0 apply sets input text", at_b0.session_state.get("details_field") == "Caption bài FB")
+    check("B0 apply stages ref only", at_b0.session_state.get("b0_ref_paths") == [seed_ref] and at_b0.session_state.get("saved_images") == [])
+    check("B0 ref shown inside B2", any("tham chiếu" in (m.value or "") for m in at_b0.markdown))
+    check("B0 ref removable", any("Bỏ tham chiếu" in b.label for b in at_b0.button))
+
 at2 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at2.run()
 at2.sidebar.radio[0].set_value("Providers").run()

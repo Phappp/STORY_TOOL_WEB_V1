@@ -114,7 +114,8 @@ def step_provider_model(rows, step):
 
 
 def collect_refs() -> list:
-    refs = []
+    """Ảnh tham chiếu cho B2: ảnh từ B0 (đã lưu local) + URL + upload."""
+    refs = [Path(p) for p in st.session_state.get("b0_ref_paths", []) if Path(p).exists()]
     url = (st.session_state.get("img_ref_url") or "").strip()
     if url:
         refs.append(images.download_ref(url))
@@ -197,15 +198,18 @@ def b0_import_block():
             st.info("Link không cho ảnh nào — bạn vẫn upload ảnh gốc ở B2.")
     use_col, _ = st.columns([1, 4])
     with use_col:
-        if st.button("✅ Đưa caption + ảnh vào bài", help="Caption vào ô Input để B1 viết lại; ảnh vào danh sách ảnh của bài"):
+        if st.button("✅ Đưa caption vào Input + ảnh làm tham chiếu B2", help="Caption vào ô Input để B1 viết lại; ảnh chỉ đặt làm reference cho B2 — không gộp vào ảnh của bài"):
             cap_txt = (st.session_state.get("fb_import_caption") or "").strip()
             st.session_state["details_field"] = cap_txt
-            merged = {img["url"]: img for img in st.session_state.get("saved_images", [])}
-            for img in data["images"]:
-                src = img["local"] or img["url"]
-                merged[src] = {"url": src, "thumb": src, "alt": img["alt"], "source": "fb_import"}
-            st.session_state["saved_images"] = list(merged.values())
-            st.success("Đã đưa caption vào Input (B1 sẽ viết lại từ đây) và ảnh vào danh sách ảnh — bấm ⚡ hoặc chạy từng bước.")
+            refs = [img["local"] for img in data["images"] if img.get("local")]
+            st.session_state["b0_ref_paths"] = list(dict.fromkeys(st.session_state.get("b0_ref_paths", []) + refs))
+            leftover = [img["url"] for img in data["images"] if not img.get("local")]
+            if leftover and not (st.session_state.get("img_ref_url") or "").strip():
+                st.session_state["img_ref_url"] = leftover[0]
+            saved = f"{len(st.session_state['b0_ref_paths'])} ảnh tham chiếu (đã lưu ở data/refs)"
+            if leftover:
+                saved += " · ảnh không tải được đã điền vào ô URL ảnh gốc"
+            st.success(f"Đã đưa caption vào Input + {saved} — xem mục B2.")
 
 
 def page_create(c):
@@ -448,6 +452,22 @@ def page_create(c):
     img_prompt_text = st.text_area("Prompt tạo ảnh (mô tả cảnh, phong cách, không khí…)", key="imggen_prompt", height=110)
     ref_url = st.text_input("URL ảnh gốc (tùy chọn — Codex biến đổi theo prompt)", key="img_ref_url")
     ref_file = st.file_uploader("…hoặc upload ảnh gốc (tùy chọn)", type=["png", "jpg", "jpeg", "webp"], key="img_ref_file")
+
+    b0_refs = [p for p in st.session_state.get("b0_ref_paths", []) if Path(p).exists()]
+    if b0_refs:
+        st.markdown("**Ảnh tham chiếu từ B0** — gửi kèm prompt khi tạo ảnh, chưa phải ảnh của bài")
+        rc = st.columns(len(b0_refs) + 1)
+        for i, p in enumerate(b0_refs):
+            with rc[i]:
+                try:
+                    st.image(p, caption=Path(p).name)
+                except Exception:
+                    st.caption(Path(p).name)
+        with rc[-1]:
+            st.write("")
+            if st.button("Bỏ tham chiếu B0"):
+                st.session_state["b0_ref_paths"] = []
+                st.rerun()
 
     with st.expander("Phương án phụ: tìm ảnh stock (Unsplash/Pexels)"):
         kw1 = st.columns([1])[0]
