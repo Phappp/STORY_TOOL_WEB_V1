@@ -3,7 +3,9 @@ import sqlite3
 import time
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+import paths
+
+DATA_DIR = paths.data_dir()
 DB_PATH = DATA_DIR / "fb_tool.db"
 
 SCHEMA = """

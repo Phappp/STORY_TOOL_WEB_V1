@@ -27,6 +27,12 @@ check("extract_keywords numbered lines", kw2 == ["beach sunset", "ocean waves", 
 
 # --- unit: db round-trip ---
 conn = db.connect()
+for leftover in db.list_providers(conn):
+    if leftover["name"] in ("TestOR", "FormTest"):
+        db.delete_provider(conn, leftover["id"])
+for leftover in db.list_presets(conn):
+    if leftover["name"] == "Du lich":
+        db.delete_preset(conn, leftover["id"])
 db.add_provider(conn, "TestOR", "openai", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "a/b, c/d")
 provs = db.list_providers(conn)
 p = next(x for x in provs if x["name"] == "TestOR")
@@ -107,6 +113,25 @@ check("to_fb_unicode strips md markers", "**" not in fb and "](" not in fb and "
 check("to_plain removes markers", formats.to_plain("## Tiêu đề **nhấn**\n\nXem [link](https://x.com)") == "Tiêu đề nhấn\n\nXem link")
 check("render keeps markdown as source", formats.render("## A **b**", "Markdown (blog/SEO)") == "## A **b**")
 
+# --- unit: data/config home nằm ngoài thư mục code + migrate ---
+import paths
+import tempfile
+
+check("data dir is outside code folder", paths.data_dir() != Path(__file__).resolve().parent / "data")
+check("env file lives in home", paths.env_path().parent == paths.home())
+
+sandbox = Path(tempfile.mkdtemp(prefix="fbhome_"))
+(sandbox / "legacy" / "data").mkdir(parents=True)
+(sandbox / "legacy" / "data" / "fb_tool.db").write_bytes(b"SQLDATA")
+(sandbox / "legacy" / ".env").write_text("FOO=bar\n", encoding="utf-8")
+prev_tool, prev_home = paths.TOOL_DIR, paths._home
+paths.TOOL_DIR, paths._home = sandbox / "legacy", sandbox / "home"
+moved = paths.migrate_legacy()
+check("migrate copies db + env to home", (sandbox / "home" / "data" / "fb_tool.db").read_bytes() == b"SQLDATA" and (sandbox / "home" / ".env").exists())
+check("migrate keeps old data as backup dir", not (sandbox / "legacy" / "data").exists() and any((sandbox / "legacy").glob("data_backup_*")))
+check("migrate is idempotent", paths.migrate_legacy() == [])
+paths.TOOL_DIR, paths._home = prev_tool, prev_home
+
 # --- AppTest: each page renders without exception ---
 at = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30).run()
 check("page 'Tạo bài' runs", not at.exception)
@@ -169,7 +194,12 @@ check("B3 format radio has 3 modes", any({"Markdown (blog/SEO)", "Unicode đậm
 fmt_radio = next((r for r in at_fmt.radio if "Unicode đậm (dán Facebook)" in (r.options or [])), None)
 if fmt_radio is not None:
     fmt_radio.set_value("Markdown (blog/SEO)").run()
-    check("markdown mode shows rendered frame, no raw block", not at_fmt.exception and not any("## " in (c.value or "") for c in at_fmt.code))
+    check(
+        "markdown mode shows rendered frame, no raw block",
+        not at_fmt.exception
+        and any("Nội dung bài SEO" in (m.value or "") for m in at_fmt.markdown)
+        and not any("Nội dung bài SEO" in (c.value or "") for c in at_fmt.code),
+    )
     fmt_radio.set_value("Text thường").run()
     check("plain mode gives copy block", any("Tiêu đề nhấn" in (c.value or "") for c in at_fmt.code))
     fmt_radio.set_value("Unicode đậm (dán Facebook)").run()

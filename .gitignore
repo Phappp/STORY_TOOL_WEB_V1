@@ -32,6 +32,7 @@ logs/
 tmp/
 temp/
 tools/fb_streamlit/data/
+tools/fb_streamlit/data_backup*/
 *.log
 uploads/
 media/

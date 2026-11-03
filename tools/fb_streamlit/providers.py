@@ -8,6 +8,8 @@ from pathlib import Path
 
 import httpx
 
+import paths
+
 
 class ProviderError(RuntimeError):
     pass
@@ -21,9 +23,9 @@ RAW_KEY_RE = re.compile(r"^sk-[A-Za-z0-9_\-]{20,}$")
 
 
 def migrate_raw_keys(conn) -> list[tuple[str, str]]:
-    """Key bị dán nhầm vào cột key_env -> chuyển vào .env, DB chỉ giữ tên biến."""
+    """Key bị dán nhầm vào cột key_env -> chuyển vào .env (nằm ở FB_TOOL_HOME), DB chỉ giữ tên biến."""
     moved = []
-    env_path = Path(__file__).resolve().with_name(".env")
+    env_path = paths.env_path()
     for r in conn.execute("SELECT * FROM providers").fetchall():
         current = (r["key_env"] or "").strip()
         if not RAW_KEY_RE.match(current):

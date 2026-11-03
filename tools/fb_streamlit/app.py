@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
@@ -18,9 +19,11 @@ import db
 import fb_import
 import formats
 import images
+import paths
 import providers as prov
 
-load_dotenv(Path(__file__).with_name(".env"))
+MIGRATED = paths.migrate_legacy()  # data/ + .env cũ -> home, bản cũ thành data_backup_*
+load_dotenv(paths.env_path())
 
 st.set_page_config(page_title="FB Content Tool", layout="wide")
 
@@ -763,6 +766,11 @@ NAV = {"Tạo bài": page_create, "Presets": page_presets, "Providers": page_pro
 
 
 def _run_app():
+    st.sidebar.caption("Dữ liệu & cấu hình: `" + str(paths.home()) + "`")
+    if st.sidebar.button("Mở thư mục dữ liệu") and hasattr(os, "startfile"):
+        os.startfile(str(paths.home()))  # noqa: S606 — Windows only
+    if MIGRATED:
+        st.toast(f"Đã chuyển {len(MIGRATED)} mục cũ sang {paths.home()}", icon="📁")
     choice = st.sidebar.radio("Chức năng", list(NAV.keys()))
     connection = conn()
     NAV[choice](connection)
