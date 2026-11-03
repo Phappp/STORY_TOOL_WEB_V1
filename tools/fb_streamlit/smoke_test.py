@@ -42,19 +42,31 @@ post = db.get_post(conn, post_id)
 check("post round-trip", post["caption"] == "cap" and len(json.loads(post["images"])) == 1)
 db.delete_post(conn, post_id)
 
+# update_post must reject unknown fields
+try:
+    db.update_post(conn, 1, bogus_field="x")
+    check("update_post rejects unknown field", False)
+except ValueError:
+    check("update_post rejects unknown field", True)
+
 # --- unit: prompt placeholder engine ---
 import app as fbapp
+import providers as prov
 
 ctx = fbapp.prompt_context({"topic": "T", "summary": "S", "details": "CAPTION-GOC", "caption": ""})
 out = fbapp.gen_prompt("Viết lại:\n<CAPTION CŨ>\nhết", ctx)
 check("gen_prompt replaces <CAPTION CŨ>", out == "Viết lại:\nCAPTION-GOC\nhết")
 
-ctx2 = fbapp.prompt_context({"topic": "T", "summary": "", "details": "", "caption": "NEWCAP"}, caption_override=None)
+ctx2 = fbapp.prompt_context({"topic": "T", "summary": "", "details": "", "caption": "NEWCAP"})
 out2 = fbapp.gen_prompt("SEO cho <CAPTION MỚI TẠO>", ctx2)
 check("gen_prompt replaces <CAPTION MỚI TẠO>", out2 == "SEO cho NEWCAP")
 
-out3 = fbapp.gen_prompt("Không token ở đây", ctx2)
-check("gen_prompt fallback appends data", out3.startswith("Không token ở đây") and "Chi tiết:" in out3)
+out3 = fbapp.gen_prompt("Không token ở đây", ctx)
+check("gen_prompt fallback appends data", out3.startswith("Không token ở đây") and "CAPTION-GOC" in out3)
+
+# --- unit: raw key detection ---
+check("raw key regex", bool(prov.RAW_KEY_RE.match("sk-0280e7f4f02a71dbc02d95c92d5206d851a5515a1e7aacc16dffeb5ab2901ac7")))
+check("env name not raw key", not prov.RAW_KEY_RE.match("OPENROUTER_API_KEY"))
 
 # --- AppTest: each page renders without exception ---
 at = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30).run()
@@ -79,14 +91,12 @@ check("page Lịch sử runs", not at4.exception)
 at5 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at5.run()
 at5.sidebar.radio[0].set_value("Providers").run()
-at5.text_input[0].set_value("FormTest")  # name field in form
-at5.button[0].click().run()              # form submit
+at5.text_input[0].set_value("FormTest")
+at5.button[0].click().run()
 check("form provider persisted", any(x["name"] == "FormTest" for x in db.list_providers(db.connect())))
 
 # --- error path: provider key missing gives readable message ---
 import os
-
-import providers as prov
 
 os.environ.pop("OPENROUTER_API_KEY", None)
 try:
@@ -99,7 +109,7 @@ except prov.ProviderError as exc:
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")
 c.execute("DELETE FROM presets WHERE name='Du lich'")
-c.execute("DELETE FROM posts WHERE id=?", (post_id,))
+c.execute("DELETE FROM posts WHERE topic='Ha Noi'")
 c.commit()
 
 print("\n" + ("ALL PASS" if not FAILS else f"FAILURES: {FAILS}"))

@@ -1,6 +1,7 @@
 import json
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -46,11 +47,14 @@ def model_picker(provider, key):
 
 
 def data_block(post) -> str:
-    return (
-        "Chủ đề: " + post["topic"]
-        + "\nTóm tắt: " + (post["summary"] or "—")
-        + "\nChi tiết: " + (post["details"] or "—")
-    )
+    parts = []
+    if post["topic"]:
+        parts.append("Chủ đề: " + post["topic"])
+    if post["summary"]:
+        parts.append("Tóm tắt: " + post["summary"])
+    if post["details"]:
+        parts.append("Nội dung: " + post["details"])
+    return "\n".join(parts)
 
 
 def build_fb_pack(post) -> str:
@@ -141,8 +145,6 @@ def page_create(c):
         st.session_state["loaded_post_id"] = target_id
         st.session_state["post_id"] = target_id
         post = db.get_post(c, target_id) if target_id else None
-        st.session_state["topic_field"] = post["topic"] if post else ""
-        st.session_state["summary_field"] = post["summary"] if post else ""
         st.session_state["details_field"] = post["details"] if post else ""
         st.session_state["caption_draft"] = post["caption"] if post else ""
         st.session_state["seo_draft"] = post["seo_text"] if post else ""
@@ -163,137 +165,130 @@ def page_create(c):
     )
     preset = preset_map[pid]
 
-    st.subheader("1. Data đầu vào")
+    st.subheader("Input — nội dung gốc")
     st.session_state["active_step"] = "input"
     provider_in, model_in = generation_controls(c)
-    col_btn = st.columns([3, 1, 1, 1])
-    with col_btn[1]:
-        ai_gen = st.button("AI tạo data", help="Dùng prompt 'input' trong preset để sinh bản nháp từ chủ đề")
-    with col_btn[2]:
-        save_data = st.button("Lưu data")
-    with col_btn[3]:
-        run_all = st.button("⚡ Chạy cả pipeline", help="Caption → từ khóa+ảnh → SEO, dùng provider đã chọn ở từng bước")
-    topic = st.text_input("Chủ đề (bắt buộc)", key="topic_field")
-    summary = st.text_area("Tóm tắt", key="summary_field", height=100)
-    details = st.text_area("Chi tiết / dữ kiện", key="details_field", height=140)
+    btn_row = st.columns([3, 1, 2])
+    with btn_row[0]:
+        ai_hint = st.text_input("Gợi ý ngắn (chỉ dùng khi muốn AI viết input)", key="ai_hint_field")
+    with btn_row[1]:
+        st.write("")
+        ai_gen = st.button("AI tạo input")
+    with btn_row[2]:
+        st.write("")
+        run_all = st.button("⚡ Chạy pipeline: B1 → (B2 ∥ B3)", help="Tạo caption trước; sau đó ảnh và SEO chạy song song; mỗi B dùng provider đã chọn ở mục đó")
+    input_text = st.text_area("Dán nội dung gốc / caption cũ *", key="details_field", height=200)
 
     if ai_gen:
-        if not topic.strip():
-            st.error("Nhập chủ đề trước khi để AI tạo data.")
+        if not ai_hint.strip():
+            st.error("Nhập gợi ý ngắn trước để AI viết input.")
         elif not (preset["input_prompt"] or "").strip():
             st.error("Preset chưa có prompt 'input' (trang Presets).")
         elif provider_in is None:
             st.error("Chọn provider trước.")
         else:
-            with st.spinner("AI đang tạo data…"):
+            with st.spinner("AI đang viết input…"):
                 try:
-                    text = prov.chat(provider_in, model_in, preset["input_prompt"] + "\n\n---\nChủ đề: " + topic)
-                    st.session_state["summary_field"] = text
+                    text = prov.chat(provider_in, model_in, preset["input_prompt"] + "\n\n---\nChủ đề: " + ai_hint)
+                    st.session_state["details_field"] = text
                     st.rerun()
                 except prov.ProviderError as exc:
                     st.error(str(exc))
         st.stop()
 
-    if save_data:
-        if not topic.strip():
-            st.error("Chủ đề không được để trống.")
-        else:
-            post_id = st.session_state.get("post_id")
-            if post_id:
-                db.update_post(c, post_id, topic=topic, summary=summary, details=details)
-            else:
-                st.session_state["post_id"] = db.create_post(c, pid, topic, summary, details)
-                st.session_state["loaded_post_id"] = None
-            st.success("Đã lưu data.")
-            st.rerun()
-        st.stop()
-
     post_id = st.session_state.get("post_id")
-    if not post_id:
-        st.caption("Lưu data (hoặc bấm một nút tạo bên dưới) để bắt đầu bài viết.")
 
     def ensure_post():
         nonlocal post_id
+        if not input_text.strip():
+            st.error("Nhập nội dung trước.")
+            st.stop()
+        derived_topic = input_text.strip().splitlines()[0][:60]
         if not post_id:
-            if not topic.strip():
-                st.error("Nhập chủ đề trước.")
-                st.stop()
-            post_id = db.create_post(c, pid, topic, summary, details)
+            post_id = db.create_post(c, pid, derived_topic, "", input_text)
             st.session_state["post_id"] = post_id
             st.session_state["loaded_post_id"] = None
         else:
-            db.update_post(c, post_id, topic=topic, summary=summary, details=details)
+            db.update_post(c, post_id, topic=derived_topic, details=input_text)
         return db.get_post(c, post_id)
 
     if run_all:
         post = ensure_post()
         rows = provider_rows(c)
         steps_log = []
-
-        def get_caption() -> str:
-            return st.session_state.get("caption_draft") or post["caption"]
-
         p1, m1 = step_provider_model(rows, "caption")
+        p2, m2 = step_provider_model(rows, "keyword")
+        p3, m3 = step_provider_model(rows, "seo")
+
+        cap = None
         if p1 and (preset["caption_prompt"] or "").strip():
-            with st.spinner("① Tạo caption…"):
+            with st.spinner("B1 · Tạo caption…"):
                 try:
                     cap = prov.chat(p1, m1, gen_prompt(preset["caption_prompt"], prompt_context(post)))
-                    st.session_state["caption_draft"] = cap
                     db.update_post(c, post["id"], caption=cap)
                     post = db.get_post(c, post["id"])
-                    steps_log.append("Caption: OK")
+                    steps_log.append("B1 caption: OK")
                 except prov.ProviderError as exc:
-                    steps_log.append(f"Caption LỖI: {exc}")
+                    steps_log.append(f"B1 caption LỖI: {exc}")
         else:
-            steps_log.append("Caption: bỏ qua (thiếu provider hoặc prompt)")
+            steps_log.append("B1 caption: bỏ qua (thiếu provider hoặc prompt)")
 
-        p2, m2 = step_provider_model(rows, "keyword")
-        if p2 and (preset["keyword_prompt"] or "").strip():
-            with st.spinner("② Tạo từ khóa ảnh…"):
-                try:
-                    raw = prov.chat(p2, m2, gen_prompt(preset["keyword_prompt"], prompt_context(post, get_caption())))
-                    kws = images.extract_keywords(raw)
-                    db.update_post(c, post["id"], keywords=kws)
-                    st.session_state["keywords_text"] = ", ".join(kws)
-                    picked = []
-                    for kw in kws[:4]:
-                        try:
-                            found = images.search_images(kw, count=4)
-                        except Exception as exc:
-                            steps_log.append(f"Ảnh '{kw}': {exc}")
-                            continue
-                        if found:
-                            picked.append(found[0])
-                    if picked:
-                        st.session_state["saved_images"] = picked
-                        st.session_state["image_results"] = picked
-                        db.update_post(c, post["id"], images=picked)
-                        steps_log.append(f"Ảnh: chọn tự động {len(picked)} ảnh (sửa tay ở bước 3)")
-                    else:
-                        steps_log.append("Ảnh: không tìm được ảnh nào")
-                except prov.ProviderError as exc:
-                    steps_log.append(f"Từ khóa ảnh LỖI: {exc}")
-        else:
-            steps_log.append("Từ khóa ảnh: bỏ qua (thiếu provider hoặc prompt)")
+        caption_now = cap or st.session_state.get("caption_draft") or post["caption"]
+        ctx = prompt_context(post, caption_now)
 
-        p3, m3 = step_provider_model(rows, "seo")
-        if p3 and (preset["seo_prompt"] or "").strip():
-            with st.spinner("③ Viết bài SEO…"):
-                try:
-                    seo = prov.chat(p3, m3, gen_prompt(preset["seo_prompt"], prompt_context(post, get_caption())))
-                    st.session_state["seo_draft"] = seo
-                    db.update_post(c, post["id"], seo_text=seo)
-                    steps_log.append("SEO: OK")
-                except prov.ProviderError as exc:
-                    steps_log.append(f"SEO LỖI: {exc}")
-        else:
-            steps_log.append("SEO: bỏ qua (thiếu provider hoặc prompt)")
+        def b2_task():
+            if not (p2 and (preset["keyword_prompt"] or "").strip()):
+                return ["B2 ảnh: bỏ qua (thiếu provider hoặc prompt)"], [], []
+            lines, kws, picked = [], [], []
+            try:
+                raw = prov.chat(p2, m2, gen_prompt(preset["keyword_prompt"], ctx))
+                kws = images.extract_keywords(raw)
+                for kw in kws[:4]:
+                    try:
+                        found = images.search_images(kw, count=4)
+                    except Exception as exc:
+                        lines.append(f"B2 ảnh '{kw}': {exc}")
+                        continue
+                    if found:
+                        picked.append(found[0])
+                lines.append(f"B2: {len(kws)} từ khóa, {len(picked)} ảnh (đổi/tách ở mục B2)")
+            except prov.ProviderError as exc:
+                lines.append(f"B2 LỖI: {exc}")
+            return lines, kws, picked
 
-        for line in steps_log:
+        def b3_task():
+            if not (p3 and (preset["seo_prompt"] or "").strip()):
+                return "B3 SEO: bỏ qua (thiếu provider hoặc prompt)", None
+            try:
+                return "B3 SEO: OK", prov.chat(p3, m3, gen_prompt(preset["seo_prompt"], ctx))
+            except prov.ProviderError as exc:
+                return f"B3 SEO LỖI: {exc}", None
+
+        with st.spinner("B2 (ảnh) ∥ B3 (SEO) đang chạy song song…"):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_b2 = pool.submit(b2_task)
+                fut_b3 = pool.submit(b3_task)
+                log_b2, kws, picked = fut_b2.result()
+                log_b3, seo = fut_b3.result()
+
+        if cap is not None:
+            st.session_state["caption_draft"] = cap
+        if kws:
+            st.session_state["keywords_text"] = ", ".join(kws)
+            db.update_post(c, post["id"], keywords=kws)
+        if picked:
+            st.session_state["saved_images"] = picked
+            st.session_state["image_results"] = picked
+            db.update_post(c, post["id"], images=picked)
+        if seo:
+            st.session_state["seo_draft"] = seo
+            db.update_post(c, post["id"], seo_text=seo)
+
+        for line in steps_log + log_b2 + [log_b3]:
             (st.error if "LỖI" in line else st.success)(line)
         st.stop()
 
-    st.subheader("2. Caption")
+    st.subheader("B1 · Caption")
     st.session_state["active_step"] = "caption"
     provider, model = generation_controls(c)
     c1, c2 = st.columns([1, 4])
@@ -320,7 +315,7 @@ def page_create(c):
             db.update_post(c, st.session_state["post_id"], caption=caption)
             st.success("Đã tạo bài + lưu caption.")
 
-    st.subheader("3. Ảnh liên quan")
+    st.subheader("B2 · Ảnh liên quan (song song với B3 khi chạy ⚡)")
     st.session_state["active_step"] = "keyword"
     provider_kw, model_kw = generation_controls(c)
     kw1, kw2 = st.columns([1, 3])
@@ -367,7 +362,7 @@ def page_create(c):
     if st.session_state.get("saved_images"):
         st.caption("Ảnh đã chọn: " + ", ".join(img["url"] for img in st.session_state["saved_images"]))
 
-    st.subheader("4. Bài SEO")
+    st.subheader("B3 · Bài SEO (song song với B2 khi chạy ⚡)")
     st.session_state["active_step"] = "seo"
     provider_seo, model_seo = generation_controls(c)
     s1, s2 = st.columns([1, 4])
@@ -395,7 +390,7 @@ def page_create(c):
             db.update_post(c, st.session_state["post_id"], seo_text=seo)
             st.success("Đã tạo bài + lưu SEO.")
 
-    st.subheader("5. Xuất bản Facebook")
+    st.subheader("Xuất bản Facebook")
     if st.session_state.get("post_id"):
         post = db.get_post(c, st.session_state["post_id"])
         pack = build_fb_pack(post)
