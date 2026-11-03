@@ -381,8 +381,9 @@ check("batch báo tiến trình từng bài theo đúng thứ tự",
       seen_batch == [(s, i, 3) for i, s in enumerate(sid_extra[:3], start=1)] and len(out.touched) == 3)
 
 out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Caption", "request_id": "r1"})
-check("copy_request trả đúng nội dung caption.txt",
-      out.copy == {"id": sid_ok, "field": "Caption", "request_id": "r1", "text": (ga_root / sid_ok / "caption.txt").read_text(encoding="utf-8")})
+check("copy_request trả đúng nội dung caption.txt, đánh dấu mode copy",
+      out.copy == {"id": sid_ok, "field": "Caption", "request_id": "r1", "mode": "copy",
+                   "text": (ga_root / sid_ok / "caption.txt").read_text(encoding="utf-8")})
 out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_extra[5], "field": "Caption", "request_id": "r2"})
 check("copy field trống -> báo rõ, không có payload", out.copy is None and "trống" in out.lines[0])
 out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "B3", "request_id": "r3"})
@@ -506,6 +507,39 @@ check("tổng kết đếm đủ bài theo nhóm, bài hàng đợi tính riêng
       and counts["waiting"] + counts["running"] + counts["error"] + counts["done"] == counts["total"])
 ga.apply_event(gctx, {"source": "queue_clear"})
 check("test P4a không để sót bài trong hàng đợi", ga.queue_ids(fbgrid.rows_for(gctx)) == [])
+
+# --- P4b: modal xin chữ/ảnh — copy_request (click đơn) vs content_request/image_request (click đúp) ---
+stories.save_step_text(ga_root, sid_ok, "b3", "## Tiêu đề **đậm**\n\nĐoạn văn có **chữ đậm** và *nghiêng*.")
+out = ga.apply_event(gctx, {"source": "content_request", "id": sid_ok, "field": "Bài SEO", "request_id": "req-show"})
+check("content_request trả đúng chữ seo.md, mode show cho modal",
+      out.copy is not None and out.copy["mode"] == "show" and out.copy["text"].startswith("## Tiêu đề")
+      and out.copy["request_id"] == "req-show")
+out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Bài SEO", "request_id": "req-copy"})
+check("copy_request giữ nguyên format AI trả về (còn ** và ##), mode copy",
+      out.copy is not None and out.copy["mode"] == "copy" and "**đậm**" in out.copy["text"])
+out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Bài SEO (Facebook)", "request_id": "req-fb"})
+check("bản dán Facebook là unicode đậm, không còn ký hiệu markdown",
+      out.copy is not None and out.copy["text"] == formats.to_fb_unicode(stories.step_text(ga_root, sid_ok, "b3"))
+      and "**" not in out.copy["text"] and "##" not in out.copy["text"] and "━━━" in out.copy["text"])
+out = ga.apply_event(gctx, {"source": "image_request", "id": sid_ok, "request_id": "req-img"})
+data = (out.copy or {}).get("image") or ""
+check("image_request trả data URL base64 của image.png trong folder, mode show",
+      data.startswith("data:image/png;base64,") and out.copy["field"] == "Ảnh" and out.copy["mode"] == "show"
+      and out.copy["bytes"] == (ga_root / sid_ok / "image.png").stat().st_size)
+out = ga.apply_event(gctx, {"source": "image_request", "id": sid_empty, "request_id": "req-noimg"})
+check("chưa có ảnh -> modal nhận dòng giải thích, không payload rỗng",
+      out.copy is None and "chưa có ảnh" in out.lines[0])
+big = ga_box / "big.png"
+big.write_bytes(b"\0" * (ga.IMAGE_INLINE_MAX + 1))
+stories.save_image(ga_root, sid_ok, big, method="test")
+out = ga.apply_event(gctx, {"source": "image_request", "id": sid_ok, "request_id": "req-big"})
+check("ảnh quá cỡ không bị nhúng cả megabyte qua message, modal chỉ đường tới trang Tạo bài",
+      out.copy is None and "lớn quá" in out.lines[0] and "Tạo bài" in out.lines[0])
+stories.save_image(ga_root, sid_ok, ga_gen_file, method="test")
+row_p4b = next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_ok)
+check("mỗi dòng có dấu mốc nội dung để modal cache đúng bản đang có trên file",
+      row_p4b["stamp"] > 0 and row_p4b["stamp"] == round(row_p4b["stamp"], 3))
+stories.save_step_text(ga_root, sid_ok, "b3", "SEO khôi phục sau test P4b")
 
 stories.set_step_state(ga_root, sid_ok, "b1", "running")
 check("running còn mới hiện running", ga.step_states(ga_root, sid_ok)["b1"] == "running")
@@ -805,6 +839,29 @@ at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-link-1", "source": "link_sav
 at_gu.run()
 check("Grid component: event link_save ghi đúng link vào story.json",
       not at_gu.exception and stories.load_story(smoke_root, q_sid)["link"] == "https://fb.watch/comp-1")
+
+# --- P4b AppTest: response cho click đơn (copy) và click đúp (modal show/ảnh) ---
+stories.save_step_text(smoke_root, copy_sid, "b3", "## Tiêu đề **đậm**\n\nĐoạn văn SEO của bài copy.")
+at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-show-1", "source": "content_request", "id": copy_sid,
+                                   "field": "Bài SEO", "request_id": "req-show-1"}
+at_gu.run()
+resp = at_gu.session_state.get("grid_copy_response") or {}
+check("Grid component: content_request về payload mode show, modal hiện đúng chữ seo.md",
+      not at_gu.exception and resp.get("mode") == "show" and resp.get("request_id") == "req-show-1"
+      and resp.get("text", "").startswith("## Tiêu đề"))
+at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-show-2", "source": "copy_request", "id": copy_sid,
+                                   "field": "Caption", "request_id": "req-copy-1"}
+at_gu.run()
+resp = at_gu.session_state.get("grid_copy_response") or {}
+check("Grid component: copy_request về payload mode copy cho click đơn",
+      not at_gu.exception and resp.get("mode") == "copy" and resp.get("text") == "CAPTION TỪ FILE")
+at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-show-3", "source": "image_request", "id": copy_sid,
+                                   "request_id": "req-img-1"}
+at_gu.run()
+resp = at_gu.session_state.get("grid_copy_response") or {}
+check("Grid component: request ảnh cho bài chưa có ảnh -> modal nhận field Ảnh + dòng lỗi, không crash",
+      not at_gu.exception and resp.get("field") == "Ảnh" and resp.get("mode") == "show"
+      and resp.get("text") == "" and "chưa có ảnh" in (resp.get("error") or ""))
 
 captured = {}
 real_component = fbgrid.component

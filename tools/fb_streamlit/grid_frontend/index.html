@@ -51,11 +51,29 @@
   input.lin { width:calc(100% - 62px); height:22px; font:inherit; font-size:12px; padding:1px 5px;
     border:1px solid var(--running-t); border-radius:5px; }
   button.ln { width:22px; padding:0; height:22px; margin-left:2px; }
-  button.copy { font-size:11px; padding:2px 5px; height:22px; margin-right:3px; }
-  button.copy.off { opacity:.4; }
-  button.copy.wait { opacity:.6; }
-  button.copy.ok { background:var(--done); color:var(--done-t); border-color:rgba(10,127,63,.35); }
-  button.copy.bad { background:var(--missing); color:var(--missing-t); }
+  button.ok { background:var(--done); color:var(--done-t); border-color:rgba(10,127,63,.35); }
+  button.bad { background:var(--missing); color:var(--missing-t); }
+  /* modal result của bước — mở bằng click đúp ô B1/B2/B3 */
+  .overlay { position:fixed; inset:0; z-index:40; background:rgba(20,22,30,.45);
+    display:flex; align-items:flex-start; justify-content:center; padding:20px 12px; }
+  .modal { background:var(--bg); border:1px solid var(--border); border-radius:10px; width:min(880px,100%);
+    max-height:calc(100vh - 40px); display:flex; flex-direction:column; box-shadow:0 14px 34px rgba(0,0,0,.28); }
+  .mhead { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
+  .mhead .mid { font-family:ui-monospace,Consolas,monospace; font-weight:600; }
+  .mtabs { display:flex; gap:4px; flex-wrap:wrap; margin-right:auto; }
+  .mtab { border:1px solid var(--border); background:#fff; border-radius:6px; font:inherit; font-size:12px;
+    height:24px; padding:0 9px; cursor:pointer; color:#555; }
+  .mtab.on { background:var(--running); color:var(--running-t); border-color:rgba(23,95,168,.35); font-weight:600; }
+  .mtools { display:flex; gap:6px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  .mbody { padding:10px 12px; overflow:auto; }
+  .mbody pre.doc { margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; line-height:1.55; }
+  .mbody img.photo { max-width:100%; border-radius:8px; border:1px solid var(--border); }
+  .mbody .loading, .mbody .none { color:var(--muted); }
+  .md p { margin:.45em 0; line-height:1.55; }
+  .md h1, .md h2, .md h3, .md h4 { margin:.7em 0 .3em; font-size:15px; }
+  .md ul, .md ol { margin:.4em 0 .4em 1.3em; padding:0; }
+  .md code { background:#f2f3f5; border-radius:4px; padding:0 4px; }
+  .mfoot { padding:7px 10px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; background:#fbfbfc; }
   .chip { display:inline-block; min-width:52px; text-align:center; padding:2px 6px; border-radius:999px;
     font-size:11px; font-weight:600; background:var(--pending); color:var(--pending-t); cursor:default; }
   .chip.done { background:var(--done); color:var(--done-t); }
@@ -101,8 +119,6 @@ const MAX_BATCH = 5;
 
 const STATE_LABEL = { pending: "chưa chạy", queued: "đợi", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
 const STEP_TITLE = { b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
-const COPY_FIELDS = ["Caption", "Bài SEO", "Input", "Link"];
-const COPY_SHORT = { "Caption": "Caption", "Bài SEO": "SEO", "Input": "Input", "Link": "Link" };
 const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy · xanh dương đang chạy · xanh lá xong · đỏ lỗi · đỏ nét đứt treo >15 phút · cam mất file";
 // Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
 const COLS = [
@@ -113,13 +129,25 @@ const COLS = [
   { key: "steps", label: "B1 B2 B3", w: 92, min: 84, align: "c" },
   { key: "img", label: "ảnh", w: 48, min: 40, align: "c" },
   { key: "status", label: "status", w: 66, min: 50, align: "c" },
-  { key: "link", label: "Link", w: 200, min: 90 },
-  { key: "copy", label: "copy", w: 212, min: 120 },
-  { key: "act", label: "", w: 134, min: 90 },
+  { key: "link", label: "Link", w: 220, min: 90 },
+  { key: "act", label: "", w: 190, min: 110 },
 ];
 const COLS_KEY = "fbgrid:cols:v1";
 const EXPANDED_KEY = "fbgrid:expanded:v1";
+const MODAL_KEY = "fbgrid:modal:v1";
+const LAST_RESP_KEY = "fbgrid:lastresp:v1";
 const SUMMARY_ORDER = [["queued", "hàng đợi"], ["waiting", "chờ"], ["running", "đang chạy"], ["error", "lỗi"], ["done", "xong"]];
+const DUBBLE_MS = 260;
+const STEP_FIELD = { b1: "Caption", b3: "Bài SEO" };
+const TABS = [["input", "Input"], ["b1", "B1 caption"], ["b2", "B2 ảnh"], ["b3", "B3 SEO"], ["link", "Link"]];
+const TAB_FIELD = { input: "Input", b1: "Caption", b3: "Bài SEO" };
+const CONTENT = new Map();  // "id|field|dấu_mốc_file" -> chữ, chỉ sống tới khi file đổi
+const IMAGES = new Map();   // "id|Ảnh|dấu_mốc_file" -> data URL
+const NOTES = new Map();    // "id|field|dấu_mốc_file" -> dòng giải thích (trống/chưa có ảnh) — chặn xin lại vòng vô hạn
+const WAITING = new Map();  // request_id -> {key, id, field, mode, flash} — chờ response về
+let FLASH = null;           // {sel, label, cls, at} — nút vừa vẽ xong sẽ nhận nhãn "đã copy"
+let COPY_NOW = null;        // {text, flash} — response xin copy vừa về, ghi vào clipboard sau khi DOM vẽ xong
+let SHOW_MD = true;         // tab B3: hiển thị markdown đã render hay để nguyên chữ
 
 function widths() {
   const saved = JSON.parse(lsGet(COLS_KEY) || "{}") || {};
@@ -139,7 +167,8 @@ function outerHeight() {
   try { return window.parent.innerHeight || window.innerHeight; } catch (_) { return window.innerHeight; }
 }
 function setFrameHeight() {
-  if (expandedMode()) { sendMessage(SET_FRAME_HEIGHT, { height: Math.min(Math.max(outerHeight(), 360), 4000) }); return; }
+  // Modal overlay cần kín vùng đọc, nên xin iframe cao bằng cửa sổ (như chế độ mở rộng).
+  if (expandedMode() || modalRef()) { sendMessage(SET_FRAME_HEIGHT, { height: Math.min(Math.max(outerHeight(), 360), 4000) }); return; }
   const h = Math.min(Math.max(document.documentElement.scrollHeight, 120), 640);
   sendMessage(SET_FRAME_HEIGHT, { height: h });
 }
@@ -153,7 +182,8 @@ function send(event) {
   setTimeout(unmarkSent, 3000);
 }
 function markSent() {
-  document.querySelectorAll("button.b").forEach(b => { b.dataset.sent = "1"; });
+  // Khóa nút trong grid khi đã gửi event; modal vẫn bấm được (tab/đóng/copy) để không bí màn hình.
+  document.querySelectorAll("button.b").forEach(b => { if (!b.closest(".overlay")) b.dataset.sent = "1"; });
 }
 function unmarkSent() {
   document.querySelectorAll("button.b").forEach(b => { delete b.dataset.sent; });
@@ -201,56 +231,84 @@ function copyToClipboard(value, done) {
   done(fallbackCopy(value));
 }
 function flash(b, label, cls) {
+  if (!b) return;
   const old = b.textContent;
   b.textContent = label;
-  b.classList.add(cls);
-  setTimeout(() => { b.textContent = old; b.classList.remove(cls); }, 1400);
+  if (cls) b.classList.add(cls);
+  setTimeout(() => { b.textContent = old; if (cls) b.classList.remove(cls); }, 1400);
 }
-function responseFor(row, field) {
+function flashSel(sel, label, cls) {
+  if (!sel) return;
+  const b = document.querySelector('[data-flash="' + sel + '"]');
+  if (b) { flash(b, label, cls); return; }
+  FLASH = { sel: sel, label: label, cls: cls, at: Date.now() };  // node chưa vẽ (đang giữa lần render) -> để lại cho applyFlash
+}
+function applyFlash() {
+  const f = FLASH;
+  if (!f) return;
+  FLASH = null;
+  if (Date.now() - f.at > 1200) return;
+  flash(document.querySelector('[data-flash="' + f.sel + '"]'), f.label, f.cls);
+}
+
+function stampOf(row) { return String((row && (row.stamp != null ? row.stamp : row.updated)) || ""); }
+function contentKey(row, field) { return String(row.id) + "|" + field + "|" + stampOf(row); }
+function findRow(id) { return rows().find(r => String(r.id) === String(id)) || null; }
+function tabField(tab) { return tab === "b2" ? "Ảnh" : (TAB_FIELD[tab] || ""); }
+
+// Xin nội dung/ảnh từ Python (component không tự đọc file) — ghi cache theo dấu mốc của folder story.
+function requestContent(row, field, mode, flashId) {
+  const rid = eventId();
+  const key = contentKey(row, field);
+  NOTES.delete(key);
+  WAITING.set(rid, { key: key, id: String(row.id), field: field, mode: mode, flash: flashId || "" });
+  const source = mode === "copy" ? "copy_request" : (field === "Ảnh" ? "image_request" : "content_request");
+  send({ source: source, id: row.id, field: field, request_id: rid });
+}
+
+// response vừa về sau 1 request -> nạp cache (việc copy làm sau khi DOM đã vẽ, xem finishCopy).
+// Prop copy_response là sticky nên latch theo request_id: mỗi response chỉ xử lý đúng 1 lần.
+function ingestResponse() {
+  COPY_NOW = null;
   const r = MODEL.copy_response || {};
-  if (!r.request_id) return null;
-  if (String(r.id) === String(row.id) && String(r.field) === field) return r;
-  return null;
+  const rid = String(r.request_id || "");
+  if (!rid || lsGet(LAST_RESP_KEY) === rid) return;
+  lsSet(LAST_RESP_KEY, rid);
+  const wait = WAITING.get(rid);
+  WAITING.delete(rid);
+  const row = findRow(wait ? wait.id : r.id);
+  const field = String((wait && wait.field) || r.field || "Ảnh");
+  const mode = (wait && wait.mode) || String(r.mode || "copy");
+  const key = row ? contentKey(row, field) : String(r.id || "") + "|" + field + "|";
+  if (r.image) IMAGES.set(key, String(r.image));
+  else if (String(r.text || "").trim()) CONTENT.set(key, String(r.text));
+  else NOTES.set(key, String(r.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
+  if (mode !== "copy") return;
+  const text = String(r.text || "");
+  if (!text.trim()) { flashSel(wait ? wait.flash : "", "trống", "bad"); return; }
+  COPY_NOW = { text: text, flash: (wait && wait.flash) || "" };
 }
-function doCopy(b, text) {
-  if (!text) { flash(b, "trống", "bad"); return; }
-  copyToClipboard(text, ok => flash(b, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad"));
+function finishCopy() {
+  const job = COPY_NOW;
+  if (!job) return;
+  COPY_NOW = null;
+  copyToClipboard(job.text, ok => flashSel(job.flash, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad"));
 }
-function copyCell(row) {
-  const td = el("td", "copy");
-  COPY_FIELDS.forEach(field => {
-    const b = el("button", "b copy");
-    b.type = "button";
-    b.textContent = COPY_SHORT[field] || field;
-    b.dataset.copyId = String(row.id);
-    b.dataset.copyField = field;
-    if (!(row.copyable && row.copyable[field])) {
-      b.classList.add("off");
-      b.title = field + " của bài này trống — chưa có gì để copy";
-    } else {
-      b.title = "Copy " + field + " của " + row.id;
-    }
-    b.addEventListener("click", e => {
-      e.preventDefault(); e.stopPropagation();
-      const r = responseFor(row, field);
-      if (r) { doCopy(b, String(r.text || "")); return; }  // chữ đã về từ lần request trước
-      b.classList.add("wait");
-      b.textContent = "…";
-      send({ source: "copy_request", id: row.id, field: field, request_id: eventId() });
-    });
-    td.appendChild(b);
-  });
-  return td;
+
+// Bấm 1 lần = copy (không có gì để copy thì nói rõ), bấm 2 lần = mở modal xem kết quả.
+function splitClick(single, double) {
+  let timer = null;
+  return function (b) {
+    if (timer) { clearTimeout(timer); timer = null; double(b); return; }
+    timer = setTimeout(() => { timer = null; single(b); }, DUBBLE_MS);
+  };
 }
-function maybeAutoCopy() {
-  const r = MODEL.copy_response || {};
-  if (!r.request_id) return;
-  const key = "fbcopy:" + r.id + ":" + r.field + ":" + r.request_id;
-  if (lsGet(key) === "1") return;  // response là prop sticky: chỉ copy 1 lần cho 1 request_id
-  const b = document.querySelector('button.copy[data-copy-id="' + r.id + '"][data-copy-field="' + r.field + '"]');
-  if (!b) return;
-  lsSet(key, "1");
-  doCopy(b, String(r.text || ""));
+function copyField(row, field, b, flashId) {
+  const cached = CONTENT.get(contentKey(row, field));
+  if (cached != null) { copyToClipboard(String(cached), ok => flash(b, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad")); return; }
+  if (row.copyable && row.copyable[field] === false) { flash(b, "trống", "bad"); return; }
+  requestContent(row, field, "copy", flashId);
+  flash(b, "…", "");
 }
 
 function stepsCell(row) {
@@ -258,12 +316,174 @@ function stepsCell(row) {
   ["b1", "b2", "b3"].forEach(step => {
     const state = String((row.states || {})[step] || "pending");
     const detail = String((row.detail || {})[step] || "");
-    const b = button(step.toUpperCase(), STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state) +
-      (detail ? " · " + detail : "") + " — bấm để chạy bước này",
-      () => send({ source: "run_step", id: row.id, step }), "sq " + state);
+    const b = el("button", "b sq " + state);
+    b.type = "button";
+    b.textContent = step.toUpperCase();
+    b.dataset.id = String(row.id);
+    b.dataset.step = step;
+    b.dataset.flash = "sq:" + row.id + ":" + step;
+    const how = step === "b2" ? "bấm để xem ảnh, bấm đúp để mở modal"
+      : "bấm 1 lần để copy, bấm đúp để mở modal";
+    b.title = STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state) + (detail ? " · " + detail : "") + " — " + how;
+    const single = step === "b2" ? () => openModal(row.id, "b2")
+      : () => copyField(row, STEP_FIELD[step], b, b.dataset.flash);
+    const onClick = splitClick(single, () => openModal(row.id, step));  // 1 closure/ô: bấm đúp mới tính
+    b.addEventListener("click", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      onClick(b);
+    });
     td.appendChild(b);
   });
   return td;
+}
+
+// ---- modal kết quả bước: mở bằng click đúp ô B1/B2/B3 (hoặc ☰), chạy bước ngay trong modal ----
+function modalRef() {
+  let raw = null;
+  try { raw = JSON.parse(lsGet(MODAL_KEY) || "null"); } catch (_) { raw = null; }
+  return raw && raw.id ? { id: String(raw.id), tab: String(raw.tab || "b1") } : null;
+}
+function setModal(ref) { lsSet(MODAL_KEY, ref ? JSON.stringify(ref) : ""); }
+function openModal(id, tab) { setModal({ id: String(id), tab: tab || "b1" }); repaint(); }
+function closeModal() { setModal(null); repaint(); }
+
+// Modal mở mà chưa có chữ/ảnh cho tab đó thì xin Python đúng 1 lần (theo dấu mốc file).
+function ensureContent(row, tab) {
+  const field = tabField(tab);
+  if (!field || tab === "link") return;
+  const key = contentKey(row, field);
+  if (CONTENT.has(key) || IMAGES.has(key) || NOTES.has(key)) return;
+  let asked = false;
+  WAITING.forEach(w => { if (w.key === key) asked = true; });
+  if (asked) return;  // đang chờ response của đúng nội dung này
+  if (field === "Ảnh") {
+    if (!row.image) { NOTES.set(key, "Bài này chưa có ảnh — chạy B2 để có ảnh."); return; }
+    requestContent(row, "Ảnh", "show");
+    return;
+  }
+  if (row.copyable && row.copyable[field] === false) { NOTES.set(key, field + " trống — chạy bước này trước."); return; }
+  requestContent(row, field, "show");
+}
+
+function mdInline(node, text) {
+  const re = /\*\*([^*]+)\*\*|\*([^*]+)\*|__([^_]+)__|`([^`]+)`/g;
+  let last = 0;
+  let m = re.exec(text);
+  while (m) {
+    if (m.index > last) node.appendChild(document.createTextNode(text.slice(last, m.index)));
+    if (m[1] != null) node.appendChild(el("strong", null, m[1]));
+    else if (m[2] != null) node.appendChild(el("em", null, m[2]));
+    else if (m[3] != null) node.appendChild(el("strong", null, m[3]));
+    else node.appendChild(el("code", null, m[4]));
+    last = m.index + m[0].length;
+    m = re.exec(text);
+  }
+  if (last < text.length) node.appendChild(document.createTextNode(text.slice(last)));
+  return node;
+}
+// B3 trả về markdown: chỉ dựng node thật (không innerHTML) nên chữ AI sinh không chèn được script.
+function renderMarkdown(text, box) {
+  box.classList.add("md");  // giữ luôn lớp mbody (padding + cuộn) của khung nội dung
+  let list = null;
+  String(text || "").split(/\r?\n/).forEach(line => {
+    const t = line.trim();
+    if (!t) { list = null; return; }
+    const h = /^(#{1,4})\s+(.*)$/.exec(t);
+    if (h) { list = null; box.appendChild(el("h" + h[1].length, null, h[2])); return; }
+    const li = /^[-*+]\s+(.*)$/.exec(t);
+    if (li) { if (!list || list.tagName !== "UL") { list = el("ul"); box.appendChild(list); } list.appendChild(mdInline(el("li"), li[1])); return; }
+    const ol = /^\d+[.)]\s+(.*)$/.exec(t);
+    if (ol) { if (!list || list.tagName !== "OL") { list = el("ol"); box.appendChild(list); } list.appendChild(mdInline(el("li"), ol[1])); return; }
+    list = null;
+    box.appendChild(mdInline(el("p"), t));
+  });
+}
+
+function modalBody(row, tab, key) {
+  const body = el("div", "mbody");
+  if (tab === "link") {
+    const raw = String(row.link || "");
+    body.appendChild(el("pre", "doc", raw || "(chưa có link — bấm ✎ ở cột Link để nhập)"));
+    return body;
+  }
+  if (tab === "b2") {
+    const src = IMAGES.get(key);
+    if (!src) { body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc ảnh từ folder story")); return body; }
+    const img = document.createElement("img");
+    img.className = "photo";
+    img.alt = "Ảnh B2 của " + row.id;
+    img.src = src;
+    body.appendChild(img);
+    return body;
+  }
+  const text = CONTENT.get(key);
+  if (text == null) { body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc nội dung từ folder story")); return body; }
+  if (tab === "b3" && SHOW_MD) { renderMarkdown(String(text), body); return body; }
+  body.appendChild(el("pre", "doc", String(text)));
+  return body;
+}
+
+function modalNode() {
+  const ref = modalRef();
+  if (!ref) return null;
+  const row = findRow(ref.id);
+  if (!row) { setModal(null); return null; }  // bài bị bộ lọc che hoặc đã archive -> đóng cho khớp màn hình
+  ensureContent(row, ref.tab);
+  const key = contentKey(row, tabField(ref.tab));
+  const overlay = el("div", "overlay");
+  const modal = el("div", "modal");
+
+  const head = el("div", "mhead");
+  head.appendChild(el("span", "mid", row.id));
+  head.appendChild(el("span", "muted", String(row.topic || "").slice(0, 50) || "(chưa đặt chủ đề)"));
+  const tabs = el("div", "mtabs");
+  TABS.forEach(pair => {
+    const t = el("button", "mtab" + (pair[0] === ref.tab ? " on" : ""), pair[1]);
+    t.type = "button";
+    t.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); setModal({ id: row.id, tab: pair[0] }); repaint(); });
+    tabs.appendChild(t);
+  });
+  head.appendChild(tabs);
+  head.appendChild(button("✕", "Đóng (Esc)", () => closeModal()));
+  modal.appendChild(head);
+
+  const tools = el("div", "mtools");
+  if (["b1", "b2", "b3"].indexOf(ref.tab) >= 0) {
+    tools.appendChild(button("▶ Chạy bước này", "Chạy lại " + STEP_TITLE[ref.tab] + " cho " + row.id +
+      " — xong thì modal tự hiện kết quả mới", b => {
+        b.disabled = true;  // nút trong modal không bị khóa theo grid -> tự khóa tới khi rerun vẽ lại
+        CONTENT.delete(key); IMAGES.delete(key); NOTES.delete(key);  // bỏ bản cache để lần vẽ sau đọc file mới
+        send({ source: "run_step", id: row.id, step: ref.tab });
+      }, "play"));
+  }
+  if (ref.tab !== "b2") {
+    const field = tabField(ref.tab);
+    if (field) {
+      const cp = button("📋 Copy " + field, "Copy đúng chữ đang hiện (bấm 1 lần ở ô " + field + " cũng vậy)",
+        b => copyField(row, field, b, "modal:" + ref.tab), "act");
+      cp.dataset.flash = "modal:" + ref.tab;
+      tools.appendChild(cp);
+    }
+    if (ref.tab === "b3") {
+      const fb = button("📋 Copy bản dán Facebook", "Copy bản in đậm unicode (không còn dấu ** và ##) — dán thẳng lên Facebook",
+        b => { requestContent(row, "Bài SEO (Facebook)", "copy", "modal:fb"); flash(b, "…", ""); }, "act");
+      fb.dataset.flash = "modal:fb";
+      tools.appendChild(fb);
+      tools.appendChild(button(SHOW_MD ? "🅰 Hiện markdown" : "🅱 Hiện bản đã render",
+        "Bài SEO trả về có Heading/đậm — xem như chữ gốc hay như trang viết", () => { SHOW_MD = !SHOW_MD; repaint(); }, "act"));
+    }
+  }
+  tools.appendChild(el("span", "muted", ref.tab === "b2" ? "ảnh đọc từ image.png trong folder story"
+    : "nội dung đọc từ file trong folder story (" + row.id + ")"));
+  modal.appendChild(tools);
+  modal.appendChild(modalBody(row, ref.tab, key));
+  modal.appendChild(el("div", "mfoot",
+    "click 1 lần ở ô B1/B3 = copy · click đúp = mở modal này · Esc hoặc ✕ để đóng · ảnh lớn quá " + (2 * 1024) + " KB thì mở bài ở trang Tạo bài để xem"));
+
+  overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
+  overlay.appendChild(modal);
+  return overlay;
 }
 
 function queueCell(row) {
@@ -290,8 +510,8 @@ function linkEditor(row, td) {
   input.title = "Link bài của bạn đã đăng — Enter để lưu, Esc để hủy";
   input.addEventListener("click", e => e.stopPropagation());
   input.addEventListener("keydown", e => {
-    if (e.key === "Enter") { e.preventDefault(); save(); }
-    else if (e.key === "Escape") { e.preventDefault(); EDITING = null; repaint(); }
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); save(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); EDITING = null; repaint(); }
   });
   function save() {
     const value = input.value;
@@ -393,9 +613,8 @@ function rowNode(row) {
 
   tr.appendChild(linkCell(row));
 
-  tr.appendChild(copyCell(row));
-
   const act = el("td", "act");
+  act.appendChild(button("☰", "Mở modal xem kết quả từng bước của " + row.id, () => openModal(row.id, "b1"), "act"));
   act.appendChild(button("⚡", "Chạy đủ pipeline B1 → (B2 ∥ B3)", () => send({ source: "run_all", id: row.id }), "act"));
   act.appendChild(button("↗", "Mở bài này ở trang Tạo bài", () => send({ source: "open", id: row.id }), "act"));
   act.appendChild(button("✅", "Đánh dấu đã đăng", () => send({ source: "mark_posted", id: row.id }), "act"));
@@ -537,6 +756,7 @@ function render(args) {
     queue_ids: Array.isArray(args.queue_ids) ? args.queue_ids : [],
     error_ids: Array.isArray(args.error_ids) ? args.error_ids : [],
   };
+  ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
   const alive = new Set(rows().map(r => String(r.id)));
   Array.from(PICKED).forEach(id => { if (!alive.has(id)) PICKED.delete(id); });
   if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
@@ -598,17 +818,21 @@ function render(args) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "màu ô B1 B2 B3: " + LEGEND + " — bấm ô để chạy đúng bước đó · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ✎ ở cột Link để sửa link đã đăng · copy lấy chữ vào clipboard (chỉ xin nội dung khi bấm) · ↗ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục) · kéo mép tiêu đề để đổi độ rộng cột · ⛢ mở rộng kín cửa sổ"));
+    "màu ô B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp để mở modal xem kết quả (chạy bước ở trong modal) · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ✎ ở cột Link để sửa link đã đăng · ↗ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục) · kéo mép tiêu đề để đổi độ rộng cột · ⛢ mở rộng kín cửa sổ"));
   root.appendChild(wrap);
   unmarkSent();
+  const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này
+  if (modal) root.appendChild(modal);
   updateBar();
+  finishCopy();   // response xin copy vừa về -> ghi clipboard, gắn nhãn lên nút vừa vẽ
+  applyFlash();
   setFrameHeight();
-  maybeAutoCopy();  // response vừa về sau 1 request -> copy ngay trong lần render này
 }
 
 window.addEventListener("message", event => {
   if (event.data && event.data.type === RENDER) render(event.data.args || {});
 });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && modalRef()) closeModal(); });
 sendMessage(COMPONENT_READY, { apiVersion: 1 });
 window.addEventListener("load", () => setTimeout(setFrameHeight, 0));
 </script>

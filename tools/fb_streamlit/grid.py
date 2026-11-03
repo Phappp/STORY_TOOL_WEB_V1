@@ -98,6 +98,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "queued_at": float(story.get("queued_at") or 0),
             "queue_pos": 0,
             "updated": _when(summary["updated_at"]),
+            "stamp": round(float(summary["updated_at"] or 0), 3),  # JS cache nội dung theo mốc này (save_story luôn đổi)
             "copyable": {"Caption": summary["b1"] == stories.DONE, "Bài SEO": summary["b3"] == stories.DONE,
                          "Input": summary["has_input"], "Link": bool(summary["link"].strip())},
         })
@@ -115,11 +116,13 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + lines)[-LOG_LIMIT:]
-    if str(event.get("source") or "") == "copy_request":
-        # prop copy_response chỉ đi kèm 1 lần render -> giữ lại để JS copy đúng 1 lần theo request_id
+    if str(event.get("source") or "") in ("copy_request", "content_request", "image_request"):
+        # prop copy_response chỉ đi kèm 1 lần render -> giữ lại để JS làm đúng 1 lần theo request_id
         st.session_state["grid_copy_response"] = out.copy or {
-            "id": str(event.get("id") or ""), "field": str(event.get("field") or ""),
-            "request_id": str(event.get("request_id") or ""), "text": ""}
+            "id": str(event.get("id") or ""), "field": str(event.get("field") or "Ảnh"),
+            "request_id": str(event.get("request_id") or ""),
+            "mode": "show" if str(event.get("source") or "") != "copy_request" else "copy",
+            "text": "", "error": (lines[0] if lines else "")}
     if out.select:
         st.session_state["select_story"] = out.select
     if out.nav:

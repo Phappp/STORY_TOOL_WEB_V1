@@ -4,11 +4,14 @@ Mọi hành động đều ghi vào file + story.json qua steps.*, nên grid ch�
 là thấy đúng những gì đã xảy ra.
 """
 
+import base64
+import mimetypes
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import db
+import formats
 import prompts
 import providers as prov
 import steps
@@ -16,10 +19,11 @@ import stories
 
 MAX_BATCH = 5
 STALE_SECONDS = 15 * 60
+IMAGE_INLINE_MAX = 2 * 1024 * 1024
 STALE = "stale"
 QUEUED = "queued"
 
-COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link")
+COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link", "Bài SEO (Facebook)")
 STEP_NAMES = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
 ALL_STEPS = ("b1", "b2", "b3")
 
@@ -209,6 +213,8 @@ def _copy_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
         text = stories.step_text(ctx.root, sid, "b1")
     elif field_name == "Bài SEO":
         text = stories.step_text(ctx.root, sid, "b3")
+    elif field_name == "Bài SEO (Facebook)":
+        text = formats.to_fb_unicode(stories.step_text(ctx.root, sid, "b3"))
     elif field_name == "Input":
         text = stories.input_text(ctx.root, sid)
     elif field_name == "Link":
@@ -216,6 +222,20 @@ def _copy_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
     if not text.strip():
         return None, f"{sid}: {field_name} trống — chưa có gì để copy."
     return {"id": sid, "field": field_name, "request_id": request_id, "text": text}, ""
+
+
+def image_payload(ctx: Ctx, sid: str, request_id: str):
+    """Ảnh B2 cho modal: nhúng base64, nhưng chỉ khi file đủ nhỏ để không làm nghẹt message."""
+    image = stories.image_of(ctx.root, sid)
+    if image is None:
+        return None, f"{sid}: chưa có ảnh (B2 chưa chạy hoặc ảnh bị xóa)."
+    size = image.stat().st_size
+    if size > IMAGE_INLINE_MAX:
+        return None, f"{sid}: ảnh {size // 1024} KB lớn quá ({IMAGE_INLINE_MAX // 1024} KB giới hạn nhúng) — mở bài ở trang Tạo bài để xem."
+    mime = mimetypes.guess_type(image.name)[0] or "image/png"
+    data = base64.b64encode(image.read_bytes()).decode("ascii")
+    return {"id": sid, "field": "Ảnh", "request_id": request_id, "image": f"data:{mime};base64,{data}",
+            "text": "", "bytes": size}, ""
 
 
 def batch_ids(raw) -> tuple[list[str], str]:
@@ -251,8 +271,15 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
                 out.touched.append(bid)
                 if on_batch is not None:
                     on_batch(bid, i, len(ids))
-        elif source == "copy_request":
+        elif source in ("copy_request", "content_request"):
             payload, why = _copy_payload(ctx, sid, str(event.get("field") or ""), str(event.get("request_id") or ""))
+            if payload is not None:
+                payload["mode"] = "show" if source == "content_request" else "copy"
+            out.copy, out.lines = payload, ([why] if why else [])
+        elif source == "image_request":
+            payload, why = image_payload(ctx, sid, str(event.get("request_id") or ""))
+            if payload is not None:
+                payload["mode"] = "show"  # ảnh chỉ dùng cho modal, không bao giờ là bản copy
             out.copy, out.lines = payload, ([why] if why else [])
         elif source == "queue_add":
             if stories.load_story(ctx.root, sid).get("queued"):
