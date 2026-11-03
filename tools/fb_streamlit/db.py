@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS presets (
     name TEXT NOT NULL UNIQUE,
     description TEXT NOT NULL DEFAULT '',
     caption_prompt TEXT NOT NULL DEFAULT '',
+    image_prompt TEXT NOT NULL DEFAULT '',
     keyword_prompt TEXT NOT NULL DEFAULT '',
     seo_prompt TEXT NOT NULL DEFAULT '',
     input_prompt TEXT NOT NULL DEFAULT '',
@@ -51,6 +52,10 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(presets)").fetchall()}
+    if "image_prompt" not in columns:  # DB cũ trước khi có prompt tạo ảnh
+        conn.execute("ALTER TABLE presets ADD COLUMN image_prompt TEXT NOT NULL DEFAULT ''")
+        conn.commit()
     return conn
 
 
@@ -92,18 +97,18 @@ def get_preset(conn, preset_id):
     return conn.execute("SELECT * FROM presets WHERE id=?", (preset_id,)).fetchone()
 
 
-def save_preset(conn, preset_id, name, description, caption_prompt, keyword_prompt, seo_prompt, input_prompt, provider_id):
+def save_preset(conn, preset_id, name, description, caption_prompt, image_prompt, keyword_prompt, seo_prompt, input_prompt, provider_id):
     if preset_id is None:
         conn.execute(
-            "INSERT INTO presets (name, description, caption_prompt, keyword_prompt, seo_prompt, input_prompt, provider_id, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (name, description, caption_prompt, keyword_prompt, seo_prompt, input_prompt, provider_id, _now(), _now()),
+            "INSERT INTO presets (name, description, caption_prompt, image_prompt, keyword_prompt, seo_prompt, input_prompt, provider_id, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (name, description, caption_prompt, image_prompt, keyword_prompt, seo_prompt, input_prompt, provider_id, _now(), _now()),
         )
     else:
         conn.execute(
-            "UPDATE presets SET name=?, description=?, caption_prompt=?, keyword_prompt=?, seo_prompt=?, input_prompt=?, provider_id=?, updated_at=?"
+            "UPDATE presets SET name=?, description=?, caption_prompt=?, image_prompt=?, keyword_prompt=?, seo_prompt=?, input_prompt=?, provider_id=?, updated_at=?"
             " WHERE id=?",
-            (name, description, caption_prompt, keyword_prompt, seo_prompt, input_prompt, provider_id, _now(), preset_id),
+            (name, description, caption_prompt, image_prompt, keyword_prompt, seo_prompt, input_prompt, provider_id, _now(), preset_id),
         )
     conn.commit()
 

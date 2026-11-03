@@ -32,9 +32,9 @@ provs = db.list_providers(conn)
 p = next(x for x in provs if x["name"] == "TestOR")
 check("provider stored", p["kind"] == "openai" and p["base_url"].endswith("/v1"))
 
-db.save_preset(conn, None, "Du lich", "", "cap {x}", "kw", "seo", "input", p["id"])
+db.save_preset(conn, None, "Du lich", "", "cap {x}", "img prompt", "kw", "seo", "input", p["id"])
 preset = next(x for x in db.list_presets(conn) if x["name"] == "Du lich")
-check("preset stored", preset["caption_prompt"] == "cap {x}" and preset["provider_id"] == p["id"])
+check("preset stored", preset["caption_prompt"] == "cap {x}" and preset["image_prompt"] == "img prompt" and preset["provider_id"] == p["id"])
 
 post_id = db.create_post(conn, preset["id"], "Ha Noi", "tom tat", "chi tiet")
 db.update_post(conn, post_id, caption="cap", images=[{"url": "u", "thumb": "t", "alt": "", "source": "pexels"}])
@@ -63,6 +63,10 @@ check("gen_prompt replaces <CAPTION MỚI TẠO>", out2 == "SEO cho NEWCAP")
 
 out3 = fbapp.gen_prompt("Không token ở đây", ctx)
 check("gen_prompt fallback appends data", out3.startswith("Không token ở đây") and "CAPTION-GOC" in out3)
+
+# --- unit: B2 image prompt = preset.image_prompt + caption B1 ---
+check("b2_image_prompt injects caption", fbapp.b2_image_prompt({"image_prompt": "Cover cho: <CAPTION MỚI TẠO>"}, None, "CAPMOI") == "Cover cho: CAPMOI")
+check("b2_image_prompt falls back to caption", fbapp.b2_image_prompt({"image_prompt": ""}, None, "CAPMOI") == "CAPMOI")
 
 # --- unit: raw key detection ---
 check("raw key regex", bool(prov.RAW_KEY_RE.match("sk-0280e7f4f02a71dbc02d95c92d5206d851a5515a1e7aacc16dffeb5ab2901ac7")))
@@ -95,6 +99,9 @@ for bad, why in (("", "empty"), ("https://tiktok.com/@x/video/1", "non-fb")):
 # --- AppTest: each page renders without exception ---
 at = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30).run()
 check("page 'Tạo bài' runs", not at.exception)
+check("B2 mode radio has Tạo ảnh/Tìm kiếm", any({"Tạo ảnh", "Tìm kiếm"} <= set(r.options or []) for r in at.radio))
+check("B2 free-text prompt removed", not any(w.key == "imggen_prompt" for w in at.text_area))
+check("B2 sync button removed", not any("Đồng bộ" in b.label for b in at.button))
 
 b0_url = next((w for w in at.text_input if w.key == "fb_import_url"), None)
 check("B0 url input rendered", b0_url is not None)

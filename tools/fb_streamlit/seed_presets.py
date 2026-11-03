@@ -27,6 +27,12 @@ HOOK → Nhân vật + sự kiện → Chi tiết gây tò mò/cảm xúc → Ph
 
 Văn phong: giống trailer tin nóng hoàng gia, ngắn gọn, kịch tính, cảm xúc, dễ viral trên Facebook."""
 
+IMAGE_PROMPT = """Create ONE cinematic photojournalism cover image for the royal news story below.
+
+<CAPTION MỚI TẠO>
+
+Show the central royal figure and the most emotional moment of the story: dramatic natural lighting, candid press-photography framing, shallow depth of field, 16:9 composition. No text, no logos, no watermarks, no readable signs."""
+
 KEYWORD_PROMPT = """Từ caption bài viết này tìm kiếm thật nhiều hình ảnh liên quan của bài viết này, các hình ảnh mang tính kịch tính, hấp dẫn, gây tò mò, có drama, scandal, khóc, mâu thuẫn,...
 <CAPTION MỚI TẠO>
 
@@ -82,6 +88,7 @@ PRESETS = [
         "name": "Royal Viral News",
         "description": "Re-caption viral phong cách hoàng gia + SEO storytelling. Dán caption cũ vào ô 'Chi tiết / dữ kiện' rồi bấm ⚡ Chạy cả pipeline.",
         "caption": CAPTION_PROMPT,
+        "image": IMAGE_PROMPT,
         "keyword": KEYWORD_PROMPT,
         "seo": SEO_PROMPT,
         "input": "",
@@ -100,6 +107,7 @@ def main():
             item["name"],
             item["description"],
             item["caption"],
+            item["image"],
             item["keyword"],
             item["seo"],
             item["input"],
