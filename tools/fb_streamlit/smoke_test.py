@@ -1,4 +1,5 @@
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -239,6 +240,88 @@ try:
     check("missing key raises", False)
 except prov.ProviderError as exc:
     check("missing key raises", "OPENROUTER_API_KEY" in str(exc))
+
+# --- unit: stories.py — story folder là nguồn sự thật ---
+import stories
+
+
+def raises(exc_type, fn, *args, **kwargs):
+    try:
+        fn(*args, **kwargs)
+        return False
+    except exc_type:
+        return True
+
+
+ws_box = Path(tempfile.mkdtemp(prefix="fbws_"))
+real_recents = stories._recents_path
+stories._recents_path = lambda: ws_box / "workspaces.json"
+
+check("validate_root refuses relative path", raises(stories.WorkspaceError, stories.validate_root, "story-work"))
+check("validate_root refuses the code folder", raises(stories.WorkspaceError, stories.validate_root, str(Path(__file__).resolve().parent)))
+check("validate_root refuses a parent of the code folder", raises(stories.WorkspaceError, stories.validate_root, str(Path(__file__).resolve().parent.parent)))
+
+root = stories.validate_root(ws_box / "2026-11")
+check("set_current + current round-trip", stories.set_current(root) == root and stories.current() == root)
+check("workspace meta created with migrated marker", stories.workspace_meta(root).get("migrated_db_ids") == [])
+check("workspace meta survives reopen", stories.workspace_meta(root) == stories.workspace_meta(root))
+
+check("safe_id accepts story_001", stories.safe_id("story_001") == "story_001")
+check("safe_id rejects traversal/short ids", raises(stories.WorkspaceError, stories.safe_id, "../story_001") and raises(stories.WorkspaceError, stories.safe_id, "story_01") and raises(stories.WorkspaceError, stories.safe_id, ""))
+
+first = stories.create_story(root, "Chủ đề 1", preset_id=3, input_text="caption gốc", link="https://facebook.com/1")
+check("next_story_id starts at story_001", first["id"] == "story_001")
+check("create_story writes story.json + input.txt", (root / "story_001" / "story.json").is_file() and stories.input_text(root, "story_001") == "caption gốc")
+check("create_story default states pending", [first[s]["state"] for s in stories.STEPS] == ["pending"] * 3)
+
+story = stories.save_step_text(root, "story_001", "b1", "CAPTION B1")
+check("save_step_text writes caption.txt", (root / "story_001" / "caption.txt").read_text(encoding="utf-8") == "CAPTION B1")
+check("b1 becomes done in story.json", story["b1"]["state"] == "done" and stories.step_state(story, root / "story_001", "b1") == "done")
+check("story.json keeps no absolute paths", str(root) not in (root / "story_001" / "story.json").read_text(encoding="utf-8"))
+check("empty b1 text falls back to pending", stories.save_step_text(root, "story_001", "b1", "")["b1"]["state"] == "pending")
+
+src_img = ws_box / "gen.jpg"
+src_img.write_bytes(b"PNGFAKE-BYTES")
+story = stories.save_image(root, "story_001", src_img, method="codex", keywords=["royal palace"])
+check("b2 image stored as image.png only", (root / "story_001" / "image.png").read_bytes() == b"PNGFAKE-BYTES" and list((root / "story_001").glob("image.*")) == [root / "story_001" / "image.png"])
+check("b2 relative path + keywords", story["b2"]["image"] == "image.png" and story["b2"]["keywords"] == ["royal palace"])
+src_img.write_bytes(b"SECOND-IMAGE")
+stories.save_image(root, "story_001", src_img, method="stock")
+check("new b2 overwrites the single image", (root / "story_001" / "image.png").read_bytes() == b"SECOND-IMAGE" and len(list((root / "story_001").glob("image.*"))) == 1)
+
+ref_src = ws_box / "ref.png"
+ref_src.write_bytes(b"REFBYTES")
+story = stories.save_ref(root, "story_001", ref_src, url="https://lookaside.fbsbx.com/x")
+check("b0 ref stored inside story folder", (root / "story_001" / "refs" / "ref_1.png").read_bytes() == b"REFBYTES")
+check("ref manifest keeps source url", "lookaside.fbsbx.com" in (root / "story_001" / "refs" / "ref.json").read_text(encoding="utf-8"))
+check("refs listed relative in story.json", story["b2"]["refs"] == ["refs/ref_1.png"] and stories.refs_of(root, "story_001") == [root / "story_001" / "refs" / "ref_1.png"])
+
+stories.save_step_text(root, "story_001", "b3", "# Bài SEO dài\n\nNội dung.")
+check("b3 writes seo.md and counts words", (root / "story_001" / "seo.md").is_file() and stories.step_state(stories.load_story(root, "story_001"), root / "story_001", "b3") == "done")
+running = stories.set_step_state(root, "story_001", "b1", "running")
+check("running beats file presence", stories.step_state(running, root / "story_001", "b1") == "running")
+failed = stories.set_step_state(root, "story_001", "b1", "error", detail="provider timeout")
+check("error state + detail kept", stories.step_state(failed, root / "story_001", "b1") == "error" and failed["b1"]["detail"] == "provider timeout")
+stories.set_step_state(root, "story_001", "b1", "done")
+(root / "story_001" / "caption.txt").write_text("", encoding="utf-8")
+check("done but file gone -> missing", stories.states(root, "story_001")["b1"] == "missing")
+check("no .tmp residue after atomic writes", not list((root / "story_001").rglob("*.tmp")))
+
+second = stories.create_story(root, "Chủ đề 2")
+check("next_story_id increments", second["id"] == "story_002" and stories.next_story_id(root) == "story_003")
+summaries = stories.list_stories(root)
+check("list_stories shape", [s["id"] for s in summaries] == ["story_001", "story_002"] and {"topic", "status", "b1", "b2", "b3", "image", "has_input"} <= set(summaries[0]))
+check("summary reports per-step state", summaries[0]["b3"] == "done" and summaries[0]["b2"] == "done" and summaries[1]["b1"] == "pending")
+
+stories.set_current(stories.validate_root(ws_box / "khac"))
+check("recents newest first + dedupe", [Path(w["path"]).name for w in stories.recents()] == ["khac", "2026-11"])
+stories.set_current(ws_box / "2026-11")
+check("re-picking a recent moves it to front", Path(stories.current()).name == "2026-11" and len(stories.recents()) == 2)
+shutil.rmtree(ws_box / "khac")
+check("recents skip vanished folders", [Path(w["path"]).name for w in stories.recents()] == ["2026-11"])
+
+stories._recents_path = real_recents
+check("real home workspaces.json untouched", not (paths.data_dir() / "workspaces.json").exists())
 
 # cleanup test rows
 c = db.connect()

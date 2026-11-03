@@ -1,0 +1,409 @@
+"""Story folder = nguồn sự thật của một bài (B1 caption, B2 ảnh, B3 SEO).
+
+Workspace là 1 folder người dùng chọn, chứa story_001, story_002, ...
+Mỗi story: story.json (trạng thái) + input.txt + caption.txt + seo.md + image.png + refs/
+Mọi đường dẫn lưu trong story.json đều TƯƠNG ĐỐI để copy folder sang máy khác vẫn dùng được.
+"""
+
+import json
+import os
+import re
+import shutil
+import time
+from pathlib import Path
+
+import paths
+
+STORY_ID_RE = re.compile(r"^story_\d{3,}$")
+SCHEMA = 1
+WORKSPACE_FILE = ".fbtool-workspace.json"
+
+INPUT_FILE = "input.txt"
+CAPTION_FILE = "caption.txt"
+SEO_FILE = "seo.md"
+IMAGE_FILE = "image.png"
+REFS_DIR = "refs"
+
+STEPS = ("b1", "b2", "b3")
+STEP_FILE = {"b1": CAPTION_FILE, "b3": SEO_FILE, "b2": IMAGE_FILE}
+
+PENDING = "pending"
+RUNNING = "running"
+DONE = "done"
+ERROR = "error"
+MISSING = "missing"
+
+
+# ---------- workspace ----------
+
+
+class WorkspaceError(ValueError):
+    pass
+
+
+def _recents_path() -> Path:
+    return paths.data_dir() / "workspaces.json"
+
+
+def validate_root(raw: str | os.PathLike) -> Path:
+    """Nhận đường dẫn tuyệt đối, tạo nếu chưa có, từ chối folder chứa code của tool."""
+    candidate = Path(str(raw).strip()).expanduser()
+    if not str(candidate).strip():
+        raise WorkspaceError("Đường dẫn workspace trống.")
+    if not candidate.is_absolute():
+        raise WorkspaceError(f"Workspace phải là đường dẫn tuyệt đối: {raw}")
+    candidate = candidate.resolve()
+    code_dir = paths.TOOL_DIR.resolve()
+    if candidate == code_dir or code_dir in candidate.parents or candidate in code_dir.parents:
+        raise WorkspaceError("Không dùng thư mục code của tool (hoặc thư mục cha của nó) làm workspace.")
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkspaceError(f"Không tạo được workspace: {exc}") from exc
+    if not candidate.is_dir():
+        raise WorkspaceError(f"Không phải thư mục: {candidate}")
+    return candidate
+
+
+def workspace_meta(root: Path) -> dict:
+    """Đọc (hoặc tạo mới) file mô tả workspace nằm ngay trong folder."""
+    file = root / WORKSPACE_FILE
+    if file.exists():
+        try:
+            data = json.loads(file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (OSError, ValueError):
+            pass
+    meta = {"schema": SCHEMA, "name": root.name, "created_at": time.time(), "migrated_db_ids": []}
+    _write_json(file, meta)
+    return meta
+
+
+def save_workspace_meta(root: Path, **fields) -> dict:
+    meta = workspace_meta(root)
+    meta.update(fields)
+    _write_json(root / WORKSPACE_FILE, meta)
+    return meta
+
+
+def _load_recents() -> dict:
+    file = _recents_path()
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"current": "", "items": []}
+    if not isinstance(data, dict):
+        return {"current": "", "items": []}
+    items = [w for w in data.get("items", []) if isinstance(w, dict) and w.get("path")]
+    return {"current": str(data.get("current") or ""), "items": items}
+
+
+def recents() -> list[dict]:
+    """Workspace đã dùng, mới nhất trước; đường dẫn không còn tồn tại bị loại."""
+    data = _load_recents()
+    out = []
+    for item in data["items"]:
+        try:
+            root = Path(item["path"])
+        except OSError:
+            continue
+        if root.is_dir():
+            out.append({"path": str(root), "name": item.get("name") or root.name, "last_opened": float(item.get("last_opened") or 0)})
+    out.sort(key=lambda w: w["last_opened"], reverse=True)
+    return out
+
+
+def current() -> Path | None:
+    data = _load_recents()
+    raw = data.get("current") or ""
+    if not raw:
+        found = recents()
+        return Path(found[0]["path"]) if found else None
+    root = Path(raw)
+    return root if root.is_dir() else None
+
+
+def set_current(raw: str | os.PathLike) -> Path:
+    """Chọn workspace đang làm việc; validate + lưu vào danh sách gần đây."""
+    root = validate_root(raw)
+    data = _load_recents()
+    items = [w for w in data["items"] if w.get("path") != str(root)]
+    items.append({"path": str(root), "name": root.name, "last_opened": time.time()})
+    _write_json(_recents_path(), {"current": str(root), "items": items[-20:]})
+    workspace_meta(root)
+    return root
+
+
+# ---------- story id an toàn ----------
+
+
+def safe_id(sid: str) -> str:
+    sid = str(sid or "").strip()
+    if not STORY_ID_RE.fullmatch(sid):
+        raise WorkspaceError(f"Story ID không hợp lệ: {sid!r} (định dạng story_001)")
+    return sid
+
+
+def story_dir(root: Path, sid: str) -> Path:
+    sid = safe_id(sid)
+    root = Path(root).resolve()
+    raw = root / sid
+    if raw.is_symlink():
+        raise WorkspaceError(f"Story là symlink, bỏ qua: {sid}")
+    folder = raw.resolve()
+    if folder.parent != root:
+        raise WorkspaceError(f"Story nằm ngoài workspace: {sid}")
+    if not folder.is_dir():
+        raise WorkspaceError(f"Chưa có story: {sid}")
+    return folder
+
+
+def next_story_id(root: Path) -> str:
+    highest = 0
+    for entry in os.scandir(root):
+        if entry.is_dir() and not entry.is_symlink() and STORY_ID_RE.fullmatch(entry.name):
+            highest = max(highest, int(entry.name.split("_", 1)[1]))
+    return f"story_{highest + 1:03d}"
+
+
+def list_story_ids(root: Path) -> list[str]:
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return []
+    return sorted(e.name for e in entries if e.is_dir() and not e.is_symlink() and STORY_ID_RE.fullmatch(e.name))
+
+
+# ---------- đọc/ghi file ----------
+
+
+def _write_text(path: Path, text: str) -> None:
+    """Ghi atomic để không để lại file giữa chừng khi tiến trình chết."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp, path)
+
+
+def _write_json(path: Path, data) -> None:
+    _write_text(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8-sig").strip()
+    except OSError:
+        return ""
+
+
+def load_story(root: Path, sid: str) -> dict:
+    folder = story_dir(root, sid)
+    file = folder / "story.json"
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("schema", SCHEMA)
+    data.setdefault("id", sid)
+    data["folder"] = folder
+    return data
+
+
+def save_story(root: Path, sid: str, story: dict) -> dict:
+    folder = story_dir(root, sid)
+    story = dict(story)
+    story.pop("folder", None)
+    story["schema"] = SCHEMA
+    story["id"] = sid
+    story["updated_at"] = time.time()
+    _write_json(folder / "story.json", story)
+    return story
+
+
+def create_story(root: Path, topic: str = "", preset_id=None, input_text: str = "", link: str = "") -> dict:
+    sid = next_story_id(root)
+    folder = root / sid
+    folder.mkdir(parents=True)
+    story = {
+        "schema": SCHEMA,
+        "id": sid,
+        "topic": topic.strip(),
+        "preset_id": preset_id,
+        "link": link.strip(),
+        "status": "draft",
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "b1": {"state": PENDING},
+        "b2": {"state": PENDING, "image": None, "method": None, "refs": [], "keywords": []},
+        "b3": {"state": PENDING, "file": None},
+    }
+    if input_text.strip():
+        _write_text(folder / INPUT_FILE, input_text)
+    save_story(root, sid, story)
+    story["folder"] = folder
+    return story
+
+
+def input_text(root: Path, sid: str) -> str:
+    return _read_text(story_dir(root, sid) / INPUT_FILE)
+
+
+def step_text(root: Path, sid: str, step: str) -> str:
+    if step not in STEP_FILE or step == "b2":
+        raise WorkspaceError(f"Bước {step} không có file text.")
+    return _read_text(story_dir(root, sid) / STEP_FILE[step])
+
+
+def save_step_text(root: Path, sid: str, step: str, text: str, **meta) -> dict:
+    """B1 -> caption.txt, B3 -> seo.md, đồng thời cập nhật state trong story.json."""
+    if step not in ("b1", "b3"):
+        raise WorkspaceError(f"Không lưu được text cho bước {step}.")
+    folder = story_dir(root, sid)
+    _write_text(folder / STEP_FILE[step], text)
+    story = load_story(root, sid)
+    block = dict(story.get(step) or {})
+    block.update({"state": DONE if text.strip() else PENDING, "detail": "", "updated_at": time.time()})
+    block.update(meta)
+    if step == "b3":
+        block["file"] = SEO_FILE if text.strip() else None
+        block["words"] = len(text.split())
+    story[step] = block
+    return save_story(root, sid, story)
+
+
+def _image_file(folder: Path) -> Path | None:
+    found = sorted(p for p in folder.glob(IMAGE_FILE.split(".")[0] + ".*") if p.is_file())
+    return found[0] if found else None
+
+
+def save_image(root: Path, sid: str, src, method: str = "", refs: list[str] | None = None, keywords: list[str] | None = None) -> dict:
+    """B2 giữ đúng 1 ảnh: luôn là image.png, ảnh cũ bị xóa khi ghi đè."""
+    src = Path(str(src))
+    if not src.is_file():
+        raise WorkspaceError(f"Không thấy file ảnh nguồn: {src}")
+    folder = story_dir(root, sid)
+    old = _image_file(folder)
+    if old is not None and old.name != IMAGE_FILE:
+        old.unlink()
+    shutil.copy2(src, folder / IMAGE_FILE)
+    story = load_story(root, sid)
+    block = dict(story.get("b2") or {})
+    block.update(
+        {
+            "state": DONE,
+            "image": IMAGE_FILE,
+            "method": method or block.get("method") or None,
+            "refs": list(refs) if refs is not None else block.get("refs") or [],
+            "keywords": list(keywords) if keywords is not None else block.get("keywords") or [],
+            "detail": "",
+            "updated_at": time.time(),
+        }
+    )
+    story["b2"] = block
+    return save_story(root, sid, story)
+
+
+def save_ref(root: Path, sid: str, src, url: str = "") -> dict:
+    """Ảnh tham chiếu B0 nằm trong story, tên refs/ref_1.png + ref.json ghi url gốc."""
+    src = Path(str(src))
+    if not src.is_file():
+        raise WorkspaceError(f"Không thấy file tham chiếu: {src}")
+    folder = story_dir(root, sid)
+    refs_dir = folder / REFS_DIR
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    existing = sorted(p.name for p in refs_dir.iterdir() if p.is_file() and p.name.startswith("ref_"))
+    number = 1
+    while f"ref_{number}{src.suffix.lower()}" in existing:
+        number += 1
+    dest = refs_dir / f"ref_{number}{src.suffix.lower()}"
+    shutil.copy2(src, dest)
+    manifest = {"refs": [{"file": f"{REFS_DIR}/{dest.name}", "url": url}], "updated_at": time.time()}
+    file = refs_dir / "ref.json"
+    try:
+        old = json.loads(file.read_text(encoding="utf-8"))
+        if isinstance(old, dict) and isinstance(old.get("refs"), list):
+            manifest["refs"] = old["refs"] + manifest["refs"]
+    except (OSError, ValueError):
+        pass
+    _write_json(file, manifest)
+    story = load_story(root, sid)
+    block = dict(story.get("b2") or {})
+    block["refs"] = [item["file"] for item in manifest["refs"]]
+    story["b2"] = block
+    return save_story(root, sid, story)
+
+
+def refs_of(root: Path, sid: str) -> list[Path]:
+    folder = story_dir(root, sid)
+    refs_dir = folder / REFS_DIR
+    if not refs_dir.is_dir():
+        return []
+    return sorted(p for p in refs_dir.iterdir() if p.is_file() and p.name.startswith("ref_"))
+
+
+def image_of(root: Path, sid: str) -> Path | None:
+    return _image_file(story_dir(root, sid))
+
+
+def set_step_state(root: Path, sid: str, step: str, state: str, detail: str = "", **meta) -> dict:
+    if step not in STEPS:
+        raise WorkspaceError(f"Bước không hợp lệ: {step}")
+    story = load_story(root, sid)
+    block = dict(story.get(step) or {})
+    block.update({"state": state, "detail": detail[:350], "updated_at": time.time()})
+    block.update(meta)
+    story[step] = block
+    return save_story(root, sid, story)
+
+
+# ---------- trạng thái hiển thị ----------
+
+
+def step_state(story: dict, folder: Path, step: str) -> str:
+    """state trong story.json thắng khi đang chạy/lỗi; nếu không, quyết định theo file."""
+    block = story.get(step) or {}
+    state = str(block.get("state") or PENDING)
+    if state in (RUNNING, ERROR):
+        return state
+    if step == "b2":
+        image = _image_file(folder)
+        has_file = image is not None and image.stat().st_size > 0
+    else:
+        file = folder / STEP_FILE[step]
+        has_file = file.is_file() and file.stat().st_size > 0
+    if has_file:
+        return DONE
+    return MISSING if state == DONE else PENDING
+
+
+def states(root: Path, sid: str) -> dict:
+    folder = story_dir(root, sid)
+    story = load_story(root, sid)
+    return {step: step_state(story, folder, step) for step in STEPS}
+
+
+def story_summary(root: Path, sid: str) -> dict:
+    folder = story_dir(root, sid)
+    story = load_story(root, sid)
+    image = image_of(root, sid)
+    out = {
+        "id": sid,
+        "topic": str(story.get("topic") or ""),
+        "status": str(story.get("status") or "draft"),
+        "link": str(story.get("link") or ""),
+        "preset_id": story.get("preset_id"),
+        "updated_at": float(story.get("updated_at") or 0),
+        "image": image.name if image else "",
+        "detail": {step: str((story.get(step) or {}).get("detail") or "") for step in STEPS},
+        "has_input": bool((folder / INPUT_FILE).is_file()),
+    }
+    for step in STEPS:
+        out[step] = step_state(story, folder, step)
+    return out
+
+
+def list_stories(root: Path) -> list[dict]:
+    return [story_summary(root, sid) for sid in list_story_ids(root)]
