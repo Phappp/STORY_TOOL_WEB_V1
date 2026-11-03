@@ -44,13 +44,6 @@ def save_ref_upload(uploaded) -> Path:
     return dest
 
 
-def save_generated_image(src: Path, post_id) -> Path:
-    GEN_DIR.mkdir(parents=True, exist_ok=True)
-    dest = GEN_DIR / f"{post_id or 'tmp'}_{int(time.time())}{src.suffix or '.png'}"
-    shutil.copy2(src, dest)
-    return dest
-
-
 def extract_keywords(text: str) -> list[str]:
     m = re.search(r"\[[\s\S]*?\]", text)
     keywords: list[str] = []

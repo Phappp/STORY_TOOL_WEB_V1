@@ -152,6 +152,42 @@ check("migrate keeps old data as backup dir", not (sandbox / "legacy" / "data").
 check("migrate is idempotent", paths.migrate_legacy() == [])
 paths.TOOL_DIR, paths._home = prev_tool, prev_home
 
+# --- P1: unit — migrate hàng posts DB -> story folder ---
+import stories
+
+mig_box = Path(tempfile.mkdtemp(prefix="fbmig_"))
+mig_root = stories.validate_root(mig_box / "ws")
+old_img_dir = mig_box / "IMAGES"
+old_img_dir.mkdir()
+
+dbc = db.connect()
+mig_pid = db.create_post(dbc, None, "Mig Test", "tóm tắt mig", "chi tiết gốc mig")
+(old_img_dir / f"{mig_pid}_1700000000.png").write_bytes(b"OLD-BUT-FOUND")
+db.update_post(dbc, mig_pid, caption="cap mig", seo_text="# SEO mig", keywords=["phố cổ"],
+               images=[{"url": str(mig_box / "gone.png"), "thumb": "", "alt": "", "source": "pexels"}])
+mig_rows = [db.get_post(dbc, mig_pid)]
+moved = stories.migrate_posts(mig_root, mig_rows, (old_img_dir,))
+story = stories.load_story(mig_root, "story_001")
+check("migrate tạo story_001 và ghi id nguồn", moved == [(mig_pid, "story_001")] and story["migrated_from_post"] == mig_pid)
+check("migrate copy input/caption/seo thành file",
+      stories.input_text(mig_root, "story_001") == "chi tiết gốc mig"
+      and (mig_root / "story_001" / "caption.txt").is_file()
+      and (mig_root / "story_001" / "seo.md").is_file())
+check("migrate cứu ảnh qua DATA/IMAGES khi url cũ hỏng", (mig_root / "story_001" / "image.png").read_bytes() == b"OLD-BUT-FOUND")
+check("migrate giữ từ khóa B2 + state done", story["b2"]["keywords"] == ["phố cổ"] and stories.states(mig_root, "story_001") == {"b1": "done", "b2": "done", "b3": "done"})
+check("migrate idempotent", stories.migrate_posts(mig_root, mig_rows, (old_img_dir,)) == [] and stories.list_story_ids(mig_root) == ["story_001"])
+check("story.json không chứa đường dẫn tuyệt đối", str(mig_root) not in (mig_root / "story_001" / "story.json").read_text(encoding="utf-8"))
+db.delete_post(dbc, mig_pid)
+dbc.close()
+shutil.rmtree(mig_box, ignore_errors=True)
+
+# --- P1: app phải chạy trong workspace tạm, không đụng folder story thật ---
+orig_recents_path = stories._recents_path
+smoke_ws = Path(tempfile.mkdtemp(prefix="fbsmoke_ws_"))
+stories._recents_path = lambda: smoke_ws / "workspaces.json"
+smoke_root = stories.set_current(stories.validate_root(smoke_ws / "smoke-ws"))
+check("workspace tạm được chọn làm current", stories.current() == smoke_root)
+
 # --- AppTest: each page renders without exception ---
 at = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30).run()
 check("page 'Tạo bài' runs", not at.exception)
@@ -161,6 +197,11 @@ check("B2 sync button removed", not any("Đồng bộ" in b.label for b in at.bu
 
 b0_url = next((w for w in at.text_input if w.key == "fb_import_url"), None)
 check("B0 url input rendered", b0_url is not None)
+check("sidebar hiện workspace đang mở", any("smoke-ws" in (c.value or "") for c in at.sidebar.caption))
+check("trang Tạo bài có selector story", any(w.key == "story_selector" and fbapp.NEW_STORY in (w.options or []) for w in at.selectbox))
+live_posts = db.list_posts(db.connect())
+check("Tạo bài tự migrate bài DB vào workspace",
+      stories.list_story_ids(smoke_root) == [f"story_{i:03d}" for i in range(1, len(live_posts) + 1)])
 check("B0 apply button hidden before preview", not any("Đưa caption" in b.label for b in at.button))
 if b0_url is not None:
     b0_extract = next((b for b in at.button if "Trích" in b.label), None)
@@ -196,6 +237,11 @@ check("sidebar nav gộp Providers+Presets thành Cấu hình", set(at2.sidebar.
 at2.sidebar.radio[0].set_value("Cấu hình").run()
 check("page Cấu hình runs", not at2.exception)
 check("Cấu hình has Providers + Presets tabs", {"Providers", "Presets theo chủ đề"} <= {t.label for t in at2.tabs})
+check("Cấu hình has Workspace tab", "Workspace (chứa story)" in {t.label for t in at2.tabs})
+check("tab Workspace có form đường dẫn + danh sách story",
+      not at2.exception
+      and any(w.key == "ws_path_input" for w in at2.text_input)
+      and any("story trong workspace hiện tại" in (m.value or "") for m in at2.markdown))
 check("Cấu hình shows data home", any("fb_tool.db" in (c.value or "") for c in at2.caption))
 
 at4 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
@@ -230,6 +276,45 @@ at5.sidebar.radio[0].set_value("Cấu hình").run()
 next(w for w in at5.text_input if w.label == "Tên *").set_value("FormTest")
 next(b for b in at5.button if b.label == "Thêm provider").click().run()
 check("form provider persisted", any(x["name"] == "FormTest" for x in db.list_providers(db.connect())))
+
+# --- P1 AppTest: các nút Lưu ghi file vào folder story ---
+at_save = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_save.session_state["details_field"] = "Chủ đề test P1 smoke"
+at_save.session_state["caption_draft"] = "CAPTION SMOKE P1"
+at_save.run()
+check("Tạo bài chạy với input mới", not at_save.exception)
+before_ids = set(stories.list_story_ids(smoke_root))
+btn_cap = next((b for b in at_save.button if b.label == "Lưu caption"), None)
+check("nút Lưu caption tồn tại", btn_cap is not None)
+if btn_cap is not None:
+    btn_cap.click().run()
+    new_ids = [s for s in stories.list_story_ids(smoke_root) if s not in before_ids]
+    check("một click tạo đúng 1 story folder", len(new_ids) == 1 and not at_save.exception)
+    if len(new_ids) == 1:
+        sid = new_ids[0]
+        check("caption.txt nằm trong folder story", (smoke_root / sid / "caption.txt").read_text(encoding="utf-8") == "CAPTION SMOKE P1")
+        at_save.run()  # run kế tiếp selector mới trỏ về story vừa tạo
+        check("story vừa lưu được chọn lại trong selector", str(at_save.session_state.get("story_selector", "")).startswith(sid))
+        at_save.session_state["seo_draft"] = "# SEO SMOKE P1"
+        btn_seo = next((b for b in at_save.button if b.label == "Lưu bài SEO"), None)
+        check("nút Lưu bài SEO tồn tại", btn_seo is not None)
+        if btn_seo is not None:
+            btn_seo.click().run()
+            check("seo.md ghi vào cùng folder story", (smoke_root / sid / "seo.md").read_text(encoding="utf-8") == "# SEO SMOKE P1")
+            check("story.json đánh dấu b1+b3 done", stories.states(smoke_root, sid) == {"b1": "done", "b2": "pending", "b3": "done"})
+        btn_del = next((b for b in at_save.button if b.label == "Xóa story (dời vào .trash)"), None)
+        if btn_del is not None:
+            btn_del.click().run()
+            check("Xóa story dời folder vào .trash", not (smoke_root / sid).exists()
+                  and any(p.name.startswith(sid + "__") and (p / "caption.txt").is_file() for p in (smoke_root / ".trash").iterdir()))
+            check("story đã xóa không còn trong selector", sid not in stories.list_story_ids(smoke_root))
+
+# --- P1 AppTest: chưa chọn workspace thì báo rõ, không crash ---
+stories._recents_path = lambda: smoke_ws / "no-workspace.json"
+at_now = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_now.run()
+check("Tạo bài báo chưa chọn workspace", not at_now.exception and any("workspace" in (w.value or "") for w in at_now.warning))
+stories._recents_path = lambda: smoke_ws / "workspaces.json"
 
 # --- error path: provider key missing gives readable message ---
 import os
@@ -322,6 +407,10 @@ check("recents skip vanished folders", [Path(w["path"]).name for w in stories.re
 
 stories._recents_path = real_recents
 check("real home workspaces.json untouched", not (paths.data_dir() / "workspaces.json").exists())
+
+stories._recents_path = orig_recents_path
+shutil.rmtree(smoke_ws, ignore_errors=True)
+shutil.rmtree(ws_box, ignore_errors=True)
 
 # cleanup test rows
 c = db.connect()

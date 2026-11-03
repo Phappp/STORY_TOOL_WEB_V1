@@ -251,6 +251,23 @@ def input_text(root: Path, sid: str) -> str:
     return _read_text(story_dir(root, sid) / INPUT_FILE)
 
 
+def save_input(root: Path, sid: str, text: str) -> dict:
+    """input.txt = dữ liệu gốc (B0/Input); topic tự lấy dòng đầu tiên nếu story chưa có tên."""
+    folder = story_dir(root, sid)
+    _write_text(folder / INPUT_FILE, text)
+    story = load_story(root, sid)
+    if not str(story.get("topic") or "").strip():
+        lines = text.strip().splitlines()
+        story["topic"] = lines[0][:60] if lines else ""
+    return save_story(root, sid, story)
+
+
+def update_story(root: Path, sid: str, **fields) -> dict:
+    story = load_story(root, sid)
+    story.update(fields)
+    return save_story(root, sid, story)
+
+
 def step_text(root: Path, sid: str, step: str) -> str:
     if step not in STEP_FILE or step == "b2":
         raise WorkspaceError(f"Bước {step} không có file text.")
@@ -279,7 +296,7 @@ def _image_file(folder: Path) -> Path | None:
     return found[0] if found else None
 
 
-def save_image(root: Path, sid: str, src, method: str = "", refs: list[str] | None = None, keywords: list[str] | None = None) -> dict:
+def save_image(root: Path, sid: str, src, method: str = "", refs: list[str] | None = None, keywords: list[str] | None = None, source_url: str = "") -> dict:
     """B2 giữ đúng 1 ảnh: luôn là image.png, ảnh cũ bị xóa khi ghi đè."""
     src = Path(str(src))
     if not src.is_file():
@@ -296,6 +313,7 @@ def save_image(root: Path, sid: str, src, method: str = "", refs: list[str] | No
             "state": DONE,
             "image": IMAGE_FILE,
             "method": method or block.get("method") or None,
+            "source_url": source_url or block.get("source_url") or None,
             "refs": list(refs) if refs is not None else block.get("refs") or [],
             "keywords": list(keywords) if keywords is not None else block.get("keywords") or [],
             "detail": "",
@@ -346,6 +364,16 @@ def refs_of(root: Path, sid: str) -> list[Path]:
 
 def image_of(root: Path, sid: str) -> Path | None:
     return _image_file(story_dir(root, sid))
+
+
+def archive_story(root: Path, sid: str) -> Path:
+    """Xóa bài = dời folder vào .trash trong workspace (không xóa vĩnh viễn, khôi phục được)."""
+    folder = story_dir(root, sid)
+    trash = root / ".trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    dest = trash / f"{sid}__{time.strftime('%Y%m%d-%H%M%S')}"
+    folder.rename(dest)
+    return dest
 
 
 def set_step_state(root: Path, sid: str, step: str, state: str, detail: str = "", **meta) -> dict:
@@ -407,3 +435,76 @@ def story_summary(root: Path, sid: str) -> dict:
 
 def list_stories(root: Path) -> list[dict]:
     return [story_summary(root, sid) for sid in list_story_ids(root)]
+
+
+# ---------- migrate hàng posts (DB cũ) vào workspace ----------
+
+
+def _post_image_source(row, extra_dirs: tuple[Path, ...]) -> Path | None:
+    """Ảnh đầu tiên của hàng posts: thử đường dẫn đã lưu, rồi tìm {post_id}_* trong DATA/IMAGES."""
+    try:
+        entries = json.loads(row["images"] or "[]")
+    except (TypeError, ValueError):
+        entries = []
+    for entry in entries if isinstance(entries, list) else []:
+        raw = str(entry.get("url") or entry.get("thumb") or "").strip()
+        if raw and Path(raw).is_file():
+            return Path(raw)
+    for folder in extra_dirs:
+        if not folder.is_dir():
+            continue
+        found = sorted(folder.glob(f"{row['id']}_*"), key=lambda p: p.stat().st_mtime)
+        if found:
+            return found[-1]
+    return None
+
+
+def import_post(root: Path, row, extra_image_dirs: tuple[Path, ...] = ()) -> str:
+    """Một hàng posts -> một story folder mới. Trả về story id."""
+    created = create_story(
+        root,
+        topic=str(row["topic"] or ""),
+        preset_id=row["preset_id"],
+        input_text=str(row["details"] or row["summary"] or ""),
+    )
+    sid = created["id"]
+    folder = root / sid
+    if str(row["caption"] or "").strip():
+        save_step_text(root, sid, "b1", str(row["caption"]))
+    if str(row["seo_text"] or "").strip():
+        save_step_text(root, sid, "b3", str(row["seo_text"]))
+    try:
+        keywords = json.loads(row["keywords"] or "[]")
+    except (TypeError, ValueError):
+        keywords = []
+    image = _post_image_source(row, extra_image_dirs)
+    if image is not None:
+        save_image(root, sid, image, method="migrated", keywords=keywords)
+    elif keywords:
+        block = dict(load_story(root, sid).get("b2") or {})
+        block["keywords"] = keywords
+        update_story(root, sid, b2=block)
+    update_story(
+        root,
+        sid,
+        status=str(row["status"] or "draft"),
+        migrated_from_post=row["id"],
+        created_at=float(row["created_at"] or created["created_at"]),
+    )
+    return sid
+
+
+def migrate_posts(root: Path, rows, extra_image_dirs: tuple[Path, ...] = ()) -> list[tuple[int, str]]:
+    """Copy các bài DB chưa migrate sang story folder; đã ghi id vào workspace meta nên chạy lại không trùng."""
+    meta = workspace_meta(root)
+    done = {int(i) for i in meta.get("migrated_db_ids") or []}
+    moved: list[tuple[int, str]] = []
+    for row in sorted(rows, key=lambda r: r["id"]):
+        if row["id"] in done:
+            continue
+        sid = import_post(root, row, extra_image_dirs)
+        done.add(row["id"])
+        moved.append((row["id"], sid))
+    if moved:
+        save_workspace_meta(root, migrated_db_ids=sorted(done))
+    return moved
