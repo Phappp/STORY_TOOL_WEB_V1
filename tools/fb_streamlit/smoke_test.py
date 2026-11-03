@@ -42,6 +42,20 @@ post = db.get_post(conn, post_id)
 check("post round-trip", post["caption"] == "cap" and len(json.loads(post["images"])) == 1)
 db.delete_post(conn, post_id)
 
+# --- unit: prompt placeholder engine ---
+import app as fbapp
+
+ctx = fbapp.prompt_context({"topic": "T", "summary": "S", "details": "CAPTION-GOC", "caption": ""})
+out = fbapp.gen_prompt("Viết lại:\n<CAPTION CŨ>\nhết", ctx)
+check("gen_prompt replaces <CAPTION CŨ>", out == "Viết lại:\nCAPTION-GOC\nhết")
+
+ctx2 = fbapp.prompt_context({"topic": "T", "summary": "", "details": "", "caption": "NEWCAP"}, caption_override=None)
+out2 = fbapp.gen_prompt("SEO cho <CAPTION MỚI TẠO>", ctx2)
+check("gen_prompt replaces <CAPTION MỚI TẠO>", out2 == "SEO cho NEWCAP")
+
+out3 = fbapp.gen_prompt("Không token ở đây", ctx2)
+check("gen_prompt fallback appends data", out3.startswith("Không token ở đây") and "Chi tiết:" in out3)
+
 # --- AppTest: each page renders without exception ---
 at = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30).run()
 check("page 'Tạo bài' runs", not at.exception)
