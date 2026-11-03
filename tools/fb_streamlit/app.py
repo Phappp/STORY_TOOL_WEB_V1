@@ -580,11 +580,13 @@ def page_create(c):
         )
         variant = formats.render(seo, fmt)
         if fmt.startswith("Markdown"):
-            st.markdown("**Bản render thử** (đúng đậm/đề mục/cỡ chữ như web sẽ hiển thị):")
-            st.markdown(variant)
-        elif fmt.startswith("Unicode"):
-            st.caption("Đề mục → IN HOA + vạch ━; cụm **đậm** chỉ thành chữ đậm Unicode khi toàn bộ là ASCII, ngược lại IN HOA (Unicode không có chữ đậm cho tiếng Việt có dấu).")
-        st.code(variant, language=None)
+            with st.container(border=True):
+                st.caption("Bản render — bôi đen toàn bộ khung rồi Ctrl+C; dán vào trình soạn thảo blog sẽ giữ đậm/đề mục/cỡ chữ.")
+                st.markdown(variant)
+        else:
+            if fmt.startswith("Unicode"):
+                st.caption("Đề mục → IN HOA + vạch ━; cụm **đậm** chỉ thành chữ đậm Unicode khi toàn bộ là ASCII, ngược lại IN HOA (Unicode không có chữ đậm cho tiếng Việt có dấu).")
+            st.code(variant, language=None)
     else:
         st.caption("Chưa có bài SEO để định dạng.")
 

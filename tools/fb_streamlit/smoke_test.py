@@ -166,12 +166,14 @@ at_fmt.session_state["seo_draft"] = "## Tiêu đề **nhấn**\n\nNội dung bà
 at_fmt.run()
 check("B3 runs with seo text", not at_fmt.exception)
 check("B3 format radio has 3 modes", any({"Markdown (blog/SEO)", "Unicode đậm (dán Facebook)", "Text thường"} <= set(r.options or []) for r in at_fmt.radio))
-check("B3 copy block rendered", len(at_fmt.code) >= 1)
 fmt_radio = next((r for r in at_fmt.radio if "Unicode đậm (dán Facebook)" in (r.options or [])), None)
 if fmt_radio is not None:
+    fmt_radio.set_value("Markdown (blog/SEO)").run()
+    check("markdown mode shows rendered frame, no raw block", not at_fmt.exception and not any("## " in (c.value or "") for c in at_fmt.code))
+    fmt_radio.set_value("Text thường").run()
+    check("plain mode gives copy block", any("Tiêu đề nhấn" in (c.value or "") for c in at_fmt.code))
     fmt_radio.set_value("Unicode đậm (dán Facebook)").run()
-    codes = [c.value for c in at_fmt.code]
-    check("B3 unicode mode changes copy block", not at_fmt.exception and any("━━━" in c for c in codes))
+    check("B3 unicode mode changes copy block", any("━━━" in (c.value or "") for c in at_fmt.code))
 
 # --- AppTest: add provider through the form widget ---
 at5 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
