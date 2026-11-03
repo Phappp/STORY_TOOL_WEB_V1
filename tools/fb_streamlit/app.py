@@ -192,6 +192,7 @@ def b0_import_block():
                     st.image(img["local"] or img["thumb"], caption=img["alt"] or None)
                 except Exception:
                     st.caption(f"Không xem được ảnh: {(img['url'] or '')[:80]}")
+            st.caption("Bài công khai chỉ expose 1 ảnh (ảnh bìa). Các ảnh còn lại: bấm 'upload ảnh gốc' ở B2.")
         else:
             st.info("Link không cho ảnh nào — bạn vẫn upload ảnh gốc ở B2.")
     use_col, _ = st.columns([1, 4])

@@ -5,6 +5,7 @@ import shutil
 import time
 import zlib
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
@@ -15,13 +16,21 @@ REFS_DIR = DATA_DIR / "refs"
 GEN_DIR = DATA_DIR / "images"
 
 
+FB_IMAGE_UA = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
+FB_IMAGE_HOSTS = ("lookaside.fbsbx.com", "fbcdn.net", "facebook.com", "fb.com", "fbsbx.com")
+
+
 def download_ref(url: str) -> Path:
     REFS_DIR.mkdir(parents=True, exist_ok=True)
-    r = httpx.get(url, follow_redirects=True, timeout=60, verify=http_verify())
+    host = (urlparse(url).netloc or "").lower()
+    headers = {"User-Agent": FB_IMAGE_UA} if any(h in host for h in FB_IMAGE_HOSTS) else {}
+    r = httpx.get(url, headers=headers, follow_redirects=True, timeout=60, verify=http_verify())
     if r.status_code >= 400:
         raise RuntimeError(f"Tải ảnh gốc lỗi HTTP {r.status_code}")
-    ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}.get(
-        r.headers.get("content-type", "").split(";")[0].strip().lower(), ".img")
+    ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype and not ctype.startswith("image/"):
+        raise RuntimeError(f"Link không phải ảnh (server trả {ctype}) — thử mở link trong browser rồi copy ảnh.")
+    ext = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}.get(ctype, ".img")
     dest = REFS_DIR / f"url_{zlib.crc32(url.encode()):08x}{ext}"
     dest.write_bytes(r.content)
     return dest
