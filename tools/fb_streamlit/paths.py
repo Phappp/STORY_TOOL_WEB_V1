@@ -1,7 +1,8 @@
 """Home của tool: data + .env nằm NGOÀI thư mục code.
 
 Mặc định E:/StoryToolFB-data, ghi đè bằng biến FB_TOOL_HOME trong .env hoặc môi trường.
-Nếu không tạo được thư mục (máy khác không có ổ E) thì fallback về ~//StoryToolFB-data.
+Nếu không tạo được thư mục (máy khác không có ổ E) thì fallback về ~/StoryToolFB-data.
+Thư mục trong home luôn VIẾT HOA: DATA, REFS, IMAGES, LOGS.
 """
 
 import os
@@ -13,12 +14,47 @@ ENV_VAR = "FB_TOOL_HOME"
 DEFAULT_HOME = Path("E:/StoryToolFB-data")
 FALLBACK_HOME = Path.home() / "StoryToolFB-data"
 TOOL_DIR = Path(__file__).resolve().parent
-SUBDIRS = ("data", "data/refs", "data/images", "logs")
+DATA = "DATA"
+LOGS = "LOGS"
+REFS = "REFS"
+IMAGES = "IMAGES"
+SUBDIRS = (DATA, f"{DATA}/{REFS}", f"{DATA}/{IMAGES}", LOGS)
 
 _home: Path | None = None
 
 
+def _real_name(dirpath: Path) -> str:
+    """Tên thật trên ổ đĩa (scandir trả đúng hoa/thường, kể cả ổ Windows không phân biệt)."""
+    try:
+        for entry in os.scandir(dirpath.parent):
+            if entry.name.casefold() == dirpath.name.casefold() and entry.is_dir():
+                return entry.name
+    except OSError:
+        pass
+    return ""
+
+
+def _fix_case(dirpath: Path, want: str) -> None:
+    real = _real_name(dirpath)
+    if not real or real == want or not dirpath.is_dir():
+        return
+    tmp = dirpath.with_name(want + ".__case__")
+    try:
+        dirpath.rename(tmp)
+        tmp.rename(dirpath.with_name(want))
+    except OSError:
+        if tmp.is_dir():
+            try:
+                tmp.rename(dirpath)
+            except OSError:
+                pass
+
+
 def _prepare(candidate: Path) -> Path:
+    for sub in SUBDIRS:
+        parts = sub.split("/")
+        for depth in range(len(parts), 0, -1):
+            _fix_case(candidate.joinpath(*parts[:depth]), parts[depth - 1])
     for sub in SUBDIRS:
         (candidate / sub).mkdir(parents=True, exist_ok=True)
     return candidate
@@ -39,7 +75,19 @@ def home() -> Path:
 
 
 def data_dir() -> Path:
-    return home() / "data"
+    return home() / DATA
+
+
+def refs_dir() -> Path:
+    return data_dir() / REFS
+
+
+def images_dir() -> Path:
+    return data_dir() / IMAGES
+
+
+def logs_dir() -> Path:
+    return home() / LOGS
 
 
 def env_path() -> Path:

@@ -119,6 +119,25 @@ import tempfile
 
 check("data dir is outside code folder", paths.data_dir() != Path(__file__).resolve().parent / "data")
 check("env file lives in home", paths.env_path().parent == paths.home())
+check(
+    "home folders are UPPERCASE",
+    (paths.data_dir().name, paths.refs_dir().name, paths.images_dir().name, paths.logs_dir().name)
+    == ("DATA", "REFS", "IMAGES", "LOGS"),
+)
+check("image dirs come from paths", images.REFS_DIR == paths.refs_dir() and images.GEN_DIR == paths.images_dir())
+
+old_case = Path(tempfile.mkdtemp(prefix="fbcase_"))
+(old_case / "data" / "refs").mkdir(parents=True)
+(old_case / "data" / "images").mkdir(parents=True)
+(old_case / "logs").mkdir(parents=True)
+(old_case / "data" / "fb_tool.db").write_bytes(b"KEEP")
+paths._prepare(old_case)
+live = {p.name for p in old_case.iterdir() if p.is_dir()}
+check("prepare uppercases existing folders", live == {"DATA", "LOGS"})
+check("prepare uppercases subfolders", {p.name for p in (old_case / "DATA").iterdir() if p.is_dir()} == {"REFS", "IMAGES"})
+check("rename keeps files", (old_case / "DATA" / "fb_tool.db").read_bytes() == b"KEEP")
+check("no temp case folders", not any(".__case__" in p.name for p in old_case.rglob("*")))
+check("prepare is idempotent", paths._prepare(old_case) == old_case and (old_case / "DATA" / "fb_tool.db").exists())
 
 sandbox = Path(tempfile.mkdtemp(prefix="fbhome_"))
 (sandbox / "legacy" / "data").mkdir(parents=True)
@@ -127,7 +146,7 @@ sandbox = Path(tempfile.mkdtemp(prefix="fbhome_"))
 prev_tool, prev_home = paths.TOOL_DIR, paths._home
 paths.TOOL_DIR, paths._home = sandbox / "legacy", sandbox / "home"
 moved = paths.migrate_legacy()
-check("migrate copies db + env to home", (sandbox / "home" / "data" / "fb_tool.db").read_bytes() == b"SQLDATA" and (sandbox / "home" / ".env").exists())
+check("migrate copies db + env to home", (sandbox / "home" / "DATA" / "fb_tool.db").read_bytes() == b"SQLDATA" and (sandbox / "home" / ".env").exists())
 check("migrate keeps old data as backup dir", not (sandbox / "legacy" / "data").exists() and any((sandbox / "legacy").glob("data_backup_*")))
 check("migrate is idempotent", paths.migrate_legacy() == [])
 paths.TOOL_DIR, paths._home = prev_tool, prev_home
@@ -172,13 +191,11 @@ if apply_btn is not None:
 
 at2 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at2.run()
-at2.sidebar.radio[0].set_value("Providers").run()
-check("page Providers runs", not at2.exception)
-
-at3 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
-at3.run()
-at3.sidebar.radio[0].set_value("Presets").run()
-check("page Presets runs", not at3.exception)
+check("sidebar nav gộp Providers+Presets thành Cấu hình", set(at2.sidebar.radio[0].options) == {"Tạo bài", "Cấu hình", "Lịch sử"})
+at2.sidebar.radio[0].set_value("Cấu hình").run()
+check("page Cấu hình runs", not at2.exception)
+check("Cấu hình has Providers + Presets tabs", {"Providers", "Presets theo chủ đề"} <= {t.label for t in at2.tabs})
+check("Cấu hình shows data home", any("fb_tool.db" in (c.value or "") for c in at2.caption))
 
 at4 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at4.run()
@@ -208,9 +225,9 @@ if fmt_radio is not None:
 # --- AppTest: add provider through the form widget ---
 at5 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at5.run()
-at5.sidebar.radio[0].set_value("Providers").run()
-at5.text_input[0].set_value("FormTest")
-at5.button[0].click().run()
+at5.sidebar.radio[0].set_value("Cấu hình").run()
+next(w for w in at5.text_input if w.label == "Tên *").set_value("FormTest")
+next(b for b in at5.button if b.label == "Thêm provider").click().run()
 check("form provider persisted", any(x["name"] == "FormTest" for x in db.list_providers(db.connect())))
 
 # --- error path: provider key missing gives readable message ---

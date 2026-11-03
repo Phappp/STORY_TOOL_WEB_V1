@@ -730,6 +730,23 @@ def page_providers(c):
                     st.error(str(exc))
 
 
+# ---------- page: Cấu hình (Providers + Presets) ----------
+
+def page_config(c):
+    st.subheader("Cấu hình")
+    st.caption(
+        f"Mọi cấu hình và dữ liệu nằm ngoài thư mục code, trong `{paths.home()}` — "
+        f"`{paths.DATA}/fb_tool.db` (Providers, Presets, bài viết), `.env` (API key), "
+        f"`{paths.DATA}/{paths.REFS}` (ảnh tham chiếu), `{paths.DATA}/{paths.IMAGES}` (ảnh bài viết), `{paths.LOGS}`. "
+        "Đổi chỗ lưu bằng biến môi trường Windows `FB_TOOL_HOME` (không đặt trong .env)."
+    )
+    tab_providers, tab_presets = st.tabs(["Providers", "Presets theo chủ đề"])
+    with tab_providers:
+        page_providers(c)
+    with tab_presets:
+        page_presets(c)
+
+
 # ---------- page: Lịch sử ----------
 
 def page_history(c):
@@ -762,7 +779,7 @@ def page_history(c):
                 st.code(pack)
 
 
-NAV = {"Tạo bài": page_create, "Presets": page_presets, "Providers": page_providers, "Lịch sử": page_history}
+NAV = {"Tạo bài": page_create, "Cấu hình": page_config, "Lịch sử": page_history}
 
 
 def _run_app():

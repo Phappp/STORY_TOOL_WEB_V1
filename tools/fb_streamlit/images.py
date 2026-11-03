@@ -9,11 +9,12 @@ from urllib.parse import urlparse
 
 import httpx
 
-from db import DATA_DIR
 from providers import http_verify
 
-REFS_DIR = DATA_DIR / "refs"
-GEN_DIR = DATA_DIR / "images"
+import paths
+
+REFS_DIR = paths.refs_dir()
+GEN_DIR = paths.images_dir()
 
 
 FB_IMAGE_UA = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
