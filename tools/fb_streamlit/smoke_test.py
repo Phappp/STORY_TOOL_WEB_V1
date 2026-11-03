@@ -1,6 +1,7 @@
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -295,6 +296,117 @@ check("resolve: fallback về provider mặc định", p_res[0]["is_default"] ==
 p_res = steps.resolve_provider_model(rows2, {"b1": {"provider": "Không Tồn Tại", "model": "zz"}}, {"provider_id": 1}, "b1")
 check("resolve: provider/model bị xóa khỏi DB được thay hợp lệ", p_res[0]["is_default"] == 1 and p_res[1] == "m1")
 shutil.rmtree(st_box, ignore_errors=True)
+
+# --- P2b: grid_actions.apply_event — một event từ grid -> việc thật trên folder story ---
+import grid_actions as ga
+
+ga_box = Path(tempfile.mkdtemp(prefix="fbgrid_"))
+ga_root = stories.validate_root(ga_box / "ws")
+real_db_path = db.DB_PATH
+db.DB_PATH = ga_box / "fb_tool.db"  # DB tạm: dispatcher không đụng fb_tool.db thật
+gconn = db.connect()
+db.add_provider(gconn, "GridAPI", "openai", "https://x/v1", "GRID_KEY_ENV", "m1,m2")
+db.add_provider(gconn, "GridCodex", "codex_cli", "", "", "")
+db.save_preset(gconn, None, "Grid preset", "", "cap: <CAPTION CŨ>", "img: <CAPTION MỚI TẠO>", "kw: <DỮ LIỆU>", "seo: <CAPTION MỚI TẠO>", "input", None)
+gctx = ga.build_ctx(gconn, ga_root)
+
+sid_ok = stories.create_story(ga_root, "Chủ đề grid", input_text="nội dung gốc cho grid")["id"]
+sid_empty = stories.create_story(ga_root, "Chưa có input")["id"]
+
+# file giả đặt trong ga_box (thư mục st_box của P2a đã bị xóa ở trên)
+ga_gen_file = ga_box / "codex.png"
+ga_stock_file = ga_box / "stock.jpg"
+
+
+def ga_codex(prompt, refs):
+    ga_gen_file.write_bytes(b"CODEX-IMG")
+    return ga_gen_file
+
+
+def ga_download(url):
+    ga_stock_file.write_bytes(b"STOCK-IMG")
+    return ga_stock_file
+
+
+chat_calls.clear()
+prov.chat = ok_chat
+prov.codex_generate_image = ga_codex
+images.download_ref = ga_download
+images.search_images = lambda query, count=4: [{"url": "https://stock/x.jpg", "thumb": "t", "alt": "a", "source": "stock"}]
+
+out = ga.apply_event(gctx, {"source": "run_step", "id": sid_ok, "step": "b1"})
+check("dispatcher b1 ghi caption.txt + báo 1 dòng log",
+      out.lines == ["B1 caption: OK"] and (ga_root / sid_ok / "caption.txt").is_file() and out.touched == [sid_ok])
+check("dispatcher b1 chọn provider+model từ preset khi story chưa lưu",
+      chat_calls[-1] == ("GridAPI", "m1"))
+out = ga.apply_event(gctx, {"source": "run_step", "id": sid_empty, "step": "b1"})
+check("chưa có input -> chặn trước khi gọi provider",
+      "input.txt" in out.lines[0] and not (ga_root / sid_empty / "caption.txt").exists())
+out = ga.apply_event(gctx, {"source": "run_step", "id": "story_777", "step": "b1"})
+check("story không tồn tại -> line lỗi, không crash", out.lines and "story_777" in out.lines[0])
+out = ga.apply_event(gctx, {"source": "run_step", "id": sid_ok, "step": "b2"})
+check("dispatcher b2 vẫn dùng Codex dù provider bước là API",
+      (ga_root / sid_ok / "image.png").read_bytes() == b"CODEX-IMG" and stories.states(ga_root, sid_ok)["b2"] == "done")
+out = ga.apply_event(gctx, {"source": "run_step", "id": sid_ok, "step": "b3"})
+check("dispatcher b3 ghi seo.md", (ga_root / sid_ok / "seo.md").is_file() and out.lines == ["B3 SEO: OK"])
+
+prov.chat = boom_chat
+prov.codex_generate_image = boom_codex
+out = ga.apply_event(gctx, {"source": "run_step", "id": sid_ok, "step": "b1"})
+check("provider lỗi -> dòng LỖI + state error", "LỖI" in out.lines[0] and stories.states(ga_root, sid_ok)["b1"] == "error")
+out = ga.apply_event(gctx, {"source": "run_step", "id": sid_empty, "step": "b3"})
+check("b3 trên story chưa input cũng bị chặn", "input.txt" in out.lines[0])
+prov.chat = ok_chat
+prov.codex_generate_image = ga_codex
+
+out = ga.apply_event(gctx, {"source": "run_all", "id": sid_ok})
+check("run_all ghi đủ 3 file cho story",
+      all((ga_root / sid_ok / f).is_file() for f in ("caption.txt", "image.png", "seo.md")) and out.touched == [sid_ok])
+
+sid_extra = [sid_ok]
+for _ in range(5):
+    sid_extra.append(stories.create_story(ga_root, "Chủ đề batch", input_text="nội dung batch")["id"])
+out = ga.apply_event(gctx, {"source": "batch_run", "ids": sid_extra})
+check("batch chỉ chạy tối đa 5 bài và nói rõ phần bị bỏ",
+      len(out.touched) == ga.MAX_BATCH and "để lượt sau" in out.lines[0]
+      and all((ga_root / s / "caption.txt").is_file() for s in sid_extra[:5])
+      and not (ga_root / sid_extra[5] / "caption.txt").exists())
+check("batch bỏ qua story thiếu input mà không crash",
+      ga.apply_event(gctx, {"source": "batch_run", "ids": [sid_empty]}).lines[0].count("input.txt") == 1)
+
+out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Caption", "request_id": "r1"})
+check("copy_request trả đúng nội dung caption.txt",
+      out.copy == {"id": sid_ok, "field": "Caption", "request_id": "r1", "text": (ga_root / sid_ok / "caption.txt").read_text(encoding="utf-8")})
+out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_extra[5], "field": "Caption", "request_id": "r2"})
+check("copy field trống -> báo rõ, không có payload", out.copy is None and "trống" in out.lines[0])
+out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "B3", "request_id": "r3"})
+check("copy chỉ nhận đúng tên cột", out.copy is None and out.lines)
+
+out = ga.apply_event(gctx, {"source": "mark_posted", "id": sid_ok})
+check("mark_posted đổi status trong story.json", stories.load_story(ga_root, sid_ok)["status"] == "posted")
+out = ga.apply_event(gctx, {"source": "open", "id": sid_ok})
+check("open chỉ chọn story + đổi trang, không ghi file",
+      (out.select, out.nav) == (sid_ok, "Tạo bài") and not out.touched)
+out = ga.apply_event(gctx, {"source": "run_step", "id": sid_ok})
+check("event thiếu step bị coi là không hợp lệ", "không hợp lệ" in out.lines[0])
+out = ga.apply_event(gctx, "not-a-dict")
+check("event rác -> không làm gì", out.lines == [] and out.copy is None)
+
+out = ga.apply_event(gctx, {"source": "archive", "id": sid_extra[5]})
+check("archive dời folder vào .trash", not (ga_root / sid_extra[5]).exists() and any(p.name.startswith(sid_extra[5] + "__") for p in (ga_root / ".trash").iterdir()))
+
+stories.set_step_state(ga_root, sid_ok, "b1", "running")
+check("running còn mới hiện running", ga.step_states(ga_root, sid_ok)["b1"] == "running")
+old = stories.load_story(ga_root, sid_ok)
+old["b1"]["updated_at"] = time.time() - ga.STALE_SECONDS - 10
+stories.save_story(ga_root, sid_ok, old)
+check("running treo > 15 phút thành stale", ga.step_states(ga_root, sid_ok)["b1"] == ga.STALE)
+
+prov.chat, prov.codex_generate_image = real_chat, real_codex
+images.download_ref, images.search_images = real_download, real_search
+gconn.close()
+db.DB_PATH = real_db_path
+shutil.rmtree(ga_box, ignore_errors=True)
 
 # --- P1: app phải chạy trong workspace tạm, không đụng folder story thật ---
 orig_recents_path = stories._recents_path
