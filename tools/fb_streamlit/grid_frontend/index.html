@@ -1,0 +1,279 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Story grid</title>
+<style>
+  :root {
+    --bg:#fff; --text:#31333f; --muted:#6b7280; --border:rgba(49,51,63,.18);
+    --header:#f7f8fa; --hover:#fafafa;
+    --pending:#eef0f3; --pending-t:#667085;
+    --done:#e6f6ec; --done-t:#0a7f3f;
+    --running:#e8f1ff; --running-t:#175fa8;
+    --error:#fdecec; --error-t:#c62828;
+    --missing:#fff4e0; --missing-t:#a8650c;
+    --stale:#f3ecfd; --stale-t:#6b3fa0;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; padding:0; background:transparent; color:var(--text);
+    font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif; font-size:13px; }
+  .wrap { border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg); }
+  .bar { display:flex; gap:10px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); background:var(--header); }
+  .bar .count { color:var(--muted); margin-left:auto; }
+  .scroll { max-height:520px; overflow:auto; }
+  table { width:100%; min-width:920px; border-collapse:separate; border-spacing:0; table-layout:fixed; }
+  thead th { position:sticky; top:0; z-index:3; background:var(--header); text-align:left;
+    font-weight:600; padding:7px 8px; border-bottom:1px solid var(--border); white-space:nowrap; user-select:none; }
+  tbody td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:middle;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:38px; }
+  tbody tr:hover td { background:var(--hover); }
+  th.c, td.c { text-align:center; }
+  th.step, td.step { width:104px; text-align:center; }
+  th.pick, td.pick { width:34px; text-align:center; }
+  th.id, td.id { width:96px; font-family:ui-monospace,Consolas,monospace; }
+  th.img, td.img { width:58px; text-align:center; }
+  th.status, td.status { width:70px; text-align:center; }
+  th.when, td.when { width:92px; color:var(--muted); }
+  th.act, td.act { width:140px; }
+  .chip { display:inline-block; min-width:52px; text-align:center; padding:2px 6px; border-radius:999px;
+    font-size:11px; font-weight:600; background:var(--pending); color:var(--pending-t); cursor:default; }
+  .chip.done { background:var(--done); color:var(--done-t); }
+  .chip.running { background:var(--running); color:var(--running-t); }
+  .chip.error { background:var(--error); color:var(--error-t); }
+  .chip.missing { background:var(--missing); color:var(--missing-t); }
+  .chip.stale { background:var(--stale); color:var(--stale-t); }
+  .badge { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; background:var(--pending); color:var(--pending-t); }
+  .badge.posted { background:var(--done); color:var(--done-t); }
+  button.b { border:1px solid var(--border); background:#fff; border-radius:6px; cursor:pointer;
+    font:inherit; height:24px; line-height:1; color:#555; padding:2px 6px; }
+  button.b:hover { background:#f2f3f5; }
+  button.b:disabled { opacity:.5; cursor:default; }
+  button.b[data-sent="1"] { opacity:.45; pointer-events:none; }
+  button.play { padding:2px 5px; height:22px; margin-left:4px; }
+  button.act { margin-right:2px; }
+  button.danger-armed { background:var(--error); color:var(--error-t); border-color:rgba(198,40,40,.4); }
+  .hint { padding:7px 10px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); background:#fbfbfc; }
+  .empty { padding:20px; color:var(--muted); }
+  .muted { color:var(--muted); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const SET_COMPONENT_VALUE = "streamlit:setComponentValue";
+const RENDER = "streamlit:render";
+const COMPONENT_READY = "streamlit:componentReady";
+const SET_FRAME_HEIGHT = "streamlit:setFrameHeight";
+const MAX_BATCH = 5;
+
+const STATE_LABEL = { pending: "chờ", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
+const STEP_TITLE = { b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
+
+function sendMessage(type, data) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data || {}), "*");
+}
+function setFrameHeight() {
+  const h = Math.min(Math.max(document.documentElement.scrollHeight, 120), 640);
+  sendMessage(SET_FRAME_HEIGHT, { height: h });
+}
+function eventId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+}
+function send(event) {
+  sendMessage(SET_COMPONENT_VALUE, { value: Object.assign({ event_id: eventId() }, event) });
+  markSent();  // Streamlit sẽ rerun ngay; khóa nút để không bấm đôi trong lúc chờ
+  setTimeout(unmarkSent, 3000);
+}
+function markSent() {
+  document.querySelectorAll("button.b").forEach(b => { b.dataset.sent = "1"; });
+}
+function unmarkSent() {
+  document.querySelectorAll("button.b").forEach(b => { delete b.dataset.sent; });
+}
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text != null) node.textContent = String(text);
+  return node;
+}
+function button(label, title, fn, cls) {
+  const b = el("button", "b " + (cls || ""));
+  b.type = "button";
+  b.textContent = label;
+  if (title) b.title = title;
+  b.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); fn(b); });
+  return b;
+}
+
+let MODEL = { rows: [], workspace: "" };
+const PICKED = new Set();
+let boxes = [];
+
+function rows() { return Array.isArray(MODEL.rows) ? MODEL.rows : []; }
+
+function stepCell(row, step) {
+  const td = el("td", "step");
+  const state = String((row.states || {})[step] || "pending");
+  const chip = el("span", "chip " + state, STATE_LABEL[state] || state);
+  const detail = String((row.detail || {})[step] || "");
+  chip.title = STEP_TITLE[step] + ": " + (detail || (STATE_LABEL[state] || state));
+  td.appendChild(chip);
+  td.appendChild(button("▶", "Chạy " + STEP_TITLE[step] + " cho bài này",
+    () => send({ source: "run_step", id: row.id, step }), "play"));
+  return td;
+}
+
+function trashButton(row) {
+  let armed = false;
+  let timer = null;
+  return button("🗑", "Dời folder vào .trash (bấm lần 2 để xác nhận)", b => {
+    if (!armed) {
+      armed = true;
+      b.classList.add("danger-armed");
+      b.textContent = "xác nhận?";
+      timer = setTimeout(() => { armed = false; b.classList.remove("danger-armed"); b.textContent = "🗑"; }, 4000);
+      return;
+    }
+    clearTimeout(timer);
+    armed = false;
+    send({ source: "archive", id: row.id });
+  }, "act");
+}
+
+function rowNode(row) {
+  const tr = el("tr");
+
+  const pick = el("td", "pick");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.checked = PICKED.has(String(row.id));
+  box.title = "Chọn để chạy batch";
+  box.addEventListener("change", () => {
+    if (box.checked) PICKED.add(String(row.id)); else PICKED.delete(String(row.id));
+    updateBar();
+  });
+  pick.appendChild(box);
+  boxes.push(box);
+  tr.appendChild(pick);
+
+  const id = el("td", "id", row.id);
+  id.title = String(row.link || row.id);
+  tr.appendChild(id);
+
+  const topic = el("td", "topic", row.topic || "(chưa đặt chủ đề)");
+  topic.title = String(row.topic || "") + (row.has_input ? "" : " · chưa có input");
+  if (!row.has_input) topic.style.color = "var(--muted)";
+  tr.appendChild(topic);
+
+  tr.appendChild(stepCell(row, "b1"));
+  tr.appendChild(stepCell(row, "b2"));
+  tr.appendChild(stepCell(row, "b3"));
+
+  const img = el("td", "img");
+  img.appendChild(el("span", row.image ? "chip done" : "chip", row.image ? "có" : "—"));
+  tr.appendChild(img);
+
+  const status = el("td", "status");
+  status.appendChild(el("span", row.status === "posted" ? "badge posted" : "badge", row.status || "draft"));
+  tr.appendChild(status);
+
+  tr.appendChild(el("td", "when", row.updated || ""));
+
+  const act = el("td", "act");
+  act.appendChild(button("⚡", "Chạy đủ pipeline B1 → (B2 ∥ B3)", () => send({ source: "run_all", id: row.id }), "act"));
+  act.appendChild(button("✎", "Mở bài này ở trang Tạo bài", () => send({ source: "open", id: row.id }), "act"));
+  act.appendChild(button("✅", "Đánh dấu đã đăng", () => send({ source: "mark_posted", id: row.id }), "act"));
+  act.appendChild(trashButton(row));
+  tr.appendChild(act);
+  return tr;
+}
+
+function batchButton() {
+  const b = button("⚡ Chạy đã chọn", "Chạy pipeline cho các bài đã chọn, tuần tự", () => {
+    const ids = Array.from(PICKED);
+    if (ids.length) send({ source: "batch_run", ids });
+  });
+  b.id = "batch";
+  b.disabled = true;
+  return b;
+}
+
+function updateBar() {
+  const b = document.getElementById("batch");
+  if (!b) return;
+  const n = PICKED.size;
+  b.disabled = n === 0;
+  b.textContent = "⚡ Chạy đã chọn (" + Math.min(n, MAX_BATCH) + (n > MAX_BATCH ? "/" + n : "") + ")";
+  b.title = n > MAX_BATCH
+    ? "Tối đa " + MAX_BATCH + " bài/lần — " + (n - MAX_BATCH) + " bài để lượt sau"
+    : "Chạy pipeline cho các bài đã chọn, tuần tự";
+  const all = document.getElementById("pickall");
+  if (all) all.checked = rows().length > 0 && rows().every(r => PICKED.has(String(r.id)));
+}
+
+function render(args) {
+  MODEL = { rows: Array.isArray(args.rows) ? args.rows : [], workspace: String(args.workspace || "") };
+  const alive = new Set(rows().map(r => String(r.id)));
+  Array.from(PICKED).forEach(id => { if (!alive.has(id)) PICKED.delete(id); });
+  boxes = [];
+
+  const root = document.getElementById("root");
+  root.textContent = "";
+  const wrap = el("div", "wrap");
+
+  const bar = el("div", "bar");
+  const allWrap = el("label", "muted");
+  const all = document.createElement("input");
+  all.type = "checkbox";
+  all.id = "pickall";
+  all.title = "Chọn / bỏ chọn tất cả";
+  all.addEventListener("change", () => {
+    PICKED.clear();
+    if (all.checked) rows().forEach(r => PICKED.add(String(r.id)));
+    boxes.forEach((box, i) => { box.checked = all.checked; });
+    updateBar();
+  });
+  allWrap.appendChild(all);
+  allWrap.appendChild(el("span", "muted", " chọn tất cả"));
+  bar.appendChild(batchButton());
+  bar.appendChild(allWrap);
+  bar.appendChild(el("span", "count", rows().length + " bài" + (MODEL.workspace ? " · " + MODEL.workspace : "")));
+  wrap.appendChild(bar);
+
+  if (!rows().length) {
+    wrap.appendChild(el("div", "empty", "Workspace này chưa có story nào — mở trang Tạo bài, hoặc vào Cấu hình ▸ Workspace chọn folder khác."));
+  } else {
+    const scroll = el("div", "scroll");
+    const table = document.createElement("table");
+    const head = el("tr");
+    [["pick", ""], ["id", "story"], ["topic", "chủ đề"], ["step", "B1"], ["step", "B2"], ["step", "B3"],
+     ["img", "ảnh"], ["status", "status"], ["when", "sửa lúc"], ["act", ""]].forEach(pair => {
+      head.appendChild(el("th", pair[0], pair[1]));
+    });
+    const thead = el("thead");
+    thead.appendChild(head);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    rows().forEach(row => tbody.appendChild(rowNode(row)));
+    table.appendChild(tbody);
+    scroll.appendChild(table);
+    wrap.appendChild(scroll);
+  }
+  wrap.appendChild(el("div", "hint",
+    "▶ chạy 1 bước · ⚡ chạy đủ pipeline · ✎ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục)"));
+  root.appendChild(wrap);
+  unmarkSent();
+  updateBar();
+  setFrameHeight();
+}
+
+window.addEventListener("message", event => {
+  if (event.data && event.data.type === RENDER) render(event.data.args || {});
+});
+sendMessage(COMPONENT_READY, { apiVersion: 1 });
+window.addEventListener("load", () => setTimeout(setFrameHeight, 0));
+</script>
+</body>
+</html>

@@ -1,6 +1,5 @@
 import json
 import os
-from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
@@ -15,6 +14,8 @@ except ImportError:
 import db
 import fb_import
 import formats
+import grid
+import grid_actions as ga
 import images
 import paths
 import providers as prov
@@ -189,6 +190,13 @@ def story_option(sid: str, topic: str) -> str:
     return f"{sid} · {(topic or '(chưa đặt chủ đề)')[:50]}"
 
 
+def story_option_of(raw, options) -> str | None:
+    """Grid gửi id thô, nút trong trang gửi cả nhãn — cả hai phải chọn được bài."""
+    if raw in options:
+        return raw
+    return next((o for o in options if str(o).split(" · ")[0] == str(raw)), None)
+
+
 def page_create(c):
     root = stories.current()
     presets = db.list_presets(c)
@@ -204,8 +212,8 @@ def page_create(c):
 
     story_ids = stories.list_story_ids(root) if root else []
     options = [NEW_STORY] + [story_option(sid, stories.load_story(root, sid).get("topic") or "") for sid in story_ids]
-    pending = st.session_state.pop("select_story", None)
-    if pending in options:  # story vừa được tạo ở hành động trước -> chọn nó (set TRƯỚC khi widget sinh ra)
+    pending = story_option_of(st.session_state.pop("select_story", None), options)
+    if pending:  # story vừa được tạo ở hành động trước / mở từ Grid -> chọn nó (set TRƯỚC khi widget sinh ra)
         st.session_state["story_selector"] = pending
 
     st.selectbox("Story đang làm", options, key="story_selector")
@@ -718,39 +726,13 @@ def page_config(c):
         page_presets(c)
 
 
-# ---------- page: Lịch sử ----------
+# ---------- page: Grid ----------
 
-def page_history(c):
-    posts = db.list_posts(c)
-    if not posts:
-        st.info("Chưa có bài nào.")
-        return
-    st.subheader("Lịch sử bài viết")
-    for p in posts:
-        title = f"#{p['id']} · {p['topic'][:60] or '(trống)'} · {p['status']} · {datetime.fromtimestamp(p['updated_at']).strftime('%d/%m %H:%M')}"
-        with st.expander(title):
-            if p["caption"]:
-                st.markdown("**Caption**")
-                st.markdown(p["caption"])
-            if p["seo_text"]:
-                st.markdown("**Bài SEO**")
-                st.markdown(p["seo_text"])
-            imgs = json.loads(p["images"] or "[]")
-            if imgs:
-                st.markdown("**Ảnh**")
-                cols = st.columns(min(4, len(imgs)))
-                for idx, img in enumerate(imgs):
-                    with cols[idx % 4]:
-                        try:
-                            st.image(img["thumb"] or img["url"], caption=img.get("alt") or None)
-                        except Exception:
-                            st.caption(f"Ảnh {idx + 1}: {img['url']}")
-            pack = build_fb_pack(p)
-            if pack.strip():
-                st.code(pack)
+def page_grid(c):
+    grid.render(ga.build_ctx(c, require_root()))
 
 
-NAV = {"Tạo bài": page_create, "Cấu hình": page_config, "Lịch sử": page_history}
+NAV = {"Tạo bài": page_create, "Grid": page_grid, "Cấu hình": page_config}
 
 
 def _run_app():
@@ -764,7 +746,10 @@ def _run_app():
             os.startfile(str(ws))  # noqa: S606 — Windows only
     if MIGRATED:
         st.toast(f"Đã chuyển {len(MIGRATED)} mục cũ sang {paths.home()}", icon="📁")
-    choice = st.sidebar.radio("Chức năng", list(NAV.keys()))
+    pending_page = st.session_state.pop("pending_nav", None)  # grid ✎ đổi trang: set TRƯỚC khi radio sinh ra
+    if pending_page in NAV:
+        st.session_state["nav_page"] = pending_page
+    choice = st.sidebar.radio("Chức năng", list(NAV.keys()), key="nav_page")
     connection = conn()
     NAV[choice](connection)
     connection.close()

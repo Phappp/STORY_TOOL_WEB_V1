@@ -395,12 +395,30 @@ check("event rác -> không làm gì", out.lines == [] and out.copy is None)
 out = ga.apply_event(gctx, {"source": "archive", "id": sid_extra[5]})
 check("archive dời folder vào .trash", not (ga_root / sid_extra[5]).exists() and any(p.name.startswith(sid_extra[5] + "__") for p in (ga_root / ".trash").iterdir()))
 
+# --- P2c: grid.rows_for — dữ liệu cho component đọc từ folder story ---
+import grid as fbgrid
+
+rows_grid = fbgrid.rows_for(gctx)
+check("rows_for liệt kê đúng danh sách story còn trong workspace",
+      [r["id"] for r in rows_grid] == stories.list_story_ids(ga_root) and rows_grid)
+r_ok = next(r for r in rows_grid if r["id"] == sid_ok)
+check("rows_for mang đủ ô cho grid",
+      {"id", "topic", "status", "link", "has_input", "image", "detail", "states", "updated"} <= set(r_ok))
+check("rows_for báo state + ảnh + status thật của bài",
+      r_ok["states"] == {"b1": "done", "b2": "done", "b3": "done"} and r_ok["image"] == "image.png"
+      and r_ok["status"] == "posted" and r_ok["has_input"] and r_ok["updated"])
+r_empty = next(r for r in rows_grid if r["id"] == sid_empty)
+check("rows_for bài chưa có input: pending hết, không có ảnh",
+      not r_empty["has_input"] and list(r_empty["states"].values()) == ["pending"] * 3 and r_empty["image"] == "")
+
 stories.set_step_state(ga_root, sid_ok, "b1", "running")
 check("running còn mới hiện running", ga.step_states(ga_root, sid_ok)["b1"] == "running")
 old = stories.load_story(ga_root, sid_ok)
 old["b1"]["updated_at"] = time.time() - ga.STALE_SECONDS - 10
 stories.save_story(ga_root, sid_ok, old)
 check("running treo > 15 phút thành stale", ga.step_states(ga_root, sid_ok)["b1"] == ga.STALE)
+check("rows_for cũng đưa stale vào ô hiển thị",
+      next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_ok)["states"]["b1"] == ga.STALE)
 
 prov.chat, prov.codex_generate_image = real_chat, real_codex
 images.download_ref, images.search_images = real_download, real_search
@@ -462,7 +480,7 @@ if apply_btn is not None:
 
 at2 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at2.run()
-check("sidebar nav gộp Providers+Presets thành Cấu hình", set(at2.sidebar.radio[0].options) == {"Tạo bài", "Cấu hình", "Lịch sử"})
+check("sidebar nav: Grid thay trang Lịch sử", set(at2.sidebar.radio[0].options) == {"Tạo bài", "Grid", "Cấu hình"})
 at2.sidebar.radio[0].set_value("Cấu hình").run()
 check("page Cấu hình runs", not at2.exception)
 check("Cấu hình has Providers + Presets tabs", {"Providers", "Presets theo chủ đề"} <= {t.label for t in at2.tabs})
@@ -474,9 +492,58 @@ check("tab Workspace có form đường dẫn + danh sách story",
 check("Cấu hình shows data home", any("fb_tool.db" in (c.value or "") for c in at2.caption))
 
 at4 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at4.session_state["nav_page"] = "Grid"
 at4.run()
-at4.sidebar.radio[0].set_value("Lịch sử").run()
-check("page Lịch sử runs", not at4.exception)
+check("page Grid runs (chế độ component mặc định)", not at4.exception and any("Grid story" in (h.value or "") for h in at4.subheader))
+
+# --- P2c AppTest: Grid native + event từ component đi qua dispatcher ---
+grid_sid = stories.create_story(smoke_root, "Grid smoke", input_text="")["id"]
+posted_sid = stories.create_story(smoke_root, "Grid posted", input_text="")["id"]
+
+at_gn = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_gn.session_state["nav_page"] = "Grid"
+at_gn.session_state["grid_mode"] = fbgrid.MODE_NATIVE
+at_gn.session_state["native_pick"] = grid_sid
+at_gn.run()
+check("Grid native hiển thị bảng + form nút", not at_gn.exception and any(w.key == "native_pick" for w in at_gn.selectbox))
+btn_b1 = next((b for b in at_gn.button if b.label == "▶ B1"), None)
+check("Grid native: ▶ B1 bài chưa input bị chặn trước khi gọi provider", btn_b1 is not None)
+if btn_b1 is not None:
+    btn_b1.click().run()
+    check("Grid native: ▶ B1 bị chặn có log, không ghi file",
+          not at_gn.exception and any("input.txt" in line for line in at_gn.session_state.get("grid_log", []))
+          and not (smoke_root / grid_sid / "caption.txt").exists())
+btn_ok = next((b for b in at_gn.button if "Đã đăng" in b.label), None)
+if btn_ok is not None:
+    btn_ok.click().run()
+    check("Grid native: ✅ đổi status posted trong story.json", stories.load_story(smoke_root, grid_sid)["status"] == "posted")
+btn_open = next((b for b in at_gn.button if "Mở" in b.label), None)
+check("Grid native: 🗑 có nút dời vào .trash", any("Vào .trash" in b.label for b in at_gn.button))
+if btn_open is not None:
+    at_gn.session_state["native_pick"] = posted_sid
+    at_gn.run()
+    btn_open = next((b for b in at_gn.button if "Mở" in b.label), None)
+    btn_open.click().run()
+    check("Grid native: ✎ nhảy sang Tạo bài với bài được chọn",
+          not at_gn.exception and at_gn.session_state.get("nav_page") == "Tạo bài"
+          and str(at_gn.session_state.get("story_selector", "")).startswith(posted_sid))
+
+at_gc = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_gc.session_state["nav_page"] = "Grid"
+at_gc.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+at_gc.session_state[fbgrid.KEY] = {"event_id": "evt-smoke-1", "source": "mark_posted", "id": posted_sid}
+at_gc.run()
+check("Grid component: event mark_posted được tiêu thụ 1 lần",
+      not at_gc.exception and stories.load_story(smoke_root, posted_sid)["status"] == "posted"
+      and len(at_gc.session_state.get("grid_log", [])) == 1)
+at_gc.run()
+check("Grid component: event cũ không chạy lại ở rerun sau (latch event_id)",
+      len(at_gc.session_state.get("grid_log", [])) == 1 and not at_gc.exception)
+at_gc.session_state[fbgrid.KEY] = {"event_id": "evt-smoke-2", "source": "open", "id": posted_sid}
+at_gc.run()
+check("Grid component: event open chuyển sang trang Tạo bài",
+      not at_gc.exception and at_gc.session_state.get("nav_page") == "Tạo bài"
+      and str(at_gc.session_state.get("story_selector", "")).startswith(posted_sid))
 
 # --- AppTest: B3 format selector + copy block ---
 at_fmt = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
