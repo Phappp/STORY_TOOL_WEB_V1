@@ -22,7 +22,7 @@
   .bar { display:flex; gap:10px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); background:var(--header); }
   .bar .count { color:var(--muted); margin-left:auto; }
   .scroll { max-height:520px; overflow:auto; }
-  table { width:100%; min-width:920px; border-collapse:separate; border-spacing:0; table-layout:fixed; }
+  table { width:100%; min-width:1130px; border-collapse:separate; border-spacing:0; table-layout:fixed; }
   thead th { position:sticky; top:0; z-index:3; background:var(--header); text-align:left;
     font-weight:600; padding:7px 8px; border-bottom:1px solid var(--border); white-space:nowrap; user-select:none; }
   tbody td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:middle;
@@ -36,6 +36,12 @@
   th.status, td.status { width:70px; text-align:center; }
   th.when, td.when { width:92px; color:var(--muted); }
   th.act, td.act { width:140px; }
+  th.copy, td.copy { width:212px; }
+  button.copy { font-size:11px; padding:2px 5px; height:22px; margin-right:3px; }
+  button.copy.off { opacity:.4; }
+  button.copy.wait { opacity:.6; }
+  button.copy.ok { background:var(--done); color:var(--done-t); border-color:rgba(10,127,63,.35); }
+  button.copy.bad { background:var(--missing); color:var(--missing-t); }
   .chip { display:inline-block; min-width:52px; text-align:center; padding:2px 6px; border-radius:999px;
     font-size:11px; font-weight:600; background:var(--pending); color:var(--pending-t); cursor:default; }
   .chip.done { background:var(--done); color:var(--done-t); }
@@ -69,6 +75,8 @@ const MAX_BATCH = 5;
 
 const STATE_LABEL = { pending: "chờ", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
 const STEP_TITLE = { b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
+const COPY_FIELDS = ["Caption", "Bài SEO", "Input", "Link"];
+const COPY_SHORT = { "Caption": "Caption", "Bài SEO": "SEO", "Input": "Input", "Link": "Link" };
 
 function sendMessage(type, data) {
   window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data || {}), "*");
@@ -107,11 +115,84 @@ function button(label, title, fn, cls) {
   return b;
 }
 
-let MODEL = { rows: [], workspace: "" };
+let MODEL = { rows: [], workspace: "", copy_response: {} };
 const PICKED = new Set();
 let boxes = [];
 
 function rows() { return Array.isArray(MODEL.rows) ? MODEL.rows : []; }
+
+function lsGet(key) { try { return window.localStorage.getItem(key); } catch (_) { return null; } }
+function lsSet(key, value) { try { window.localStorage.setItem(key, value); } catch (_) {} }
+
+function fallbackCopy(value) {
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  ta.style.position = "fixed"; ta.style.left = "-9999px"; ta.style.top = "0";
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (_) {}
+  document.body.removeChild(ta);
+  return ok;
+}
+function copyToClipboard(value, done) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(value).then(() => done(true), () => done(fallbackCopy(value)));
+    return;
+  }
+  done(fallbackCopy(value));
+}
+function flash(b, label, cls) {
+  const old = b.textContent;
+  b.textContent = label;
+  b.classList.add(cls);
+  setTimeout(() => { b.textContent = old; b.classList.remove(cls); }, 1400);
+}
+function responseFor(row, field) {
+  const r = MODEL.copy_response || {};
+  if (!r.request_id) return null;
+  if (String(r.id) === String(row.id) && String(r.field) === field) return r;
+  return null;
+}
+function doCopy(b, text) {
+  if (!text) { flash(b, "trống", "bad"); return; }
+  copyToClipboard(text, ok => flash(b, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad"));
+}
+function copyCell(row) {
+  const td = el("td", "copy");
+  COPY_FIELDS.forEach(field => {
+    const b = el("button", "b copy");
+    b.type = "button";
+    b.textContent = COPY_SHORT[field] || field;
+    b.dataset.copyId = String(row.id);
+    b.dataset.copyField = field;
+    if (!(row.copyable && row.copyable[field])) {
+      b.classList.add("off");
+      b.title = field + " của bài này trống — chưa có gì để copy";
+    } else {
+      b.title = "Copy " + field + " của " + row.id;
+    }
+    b.addEventListener("click", e => {
+      e.preventDefault(); e.stopPropagation();
+      const r = responseFor(row, field);
+      if (r) { doCopy(b, String(r.text || "")); return; }  // chữ đã về từ lần request trước
+      b.classList.add("wait");
+      b.textContent = "…";
+      send({ source: "copy_request", id: row.id, field: field, request_id: eventId() });
+    });
+    td.appendChild(b);
+  });
+  return td;
+}
+function maybeAutoCopy() {
+  const r = MODEL.copy_response || {};
+  if (!r.request_id) return;
+  const key = "fbcopy:" + r.id + ":" + r.field + ":" + r.request_id;
+  if (lsGet(key) === "1") return;  // response là prop sticky: chỉ copy 1 lần cho 1 request_id
+  const b = document.querySelector('button.copy[data-copy-id="' + r.id + '"][data-copy-field="' + r.field + '"]');
+  if (!b) return;
+  lsSet(key, "1");
+  doCopy(b, String(r.text || ""));
+}
 
 function stepCell(row, step) {
   const td = el("td", "step");
@@ -181,6 +262,8 @@ function rowNode(row) {
 
   tr.appendChild(el("td", "when", row.updated || ""));
 
+  tr.appendChild(copyCell(row));
+
   const act = el("td", "act");
   act.appendChild(button("⚡", "Chạy đủ pipeline B1 → (B2 ∥ B3)", () => send({ source: "run_all", id: row.id }), "act"));
   act.appendChild(button("✎", "Mở bài này ở trang Tạo bài", () => send({ source: "open", id: row.id }), "act"));
@@ -214,7 +297,11 @@ function updateBar() {
 }
 
 function render(args) {
-  MODEL = { rows: Array.isArray(args.rows) ? args.rows : [], workspace: String(args.workspace || "") };
+  MODEL = {
+    rows: Array.isArray(args.rows) ? args.rows : [],
+    workspace: String(args.workspace || ""),
+    copy_response: args.copy_response && typeof args.copy_response === "object" ? args.copy_response : {},
+  };
   const alive = new Set(rows().map(r => String(r.id)));
   Array.from(PICKED).forEach(id => { if (!alive.has(id)) PICKED.delete(id); });
   boxes = [];
@@ -249,7 +336,7 @@ function render(args) {
     const table = document.createElement("table");
     const head = el("tr");
     [["pick", ""], ["id", "story"], ["topic", "chủ đề"], ["step", "B1"], ["step", "B2"], ["step", "B3"],
-     ["img", "ảnh"], ["status", "status"], ["when", "sửa lúc"], ["act", ""]].forEach(pair => {
+     ["img", "ảnh"], ["status", "status"], ["when", "sửa lúc"], ["copy", "copy"], ["act", ""]].forEach(pair => {
       head.appendChild(el("th", pair[0], pair[1]));
     });
     const thead = el("thead");
@@ -262,11 +349,12 @@ function render(args) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "▶ chạy 1 bước · ⚡ chạy đủ pipeline · ✎ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục)"));
+    "▶ chạy 1 bước · ⚡ chạy đủ pipeline · copy lấy chữ vào clipboard (chỉ xin nội dung khi bấm) · ✎ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục)"));
   root.appendChild(wrap);
   unmarkSent();
   updateBar();
   setFrameHeight();
+  maybeAutoCopy();  // response vừa về sau 1 request -> copy ngay trong lần render này
 }
 
 window.addEventListener("message", event => {

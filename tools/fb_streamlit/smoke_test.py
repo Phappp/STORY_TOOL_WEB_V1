@@ -410,6 +410,11 @@ check("rows_for báo state + ảnh + status thật của bài",
 r_empty = next(r for r in rows_grid if r["id"] == sid_empty)
 check("rows_for bài chưa có input: pending hết, không có ảnh",
       not r_empty["has_input"] and list(r_empty["states"].values()) == ["pending"] * 3 and r_empty["image"] == "")
+check("rows_for báo ô copy theo nội dung thật",
+      r_ok["copyable"] == {"Caption": True, "Bài SEO": True, "Input": True, "Link": False})
+stories.update_story(ga_root, sid_ok, link="https://www.facebook.com/x/posts/1")
+check("copyable Link bật khi story có link",
+      next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_ok)["copyable"]["Link"] is True)
 
 stories.set_step_state(ga_root, sid_ok, "b1", "running")
 check("running còn mới hiện running", ga.step_states(ga_root, sid_ok)["b1"] == "running")
@@ -544,6 +549,40 @@ at_gc.run()
 check("Grid component: event open chuyển sang trang Tạo bài",
       not at_gc.exception and at_gc.session_state.get("nav_page") == "Tạo bài"
       and str(at_gc.session_state.get("story_selector", "")).startswith(posted_sid))
+
+# --- P2d: copy chậm — grid xin, Python trả đúng chữ của file ---
+copy_sid = stories.create_story(smoke_root, "Grid copy", input_text="INPUT GỐC CỦA BÀI COPY")["id"]
+stories.save_step_text(smoke_root, copy_sid, "b1", "CAPTION TỪ FILE")
+
+at_cp = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_cp.session_state["nav_page"] = "Grid"
+at_cp.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+at_cp.session_state[fbgrid.KEY] = {"event_id": "evt-copy-1", "source": "copy_request", "id": copy_sid,
+                                   "field": "Caption", "request_id": "req-1"}
+at_cp.run()
+resp = at_cp.session_state.get("grid_copy_response") or {}
+check("Grid copy: request Caption trả đúng chữ trong caption.txt + request_id",
+      not at_cp.exception and resp.get("text") == "CAPTION TỪ FILE" and resp.get("id") == copy_sid
+      and resp.get("field") == "Caption" and resp.get("request_id") == "req-1")
+at_cp.session_state[fbgrid.KEY] = {"event_id": "evt-copy-2", "source": "copy_request", "id": copy_sid,
+                                   "field": "Link", "request_id": "req-2"}
+at_cp.run()
+check("Grid copy: field trống -> text rỗng + log báo rõ",
+      not at_cp.exception and at_cp.session_state.get("grid_copy_response", {}).get("text") == ""
+      and any("trống" in line for line in at_cp.session_state.get("grid_log", [])))
+at_cp.run()
+check("Grid copy: response không sinh thêm việc ở rerun sau",
+      not at_cp.exception and len(at_cp.session_state.get("grid_log", [])) == 1)
+
+at_cn = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_cn.session_state["nav_page"] = "Grid"
+at_cn.session_state["grid_mode"] = fbgrid.MODE_NATIVE
+at_cn.session_state["native_pick"] = copy_sid
+at_cn.run()
+codes = [c.value or "" for c in at_cn.code]
+check("Grid native: khối copy hiện đủ 4 nội dung, Link trống ghi rõ",
+      not at_cn.exception and "CAPTION TỪ FILE" in codes and "INPUT GỐC CỦA BÀI COPY" in codes
+      and codes.count("(trống)") == 2)
 
 # --- AppTest: B3 format selector + copy block ---
 at_fmt = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)

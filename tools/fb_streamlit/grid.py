@@ -43,6 +43,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
     out = []
     for sid in stories.list_story_ids(ctx.root):
         summary = stories.story_summary(ctx.root, sid)
+        states = ga.step_states(ctx.root, sid)
         out.append({
             "id": sid,
             "topic": summary["topic"],
@@ -51,8 +52,10 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "has_input": summary["has_input"],
             "image": summary["image"],
             "detail": summary["detail"],
-            "states": ga.step_states(ctx.root, sid),
+            "states": states,
             "updated": _when(summary["updated_at"]),
+            "copyable": {"Caption": states["b1"] == stories.DONE, "Bài SEO": states["b3"] == stories.DONE,
+                         "Input": summary["has_input"], "Link": bool(summary["link"].strip())},
         })
     return out
 
@@ -61,6 +64,11 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     out = ga.apply_event(ctx, event)
     lines = [line for line in out.lines if line]
     st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + lines)[-LOG_LIMIT:]
+    if str(event.get("source") or "") == "copy_request":
+        # prop copy_response chỉ đi kèm 1 lần render -> giữ lại để JS copy đúng 1 lần theo request_id
+        st.session_state["grid_copy_response"] = out.copy or {
+            "id": str(event.get("id") or ""), "field": str(event.get("field") or ""),
+            "request_id": str(event.get("request_id") or ""), "text": ""}
     if out.select:
         st.session_state["select_story"] = out.select
     if out.nav:
@@ -88,7 +96,9 @@ def show_log() -> None:
 def render_component(ctx: ga.Ctx) -> bool:
     """Vẽ grid bằng component; trả False nếu component không dùng được."""
     try:
-        component()(rows=rows_for(ctx), workspace=str(ctx.root), default=None, key=KEY)
+        component()(rows=rows_for(ctx), workspace=str(ctx.root),
+                    copy_response=st.session_state.get("grid_copy_response") or {},
+                    default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
         st.session_state["grid_component_error"] = f"{type(exc).__name__}: {exc}"
         return False
@@ -139,6 +149,24 @@ def render_native(ctx: ga.Ctx, rows: list[dict]) -> None:
                  disabled=not picked, key="native_batch_run"):
         _after(ctx, {"source": "batch_run", "ids": picked})
         st.rerun()
+    copy_blocks(ctx, sid)
+
+
+def copy_blocks(ctx: ga.Ctx, sid: str) -> None:
+    """Bản native của nút copy trong grid: st.code luôn có nút sao chép của Streamlit."""
+    story = stories.load_story(ctx.root, sid)
+    with st.expander(f"Copy nội dung {sid}", expanded=False):
+        col_left, col_right = st.columns(2)
+        with col_left:
+            st.caption("Caption (B1)")
+            st.code(stories.step_text(ctx.root, sid, "b1") or "(trống)")
+            st.caption("Input")
+            st.code(stories.input_text(ctx.root, sid) or "(trống)")
+        with col_right:
+            st.caption("Bài SEO (B3)")
+            st.code(stories.step_text(ctx.root, sid, "b3") or "(trống)")
+            st.caption("Link")
+            st.code(str(story.get("link") or "") or "(trống)")
 
 
 def render(ctx: ga.Ctx) -> None:
