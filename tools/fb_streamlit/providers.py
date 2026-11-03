@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,32 @@ import httpx
 
 class ProviderError(RuntimeError):
     pass
+
+
+def http_verify() -> bool:
+    return os.getenv("HTTP_VERIFY_SSL", "true").lower() != "false"
+
+
+RAW_KEY_RE = re.compile(r"^sk-[A-Za-z0-9_\-]{20,}$")
+
+
+def migrate_raw_keys(conn) -> list[tuple[str, str]]:
+    """Key bị dán nhầm vào cột key_env -> chuyển vào .env, DB chỉ giữ tên biến."""
+    moved = []
+    env_path = Path(__file__).resolve().with_name(".env")
+    for r in conn.execute("SELECT * FROM providers").fetchall():
+        current = (r["key_env"] or "").strip()
+        if not RAW_KEY_RE.match(current):
+            continue
+        var = re.sub(r"[^A-Z0-9]", "", r["name"].upper()) + "_API_KEY"
+        existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+        if var not in existing:
+            with env_path.open("a", encoding="utf-8") as fh:
+                fh.write(f"\n{var}={current}\n")
+        conn.execute("UPDATE providers SET key_env=? WHERE id=?", (var, r["id"]))
+        moved.append((r["name"], var))
+    conn.commit()
+    return moved
 
 
 def _api_key(provider) -> str:
@@ -59,6 +86,7 @@ def _openai_chat(provider, model: str, prompt: str, system: str, temperature: fl
             headers=headers,
             json={"model": model, "messages": messages, "temperature": temperature},
             timeout=240,
+            verify=http_verify(),
         )
     except httpx.HTTPError as exc:
         raise ProviderError(f"Lỗi kết nối tới {base_url}: {exc}") from exc
@@ -97,6 +125,24 @@ def _codex_chat(prompt: str, system: str) -> str:
     return (proc.stdout or "").strip()
 
 
+def codex_login_status() -> str:
+    binary = _codex_bin()
+    try:
+        proc = subprocess.run([binary, "login", "status"], capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise ProviderError(f"Không chạy được codex login status: {exc}") from exc
+    text = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if proc.returncode == 0 and text and "not logged" not in text.lower():
+        return f"Đã đăng nhập: {text}"
+    return f"CHƯA ĐĂNG NHẬP — {text or 'codex login status trả về rỗng'}"
+
+
+def codex_login() -> str:
+    binary = _codex_bin()
+    subprocess.Popen([binary, "login"])
+    return "Đã chạy `codex login` — browser sẽ mở ra để bạn đăng nhập. Xong rồi bấm 'Kiểm tra trạng thái'."
+
+
 def test_connection(provider) -> str:
     if provider["kind"] == "codex_cli":
         binary = _codex_bin()
@@ -110,7 +156,7 @@ def test_connection(provider) -> str:
     if key:
         headers["Authorization"] = f"Bearer {key}"
     try:
-        resp = httpx.get(f"{base_url}/models", headers=headers, timeout=60)
+        resp = httpx.get(f"{base_url}/models", headers=headers, timeout=60, verify=http_verify())
     except httpx.HTTPError as exc:
         raise ProviderError(f"Không kết nối được {base_url}: {exc}") from exc
     if resp.status_code >= 400:

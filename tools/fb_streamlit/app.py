@@ -7,6 +7,12 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
+try:  # mạng có proxy MITM: dùng certificate store của Windows thay vì certifi
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 import db
 import images
 import providers as prov
@@ -21,7 +27,11 @@ KIND_LABELS = {"openai": "API OpenAI-compatible (OpenRouter, top-tools…)", "co
 # ---------- helpers ----------
 
 def conn():
-    return db.connect()
+    c = db.connect()
+    moved = prov.migrate_raw_keys(c)
+    for name, var in moved:
+        st.toast(f"'{name}': key đã chuyển vào .env → biến {var}", icon="🔐")
+    return c
 
 
 def provider_rows(c):
@@ -471,7 +481,7 @@ def page_providers(c):
         name = st.text_input("Tên *", placeholder="OpenRouter")
         kind = st.selectbox("Loại", list(KIND_LABELS.keys()), format_func=lambda k: KIND_LABELS[k])
         base_url = st.text_input("Base URL (chỉ loại OpenAI-compatible)", placeholder="https://openrouter.ai/api/v1")
-        key_env = st.text_input("Tên biến môi trường chứa API key", placeholder="OPENROUTER_API_KEY", help="Đặt giá trị thật trong file tools/fb_streamlit/.env — key không bao giờ lưu vào DB.")
+        key_env = st.text_input("Tên biến môi trường chứa API key", placeholder="OPENROUTER_API_KEY", help="CHỈ đặt TÊN biến (vd TOPTOOLS_API_KEY) — dán giá trị key thật vào file .env, không dán key vào ô này.")
         models = st.text_input("Models (phân cách bởi dấu phẩy)", placeholder="deepseek/deepseek-chat, anthropic/claude-sonnet-4.5")
         if st.form_submit_button("Thêm provider"):
             if not name.strip():
@@ -503,6 +513,18 @@ def page_providers(c):
             st.success("Đã xóa.")
         if r["kind"] == "openai" and not (r["key_env"] or "").strip():
             st.caption("Lưu ý: provider không có key env thì request sẽ gửi không Authorization header (chỉ dùng được với endpoint công khai).")
+        if r["kind"] == "codex_cli":
+            l1, l2 = st.columns(2)
+            if l1.button("🔑 Đăng nhập Codex (mở browser)"):
+                try:
+                    st.info(prov.codex_login())
+                except prov.ProviderError as exc:
+                    st.error(str(exc))
+            if l2.button("Kiểm tra trạng thái đăng nhập"):
+                try:
+                    st.success(prov.codex_login_status())
+                except prov.ProviderError as exc:
+                    st.error(str(exc))
 
 
 # ---------- page: Lịch sử ----------

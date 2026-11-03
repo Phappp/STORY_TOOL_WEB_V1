@@ -4,6 +4,8 @@ import re
 
 import httpx
 
+from providers import http_verify
+
 
 def extract_keywords(text: str) -> list[str]:
     m = re.search(r"\[[\s\S]*?\]", text)
@@ -43,6 +45,7 @@ def _unsplash(query: str, count: int) -> list[dict]:
         headers={"Authorization": f"Client-ID {os.getenv('UNSPLASH_ACCESS_KEY').strip()}"},
         params={"query": query, "per_page": count},
         timeout=60,
+        verify=http_verify(),
     )
     if resp.status_code >= 400:
         raise RuntimeError(f"Unsplash HTTP {resp.status_code}: {resp.text[:200]}")
@@ -58,6 +61,7 @@ def _pexels(query: str, count: int) -> list[dict]:
         headers={"Authorization": os.getenv("PEXELS_API_KEY").strip()},
         params={"query": query, "per_page": count},
         timeout=60,
+        verify=http_verify(),
     )
     if resp.status_code >= 400:
         raise RuntimeError(f"Pexels HTTP {resp.status_code}: {resp.text[:200]}")
