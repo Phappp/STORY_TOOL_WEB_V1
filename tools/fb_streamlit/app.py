@@ -16,6 +16,7 @@ except ImportError:
 
 import db
 import fb_import
+import formats
 import images
 import providers as prov
 
@@ -58,12 +59,12 @@ def data_block(post) -> str:
     return "\n".join(parts)
 
 
-def build_fb_pack(post) -> str:
+def build_fb_pack(post, fmt: str = "Markdown (blog/SEO)") -> str:
     parts = []
     if post["caption"]:
-        parts.append(post["caption"])
+        parts.append(formats.render(post["caption"], fmt))
     if post["seo_text"]:
-        parts.append("\n" + post["seo_text"])
+        parts.append("\n" + formats.render(post["seo_text"], fmt))
     imgs = json.loads(post["images"] or "[]")
     if imgs:
         parts.append("\nẢnh đính kèm:\n" + "\n".join(f"- {img['url']}" for img in imgs))
@@ -569,13 +570,34 @@ def page_create(c):
             db.update_post(c, st.session_state["post_id"], seo_text=seo)
             st.success("Đã tạo bài + lưu SEO.")
 
+    st.subheader("Định dạng bài SEO để copy")
+    if seo.strip():
+        fmt = st.radio(
+            "Chọn định dạng",
+            ["Markdown (blog/SEO)", "Unicode đậm (dán Facebook)", "Text thường"],
+            horizontal=True,
+            key="b3_format",
+        )
+        variant = formats.render(seo, fmt)
+        if fmt.startswith("Markdown"):
+            st.markdown("**Bản render thử** (đúng đậm/đề mục/cỡ chữ như web sẽ hiển thị):")
+            st.markdown(variant)
+        elif fmt.startswith("Unicode"):
+            st.caption("Đề mục → IN HOA + vạch ━; cụm **đậm** chỉ thành chữ đậm Unicode khi toàn bộ là ASCII, ngược lại IN HOA (Unicode không có chữ đậm cho tiếng Việt có dấu).")
+        st.code(variant, language=None)
+    else:
+        st.caption("Chưa có bài SEO để định dạng.")
+
     st.subheader("Xuất bản Facebook")
     if st.session_state.get("post_id"):
         post = db.get_post(c, st.session_state["post_id"])
-        pack = build_fb_pack(post)
+        chosen_fmt = st.session_state.get("b3_format", "Markdown (blog/SEO)")
+        pack = build_fb_pack(post, chosen_fmt)
         if pack.strip():
+            st.caption(f"Định dạng đang dùng: {chosen_fmt} (đổi ở mục B3)")
             st.code(pack)
-            e1, e2 = st.columns([1, 1])
+            e1, e2, e3 = st.columns([1, 1, 2])
+            e3.download_button("Tải file .txt", pack, file_name=f"fb-post-{post['id']}.txt", mime="text/plain")
             if e1.button("Đánh dấu đã đăng"):
                 db.update_post(c, post["id"], status="posted")
                 st.success("OK, status = posted.")

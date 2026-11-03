@@ -96,6 +96,17 @@ for bad, why in (("", "empty"), ("https://tiktok.com/@x/video/1", "non-fb")):
     except RuntimeError as exc:
         check(f"extract rejects {why}", "link" in str(exc).lower())
 
+# --- unit: B3 output formats (markdown / fb unicode / plain) ---
+import formats
+
+check("bold_text ascii -> unicode bold", formats.bold_text("Breaking") == "𝐁𝐫𝐞𝐚𝐤𝐢𝐧𝐠")
+check("bold_text vietnamese -> uppercase", formats.bold_text("Quan trọng") == "QUAN TRỌNG")
+fb = formats.to_fb_unicode("## Công bố **quan trọng** hôm nay\n\n- Gạch [link bài](https://x.com/a)\n")
+check("to_fb_unicode heading ruled + upper", fb.splitlines()[0].startswith("━━━") and "QUAN TRỌNG" in fb)
+check("to_fb_unicode strips md markers", "**" not in fb and "](" not in fb and "• Gạch link bài" in fb)
+check("to_plain removes markers", formats.to_plain("## Tiêu đề **nhấn**\n\nXem [link](https://x.com)") == "Tiêu đề nhấn\n\nXem link")
+check("render keeps markdown as source", formats.render("## A **b**", "Markdown (blog/SEO)") == "## A **b**")
+
 # --- AppTest: each page renders without exception ---
 at = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30).run()
 check("page 'Tạo bài' runs", not at.exception)
@@ -148,6 +159,19 @@ at4 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=3
 at4.run()
 at4.sidebar.radio[0].set_value("Lịch sử").run()
 check("page Lịch sử runs", not at4.exception)
+
+# --- AppTest: B3 format selector + copy block ---
+at_fmt = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_fmt.session_state["seo_draft"] = "## Tiêu đề **nhấn**\n\nNội dung bài SEO."
+at_fmt.run()
+check("B3 runs with seo text", not at_fmt.exception)
+check("B3 format radio has 3 modes", any({"Markdown (blog/SEO)", "Unicode đậm (dán Facebook)", "Text thường"} <= set(r.options or []) for r in at_fmt.radio))
+check("B3 copy block rendered", len(at_fmt.code) >= 1)
+fmt_radio = next((r for r in at_fmt.radio if "Unicode đậm (dán Facebook)" in (r.options or [])), None)
+if fmt_radio is not None:
+    fmt_radio.set_value("Unicode đậm (dán Facebook)").run()
+    codes = [c.value for c in at_fmt.code]
+    check("B3 unicode mode changes copy block", not at_fmt.exception and any("━━━" in c for c in codes))
 
 # --- AppTest: add provider through the form widget ---
 at5 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
