@@ -5,10 +5,12 @@ Mỗi story: story.json (trạng thái) + input.txt + caption.txt + seo.md + ima
 Mọi đường dẫn lưu trong story.json đều TƯƠNG ĐỐI để copy folder sang máy khác vẫn dùng được.
 """
 
+import functools
 import json
 import os
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -178,6 +180,20 @@ def list_story_ids(root: Path) -> list[str]:
 # ---------- đọc/ghi file ----------
 
 
+_STORY_LOCK = threading.RLock()
+
+
+def serialized(fn):
+    """Giữ các bước đọc-rồi-ghi story.json chạy tuần tự (pipeline gọi B2 ∥ B3 cùng một story)."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _STORY_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
 def _write_text(path: Path, text: str) -> None:
     """Ghi atomic để không để lại file giữa chừng khi tiến trình chết."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +228,7 @@ def load_story(root: Path, sid: str) -> dict:
     return data
 
 
+@serialized
 def save_story(root: Path, sid: str, story: dict) -> dict:
     folder = story_dir(root, sid)
     story = dict(story)
@@ -223,6 +240,7 @@ def save_story(root: Path, sid: str, story: dict) -> dict:
     return story
 
 
+@serialized
 def create_story(root: Path, topic: str = "", preset_id=None, input_text: str = "", link: str = "") -> dict:
     sid = next_story_id(root)
     folder = root / sid
@@ -251,6 +269,7 @@ def input_text(root: Path, sid: str) -> str:
     return _read_text(story_dir(root, sid) / INPUT_FILE)
 
 
+@serialized
 def save_input(root: Path, sid: str, text: str) -> dict:
     """input.txt = dữ liệu gốc (B0/Input); topic tự lấy dòng đầu tiên nếu story chưa có tên."""
     folder = story_dir(root, sid)
@@ -262,6 +281,7 @@ def save_input(root: Path, sid: str, text: str) -> dict:
     return save_story(root, sid, story)
 
 
+@serialized
 def update_story(root: Path, sid: str, **fields) -> dict:
     story = load_story(root, sid)
     story.update(fields)
@@ -274,6 +294,7 @@ def step_text(root: Path, sid: str, step: str) -> str:
     return _read_text(story_dir(root, sid) / STEP_FILE[step])
 
 
+@serialized
 def save_step_text(root: Path, sid: str, step: str, text: str, **meta) -> dict:
     """B1 -> caption.txt, B3 -> seo.md, đồng thời cập nhật state trong story.json."""
     if step not in ("b1", "b3"):
@@ -296,6 +317,7 @@ def _image_file(folder: Path) -> Path | None:
     return found[0] if found else None
 
 
+@serialized
 def save_image(root: Path, sid: str, src, method: str = "", refs: list[str] | None = None, keywords: list[str] | None = None, source_url: str = "") -> dict:
     """B2 giữ đúng 1 ảnh: luôn là image.png, ảnh cũ bị xóa khi ghi đè."""
     src = Path(str(src))
@@ -324,6 +346,7 @@ def save_image(root: Path, sid: str, src, method: str = "", refs: list[str] | No
     return save_story(root, sid, story)
 
 
+@serialized
 def save_ref(root: Path, sid: str, src, url: str = "") -> dict:
     """Ảnh tham chiếu B0 nằm trong story, tên refs/ref_1.png + ref.json ghi url gốc."""
     src = Path(str(src))
@@ -376,6 +399,7 @@ def archive_story(root: Path, sid: str) -> Path:
     return dest
 
 
+@serialized
 def set_step_state(root: Path, sid: str, step: str, state: str, detail: str = "", **meta) -> dict:
     if step not in STEPS:
         raise WorkspaceError(f"Bước không hợp lệ: {step}")
@@ -435,6 +459,28 @@ def story_summary(root: Path, sid: str) -> dict:
 
 def list_stories(root: Path) -> list[dict]:
     return [story_summary(root, sid) for sid in list_story_ids(root)]
+
+
+def post_view(root: Path, sid: str) -> dict:
+    """Story folder -> dict cùng khóa với hàng posts cũ, để prompt/xuất bản không phải đổi."""
+    story = load_story(root, sid)
+    image = image_of(root, sid)
+    block = story.get("b2") or {}
+    entries = []
+    if image:
+        entries = [{"url": str(image), "thumb": str(image), "alt": str(block.get("alt") or ""), "source": str(block.get("method") or "story")}]
+    return {
+        "id": sid,
+        "topic": str(story.get("topic") or ""),
+        "summary": "",
+        "details": input_text(root, sid),
+        "caption": step_text(root, sid, "b1"),
+        "seo_text": step_text(root, sid, "b3"),
+        "keywords": json.dumps(block.get("keywords") or []),
+        "images": json.dumps(entries),
+        "status": str(story.get("status") or "draft"),
+        "preset_id": story.get("preset_id"),
+    }
 
 
 # ---------- migrate hàng posts (DB cũ) vào workspace ----------

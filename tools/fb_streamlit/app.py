@@ -1,8 +1,5 @@
 import json
 import os
-import re
-import unicodedata
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -21,7 +18,9 @@ import formats
 import images
 import paths
 import providers as prov
+import steps
 import stories
+from prompts import b2_image_prompt, build_fb_pack
 
 MIGRATED = paths.migrate_legacy()  # data/ + .env cũ -> home, bản cũ thành data_backup_*
 load_dotenv(paths.env_path())
@@ -52,77 +51,11 @@ def model_picker(provider, key):
     return st.text_input("Model (provider này chưa có danh sách — tự nhập)", key=f"{key}_input")
 
 
-def data_block(post) -> str:
-    parts = []
-    if post["topic"]:
-        parts.append("Chủ đề: " + post["topic"])
-    if post["summary"]:
-        parts.append("Tóm tắt: " + post["summary"])
-    if post["details"]:
-        parts.append("Nội dung: " + post["details"])
-    return "\n".join(parts)
-
-
-def build_fb_pack(post, fmt: str = "Markdown (blog/SEO)") -> str:
-    parts = []
-    if post["caption"]:
-        parts.append(formats.render(post["caption"], fmt))
-    if post["seo_text"]:
-        parts.append("\n" + formats.render(post["seo_text"], fmt))
-    imgs = json.loads(post["images"] or "[]")
-    if imgs:
-        parts.append("\nẢnh đính kèm:\n" + "\n".join(f"- {img['url']}" for img in imgs))
-    return "\n".join(parts)
-
-
-def _norm_token(s: str) -> str:
-    s = unicodedata.normalize("NFD", s)
-    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
-    return "".join(ch for ch in s.upper() if ch.isalnum())
-
-
-def prompt_context(post, caption_override=None) -> dict:
-    old_caption = post["details"] or post["summary"] or post["topic"]
-    new_caption = caption_override or post["caption"] or old_caption
-    return {
-        "caption cũ": old_caption,
-        "caption mới tạo": new_caption,
-        "dữ liệu": data_block(post),
-        "chủ đề": post["topic"],
-    }
-
-
-def gen_prompt(template: str, ctx: dict, extra_fallback: str = "") -> str:
-    """Thay <TOKEN>/{TOKEN} trùng tên với khóa ngữ cảnh; không có token -> nối khối dữ liệu cuối prompt."""
-    replaced = False
-
-    def repl(m):
-        nonlocal replaced
-        tok = _norm_token(m.group(0))
-        for key, value in ctx.items():
-            if _norm_token(key) == tok:
-                replaced = True
-                return str(value or "")
-        return m.group(0)
-
-    out = re.sub(r"<[^<>\n]{1,40}>|\{[^{}\n]{1,40}\}", repl, template)
-    if not replaced:
-        out = out + "\n\n---\n" + ctx["dữ liệu"] + extra_fallback
-    return out
-
-
 def step_provider_model(rows, step):
     pid = st.session_state.get(f"gen_provider_{step}")
     provider = rows.get(pid) if pid in rows else None
     model = st.session_state.get(f"gen_model_{step}_select") or st.session_state.get(f"gen_model_{step}_input") or ""
     return provider, model
-
-
-def b2_image_prompt(preset, post, caption: str) -> str:
-    """Prompt tạo ảnh B2 = template preset với <CAPTION MỚI TẠO> đã thay bằng caption B1."""
-    template = (preset["image_prompt"] or "").strip() or "<CAPTION MỚI TẠO>"
-    base = post if post is not None else {"topic": "", "summary": "", "details": caption, "caption": caption}
-    return gen_prompt(template, prompt_context(base, caption))
 
 
 def collect_refs() -> list:
@@ -135,28 +68,6 @@ def collect_refs() -> list:
     if up is not None:
         refs.append(images.save_ref_upload(up))
     return refs
-
-
-def story_post(root, sid: str) -> dict:
-    """Story folder -> dict cùng khóa với hàng posts cũ, để prompt/xuất bản không phải đổi."""
-    story = stories.load_story(root, sid)
-    image = stories.image_of(root, sid)
-    block = story.get("b2") or {}
-    entries = []
-    if image:
-        entries = [{"url": str(image), "thumb": str(image), "alt": str(block.get("alt") or ""), "source": str(block.get("method") or "story")}]
-    return {
-        "id": sid,
-        "topic": str(story.get("topic") or ""),
-        "summary": "",
-        "details": stories.input_text(root, sid),
-        "caption": stories.step_text(root, sid, "b1"),
-        "seo_text": stories.step_text(root, sid, "b3"),
-        "keywords": json.dumps(block.get("keywords") or []),
-        "images": json.dumps(entries),
-        "status": str(story.get("status") or "draft"),
-        "preset_id": story.get("preset_id"),
-    }
 
 
 def require_root() -> Path:
@@ -178,12 +89,10 @@ def sync_staged_refs(root: Path, sid: str) -> None:
 
 
 def attach_single_image(root: Path, sid: str, src, method: str = "stock", source_url: str = "") -> Path:
-    """B2 chỉ giữ 1 ảnh: ảnh mới ghi đè image.png trong folder story."""
-    if str(src).startswith(("http://", "https://")):
-        src = images.download_ref(str(src))
-    stories.save_image(root, sid, src, method=method, source_url=source_url)
-    st.session_state["saved_images"] = json.loads(story_post(root, sid)["images"])
-    return stories.image_of(root, sid)
+    """B2 chỉ giữ 1 ảnh: ảnh mới ghi đè image.png trong folder story, ô 'Ảnh của bài' cập nhật ngay."""
+    image = steps.save_image(root, sid, src, method=method, source_url=source_url)
+    st.session_state["saved_images"] = json.loads(stories.post_view(root, sid)["images"])
+    return image
 
 
 def generation_controls(c):
@@ -307,7 +216,7 @@ def page_create(c):
 
     if st.session_state.get("loaded_story") != story_id:
         st.session_state["loaded_story"] = story_id
-        post = story_post(root, story_id) if (root and story_id) else None
+        post = stories.post_view(root, story_id) if (root and story_id) else None
         st.session_state["details_field"] = post["details"] if post else ""
         st.session_state["caption_draft"] = post["caption"] if post else ""
         st.session_state["seo_draft"] = post["seo_text"] if post else ""
@@ -375,109 +284,39 @@ def page_create(c):
             stories.save_input(wroot, story_id, input_text)
             stories.update_story(wroot, story_id, preset_id=pid)
         sync_staged_refs(wroot, story_id)
-        st.session_state["select_story"] = story_option(story_id, story_post(wroot, story_id)["topic"])
-        return story_post(wroot, story_id)
+        st.session_state["select_story"] = story_option(story_id, stories.post_view(wroot, story_id)["topic"])
+        return stories.post_view(wroot, story_id)
 
     if run_all:
         post = ensure_story()
         wroot = require_root()
         sid = story_id
         rows = provider_rows(c)
-        steps_log = []
-        p1, m1 = step_provider_model(rows, "caption")
-        p2, m2 = step_provider_model(rows, "keyword")
-        p3, m3 = step_provider_model(rows, "seo")
-
-        cap = None
-        if p1 and (preset["caption_prompt"] or "").strip():
-            stories.set_step_state(wroot, sid, "b1", "running", provider=p1["name"], model=m1)
-            with st.spinner("B1 · Tạo caption…"):
-                try:
-                    cap = prov.chat(p1, m1, gen_prompt(preset["caption_prompt"], prompt_context(post)))
-                    stories.save_step_text(wroot, sid, "b1", cap, provider=p1["name"], model=m1)
-                    post = story_post(wroot, sid)
-                    steps_log.append("B1 caption: OK")
-                except prov.ProviderError as exc:
-                    stories.set_step_state(wroot, sid, "b1", "error", detail=str(exc))
-                    steps_log.append(f"B1 caption LỖI: {exc}")
-        else:
-            steps_log.append("B1 caption: bỏ qua (thiếu provider hoặc prompt)")
-
-        caption_now = cap or st.session_state.get("caption_draft") or post["caption"]
-        ctx = prompt_context(post, caption_now)
-
-        img_prompt = b2_image_prompt(preset, post, caption_now)
-        codex_row = p2 if (p2 and p2["kind"] == "codex_cli") else next((r for r in rows.values() if r["kind"] == "codex_cli"), None)
+        providers = {
+            "b1": step_provider_model(rows, "caption"),
+            "b2": step_provider_model(rows, "keyword"),
+            "b3": step_provider_model(rows, "seo"),
+        }
+        ref_log = []
         try:
             ref_paths = collect_refs()
         except Exception as exc:
             ref_paths = []
-            steps_log.append(f"Ảnh gốc LỖI: {exc}")
+            ref_log.append(f"Ảnh gốc LỖI: {exc}")
 
-        def b2_task():
-            """Trả (log_lines, keywords, nguồn ảnh: file local | url stock | None)."""
-            lines, kws = [], []
-            if codex_row is not None and img_prompt:
-                stories.set_step_state(wroot, sid, "b2", "running", method="codex")
-                try:
-                    src = prov.codex_generate_image(img_prompt, ref_paths)
-                    return [f"B2: tạo ảnh Codex OK"], [], src
-                except prov.ProviderError as exc:
-                    lines.append(f"B2 codex lỗi — fallback stock: {str(exc)[:150]}")
-            if not (p2 and (preset["keyword_prompt"] or "").strip()):
-                return lines or ["B2 ảnh: bỏ qua (không có Codex imagegen hoặc thiếu prompt từ khóa)"], kws, None
-            try:
-                raw = prov.chat(p2, m2, gen_prompt(preset["keyword_prompt"], ctx))
-                kws = images.extract_keywords(raw)
-                for kw in kws[:4]:
-                    try:
-                        found = images.search_images(kw, count=4)
-                    except Exception as exc:
-                        lines.append(f"B2 ảnh '{kw}': {exc}")
-                        continue
-                    if found:
-                        lines.append(f"B2 stock: lấy ảnh đầu tiên của từ khóa '{kw}' ({len(kws)} từ khóa)")
-                        return lines, kws, found[0]["url"]
-                lines.append("B2 stock: không tìm được ảnh nào")
-            except prov.ProviderError as exc:
-                lines.append(f"B2 stock LỖI: {exc}")
-            return lines, kws, None
+        with st.spinner("⚡ B1 · caption → (B2 ảnh ∥ B3 SEO) đang chạy…"):
+            res = steps.run_pipeline(wroot, sid, preset, post, ref_paths, rows, providers,
+                                     caption=st.session_state.get("caption_draft"), extra_lines=ref_log)
 
-        def b3_task():
-            if not (p3 and (preset["seo_prompt"] or "").strip()):
-                return "B3 SEO: bỏ qua (thiếu provider hoặc prompt)", None
-            stories.set_step_state(wroot, sid, "b3", "running", provider=p3["name"], model=m3)
-            try:
-                return "B3 SEO: OK", prov.chat(p3, m3, gen_prompt(preset["seo_prompt"], ctx, extra_fallback="\nCaption đã duyệt:\n" + (post["caption"] or "—")))
-            except prov.ProviderError as exc:
-                stories.set_step_state(wroot, sid, "b3", "error", detail=str(exc))
-                return f"B3 SEO LỖI: {exc}", None
-
-        with st.spinner("B2 (ảnh) ∥ B3 (SEO) đang chạy song song…"):
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                fut_b2 = pool.submit(b2_task)
-                fut_b3 = pool.submit(b3_task)
-                log_b2, kws, img_src = fut_b2.result()
-                log_b3, seo = fut_b3.result()
-
-        if cap is not None:
-            st.session_state["caption_draft"] = cap
-        if kws:
-            st.session_state["keywords_text"] = ", ".join(kws)
-            block = dict(stories.load_story(wroot, sid).get("b2") or {})
-            block["keywords"] = kws
-            stories.update_story(wroot, sid, b2=block)
-        if img_src:
-            is_url = str(img_src).startswith(("http://", "https://"))
-            attach_single_image(wroot, sid, img_src, method="stock" if is_url else "codex", source_url=str(img_src) if is_url else "")
-            steps_log.append(f"B2: đã lưu 1 ảnh vào {sid}/image.png (ghi đè ảnh cũ)")
-        else:
-            stories.set_step_state(wroot, sid, "b2", "pending", detail="chưa có ảnh cho bước này")
-        if seo:
-            st.session_state["seo_draft"] = seo
-            stories.save_step_text(wroot, sid, "b3", seo, provider=p3["name"], model=m3)
-
-        for line in steps_log + log_b2 + [log_b3]:
+        if res.cap is not None:
+            st.session_state["caption_draft"] = res.cap
+        if res.keywords:
+            st.session_state["keywords_text"] = ", ".join(res.keywords)
+        if res.seo:
+            st.session_state["seo_draft"] = res.seo
+        if res.image is not None:
+            st.session_state["saved_images"] = json.loads(stories.post_view(wroot, sid)["images"])
+        for line in res.lines:
             (st.error if "LỖI" in line else st.success)(line)
         st.stop()
 
@@ -494,13 +333,13 @@ def page_create(c):
             else:
                 post = ensure_story()
                 wroot = require_root()
-                stories.set_step_state(wroot, story_id, "b1", "running", provider=provider["name"], model=model)
                 with st.spinner("Đang tạo caption…"):
-                    try:
-                        st.session_state["caption_draft"] = prov.chat(provider, model, gen_prompt(preset["caption_prompt"], prompt_context(post)))
-                    except prov.ProviderError as exc:
-                        stories.set_step_state(wroot, story_id, "b1", "error", detail=str(exc))
-                        st.error(str(exc))
+                    text, log = steps.run_b1(wroot, story_id, preset, provider, model, post)
+                if text is not None:
+                    st.session_state["caption_draft"] = text
+                    st.success(f"Đã lưu caption vào {story_id}/caption.txt.")
+                else:
+                    st.error(log)
     caption = st.text_area("Caption (bạn có thể sửa tay)", key="caption_draft", height=160, label_visibility="collapsed")
     if c2.button("Lưu caption"):
         if not story_id:
@@ -513,7 +352,7 @@ def page_create(c):
     provider_kw, model_kw = generation_controls(c)
     b2_mode = st.radio("Cách lấy ảnh", ["Tạo ảnh", "Tìm kiếm"], horizontal=True, key="b2_mode")
     cap_now = (st.session_state.get("caption_draft") or "").strip()
-    current_post = story_post(root, story_id) if (root and story_id) else None
+    current_post = stories.post_view(root, story_id) if (root and story_id) else None
 
     if b2_mode == "Tạo ảnh":
         if not (preset["image_prompt"] or "").strip():
@@ -546,7 +385,7 @@ def page_create(c):
             if not cap_now:
                 st.error("Tạo caption ở B1 trước đã — prompt ảnh cần caption mới tạo.")
             else:
-                codex_row = provider_kw if (provider_kw and provider_kw["kind"] == "codex_cli") else next((r for r in provider_rows(c).values() if r["kind"] == "codex_cli"), None)
+                codex_row = steps.codex_row_for(provider_rows(c), provider_kw)
                 if codex_row is None:
                     st.error("Chưa có provider Codex CLI — thêm ở Cấu hình ▸ Providers.")
                 else:
@@ -557,15 +396,14 @@ def page_create(c):
                     except Exception as exc:
                         refs = []
                         st.warning(f"Không dùng được ảnh gốc: {exc}")
-                    stories.set_step_state(wroot, story_id, "b2", "running", method="codex")
                     with st.spinner("Codex đang tạo ảnh (có thể mất vài phút)…"):
-                        try:
-                            src = prov.codex_generate_image(final_prompt, refs)
-                            image = attach_single_image(wroot, story_id, src, method="codex")
-                            st.success(f"Đã tạo ảnh mới, ghi đè ảnh cũ: {image}")
-                        except prov.ProviderError as exc:
-                            stories.set_step_state(wroot, story_id, "b2", "error", detail=str(exc))
-                            st.error(str(exc))
+                        image, err = steps.generate_image(wroot, story_id, final_prompt, refs, codex_row)
+                    if err is not None:
+                        stories.set_step_state(wroot, story_id, "b2", "error", detail=err)
+                        st.error(err)
+                    else:
+                        st.session_state["saved_images"] = json.loads(stories.post_view(wroot, story_id)["images"])
+                        st.success(f"Đã tạo ảnh mới, ghi đè ảnh cũ: {image}")
     else:
         if st.button("AI tạo từ khóa ảnh"):
             if provider_kw is None:
@@ -573,18 +411,14 @@ def page_create(c):
             elif not (preset["keyword_prompt"] or "").strip():
                 st.error("Preset chưa có prompt từ khóa ảnh.")
             else:
-                post = story_post(root, story_id) if (root and story_id) else ensure_story()
+                post = stories.post_view(root, story_id) if (root and story_id) else ensure_story()
+                wroot = require_root()
                 with st.spinner("Đang tạo từ khóa…"):
-                    try:
-                        raw = prov.chat(provider_kw, model_kw, gen_prompt(preset["keyword_prompt"], prompt_context(post, st.session_state.get("caption_draft") or None)))
-                        kws = images.extract_keywords(raw)
-                        st.session_state["keywords_text"] = ", ".join(kws)
-                        if story_id:
-                            block = dict(stories.load_story(root, story_id).get("b2") or {})
-                            block["keywords"] = kws
-                            stories.update_story(root, story_id, b2=block)
-                    except prov.ProviderError as exc:
-                        st.error(str(exc))
+                    kws, kw_err = steps.keywords_for_image(wroot, story_id, preset, post, provider_kw, model_kw, st.session_state.get("caption_draft") or None)
+                if kw_err:
+                    st.error(kw_err)
+                else:
+                    st.session_state["keywords_text"] = ", ".join(kws)
         keywords_text = st.text_input("Từ khóa (cách nhau bởi dấu phẩy — sửa tay được)", key="keywords_text")
         kw_list = [k.strip() for k in keywords_text.split(",") if k.strip()]
         chosen_kw = None
@@ -641,16 +475,15 @@ def page_create(c):
             elif not (preset["seo_prompt"] or "").strip():
                 st.error("Preset chưa có prompt SEO.")
             else:
-                post = story_post(root, story_id) if (root and story_id) else ensure_story()
+                post = stories.post_view(root, story_id) if (root and story_id) else ensure_story()
                 wroot = require_root()
-                seo_ctx = prompt_context(post, st.session_state.get("caption_draft") or None)
-                stories.set_step_state(wroot, story_id, "b3", "running", provider=provider_seo["name"], model=model_seo)
                 with st.spinner("Đang viết bài SEO…"):
-                    try:
-                        st.session_state["seo_draft"] = prov.chat(provider_seo, model_seo, gen_prompt(preset["seo_prompt"], seo_ctx, extra_fallback="\nCaption đã duyệt:\n" + (post["caption"] or "—")))
-                    except prov.ProviderError as exc:
-                        stories.set_step_state(wroot, story_id, "b3", "error", detail=str(exc))
-                        st.error(str(exc))
+                    seo_log, seo_text = steps.run_b3(wroot, story_id, preset, provider_seo, model_seo, post, st.session_state.get("caption_draft") or None)
+                if seo_text is not None:
+                    st.session_state["seo_draft"] = seo_text
+                    st.success(f"Đã lưu bài SEO vào {story_id}/seo.md.")
+                else:
+                    st.error(seo_log)
     seo = st.text_area("Bài SEO (sửa tay thoải mái)", key="seo_draft", height=260, label_visibility="collapsed")
     if s2.button("Lưu bài SEO"):
         if not story_id:
@@ -680,7 +513,7 @@ def page_create(c):
 
     st.subheader("Xuất bản Facebook")
     if root and story_id:
-        post = story_post(root, story_id)
+        post = stories.post_view(root, story_id)
         chosen_fmt = st.session_state.get("b3_format", "Markdown (blog/SEO)")
         pack = build_fb_pack(post, chosen_fmt)
         if pack.strip():

@@ -58,22 +58,24 @@ except ValueError:
 
 # --- unit: prompt placeholder engine ---
 import app as fbapp
+import prompts
+import steps
 import providers as prov
 
-ctx = fbapp.prompt_context({"topic": "T", "summary": "S", "details": "CAPTION-GOC", "caption": ""})
-out = fbapp.gen_prompt("Viết lại:\n<CAPTION CŨ>\nhết", ctx)
+ctx = prompts.prompt_context({"topic": "T", "summary": "S", "details": "CAPTION-GOC", "caption": ""})
+out = prompts.gen_prompt("Viết lại:\n<CAPTION CŨ>\nhết", ctx)
 check("gen_prompt replaces <CAPTION CŨ>", out == "Viết lại:\nCAPTION-GOC\nhết")
 
-ctx2 = fbapp.prompt_context({"topic": "T", "summary": "", "details": "", "caption": "NEWCAP"})
-out2 = fbapp.gen_prompt("SEO cho <CAPTION MỚI TẠO>", ctx2)
+ctx2 = prompts.prompt_context({"topic": "T", "summary": "", "details": "", "caption": "NEWCAP"})
+out2 = prompts.gen_prompt("SEO cho <CAPTION MỚI TẠO>", ctx2)
 check("gen_prompt replaces <CAPTION MỚI TẠO>", out2 == "SEO cho NEWCAP")
 
-out3 = fbapp.gen_prompt("Không token ở đây", ctx)
+out3 = prompts.gen_prompt("Không token ở đây", ctx)
 check("gen_prompt fallback appends data", out3.startswith("Không token ở đây") and "CAPTION-GOC" in out3)
 
 # --- unit: B2 image prompt = preset.image_prompt + caption B1 ---
-check("b2_image_prompt injects caption", fbapp.b2_image_prompt({"image_prompt": "Cover cho: <CAPTION MỚI TẠO>"}, None, "CAPMOI") == "Cover cho: CAPMOI")
-check("b2_image_prompt falls back to caption", fbapp.b2_image_prompt({"image_prompt": ""}, None, "CAPMOI") == "CAPMOI")
+check("b2_image_prompt injects caption", prompts.b2_image_prompt({"image_prompt": "Cover cho: <CAPTION MỚI TẠO>"}, None, "CAPMOI") == "Cover cho: CAPMOI")
+check("b2_image_prompt falls back to caption", prompts.b2_image_prompt({"image_prompt": ""}, None, "CAPMOI") == "CAPMOI")
 
 # --- unit: raw key detection ---
 check("raw key regex", bool(prov.RAW_KEY_RE.match("sk-0280e7f4f02a71dbc02d95c92d5206d851a5515a1e7aacc16dffeb5ab2901ac7")))
@@ -181,8 +183,123 @@ db.delete_post(dbc, mig_pid)
 dbc.close()
 shutil.rmtree(mig_box, ignore_errors=True)
 
+# --- P2a: steps.py chạy B1/B2/B3 cho story (provider + network được stub) ---
+st_box = Path(tempfile.mkdtemp(prefix="fbsteps_"))
+st_root = stories.validate_root(st_box / "ws")
+sid_a = stories.create_story(st_root, "Chủ đề steps", input_text="nội dung gốc")["id"]
+post_a = stories.post_view(st_root, sid_a)
+preset_a = {"caption_prompt": "Viết: <CAPTION CŨ>", "image_prompt": "", "keyword_prompt": "Từ khóa:", "seo_prompt": "SEO: <CAPTION MỚI TẠO>", "provider_id": None}
+row_api = {"id": 1, "name": "FakeAPI", "kind": "openai", "is_default": 1, "models": "m1,m2", "base_url": "x", "key_env": "X"}
+row_codex = {"id": 2, "name": "FakeCodex", "kind": "codex_cli", "is_default": 0, "models": "", "base_url": "", "key_env": ""}
+rows2 = {1: row_api, 2: row_codex}
+
+real_chat, real_parse, real_codex = prov.chat, prov.parse_models, prov.codex_generate_image
+real_search, real_download = images.search_images, images.download_ref
+gen_file = st_box / "codex.png"
+stock_file = st_box / "stock.jpg"
+chat_calls = []
+
+
+def ok_chat(provider, model, prompt):
+    chat_calls.append((provider["name"], model))
+    return "NỘI DUNG FAKE " + prompt[:20]
+
+
+def boom_chat(provider, model, prompt):
+    raise prov.ProviderError("hết hạn key")
+
+
+def boom_codex(prompt, refs):
+    raise prov.ProviderError("codex offline")
+
+
+def fake_codex(prompt, refs):
+    gen_file.write_bytes(b"CODEX-IMG")
+    return gen_file
+
+
+def fake_download(url):
+    stock_file.write_bytes(b"STOCK-IMG")
+    return stock_file
+
+
+prov.chat = ok_chat
+prov.parse_models = lambda provider: ["m1", "m2"] if provider["kind"] == "openai" else []
+prov.codex_generate_image = fake_codex
+images.search_images = lambda query, count=4: [{"url": "https://stock/x.jpg", "thumb": "t", "alt": "a", "source": "stock"}]
+images.download_ref = fake_download
+
+text, log = steps.run_b1(st_root, sid_a, preset_a, row_api, "m1", post_a)
+check("run_b1 lưu caption.txt và state done",
+      text.startswith("NỘI DUNG FAKE") and (st_root / sid_a / "caption.txt").is_file() and stories.states(st_root, sid_a)["b1"] == "done")
+check("run_b1 ghi provider/model vào story.json",
+      stories.load_story(st_root, sid_a)["b1"]["provider"] == "FakeAPI" and stories.load_story(st_root, sid_a)["b1"]["model"] == "m1")
+text, log = steps.run_b1(st_root, sid_a, {**preset_a, "caption_prompt": ""}, row_api, "m1", post_a)
+check("run_b1 bỏ qua khi preset thiếu prompt", text is None and log.startswith("B1 caption: bỏ qua"))
+
+
+def boom_chat(provider, model, prompt):
+    raise prov.ProviderError("hết hạn key")
+
+
+prov.chat = boom_chat
+text, log = steps.run_b1(st_root, sid_a, preset_a, row_api, "m1", post_a)
+check("run_b1 lỗi -> state error + detail, không ghi file mới",
+      text is None and stories.load_story(st_root, sid_a)["b1"]["detail"] == "hết hạn key" and stories.states(st_root, sid_a)["b1"] == "error")
+prov.chat = ok_chat
+
+image, err = steps.generate_image(st_root, sid_a, "prompt ảnh", [], row_codex)
+check("generate_image lưu image.png từ Codex",
+      image is not None and (st_root / sid_a / "image.png").read_bytes() == b"CODEX-IMG" and stories.states(st_root, sid_a)["b2"] == "done")
+check("generate_image bỏ qua khi chưa có Codex", steps.generate_image(st_root, sid_a, "prompt", [], None) == (None, None))
+prov.codex_generate_image = boom_codex
+lines, kws, image = steps.run_b2(st_root, sid_a, preset_a, post_a, "prompt", [], row_api, "m1", rows2)
+check("run_b2: Codex lỗi thì fallback ảnh stock",
+      any("fallback stock" in l for l in lines) and (st_root / sid_a / "image.png").read_bytes() == b"STOCK-IMG")
+check("run_b2 lưu từ khóa vào story.json", stories.load_story(st_root, sid_a)["b2"]["keywords"] == kws and kws)
+prov.codex_generate_image = fake_codex
+
+log, seo = steps.run_b3(st_root, sid_a, preset_a, row_api, "m1", post_a, "CAP")
+check("run_b3 lưu seo.md + đếm words",
+      (st_root / sid_a / "seo.md").is_file() and stories.load_story(st_root, sid_a)["b3"]["words"] > 0 and log == "B3 SEO: OK")
+
+sid_b = stories.create_story(st_root, "Chủ đề pipeline", input_text="dài dòng 1\ndòng 2")["id"]
+post_b = stories.post_view(st_root, sid_b)
+res = steps.run_pipeline(st_root, sid_b, preset_a, post_b, [], rows2,
+                         {"b1": (row_api, "m1"), "b2": (row_api, "m1"), "b3": (row_api, "m1")}, extra_lines=["Ảnh gốc LỖI: test"])
+check("run_pipeline ghi đủ caption + ảnh + seo",
+      all((st_root / sid_b / f).is_file() for f in ("caption.txt", "image.png", "seo.md")) and res.image is not None)
+check("run_pipeline trả log cho từng bước", res.lines[0] == "Ảnh gốc LỖI: test"
+      and any(l == "B1 caption: OK" for l in res.lines)
+      and any("Codex" in l for l in res.lines)
+      and any(l == "B3 SEO: OK" for l in res.lines)
+      and any("đã lưu 1 ảnh vào" in l for l in res.lines))
+check("run_pipeline gọi đúng provider từng bước", chat_calls and all(name == "FakeAPI" for name, _ in chat_calls))
+
+prov.chat = boom_chat
+prov.codex_generate_image = boom_codex
+sid_c = stories.create_story(st_root, "Chủ đề lỗi", input_text="nội dung lỗi")["id"]
+res_err = steps.run_pipeline(st_root, sid_c, preset_a, stories.post_view(st_root, sid_c), [], {1: row_api},
+                             {"b1": (row_api, "m1"), "b2": (row_api, "m1"), "b3": (row_api, "m1")})
+check("pipeline lỗi không để state treo running",
+      set(stories.states(st_root, sid_c).values()) <= {"error", "pending"} and list(stories.states(st_root, sid_c).values()) == ["error", "pending", "error"])
+
+prov.chat, prov.parse_models, prov.codex_generate_image = real_chat, real_parse, real_codex
+images.search_images, images.download_ref = real_search, real_download
+p_res = steps.resolve_provider_model(rows2, stories.load_story(st_root, sid_a), preset_a, "b1")
+check("resolve: provider đã lưu trong story.json thắng", p_res[0]["name"] == "FakeAPI" and p_res[1] == "m1")
+p_res = steps.resolve_provider_model(rows2, {}, {"provider_id": 2}, "b1")
+check("resolve: preset.provider_id dùng khi story chưa có", p_res[0]["name"] == "FakeCodex" and p_res[1] == "")
+p_res = steps.resolve_provider_model(rows2, {}, {"provider_id": 999}, "b3")
+check("resolve: fallback về provider mặc định", p_res[0]["is_default"] == 1)
+p_res = steps.resolve_provider_model(rows2, {"b1": {"provider": "Không Tồn Tại", "model": "zz"}}, {"provider_id": 1}, "b1")
+check("resolve: provider/model bị xóa khỏi DB được thay hợp lệ", p_res[0]["is_default"] == 1 and p_res[1] == "m1")
+shutil.rmtree(st_box, ignore_errors=True)
+
 # --- P1: app phải chạy trong workspace tạm, không đụng folder story thật ---
 orig_recents_path = stories._recents_path
+real_ws_file = paths.data_dir() / "workspaces.json"
+real_ws_before = real_ws_file.read_bytes() if real_ws_file.is_file() else None
 smoke_ws = Path(tempfile.mkdtemp(prefix="fbsmoke_ws_"))
 stories._recents_path = lambda: smoke_ws / "workspaces.json"
 smoke_root = stories.set_current(stories.validate_root(smoke_ws / "smoke-ws"))
@@ -406,7 +523,8 @@ shutil.rmtree(ws_box / "khac")
 check("recents skip vanished folders", [Path(w["path"]).name for w in stories.recents()] == ["2026-11"])
 
 stories._recents_path = real_recents
-check("real home workspaces.json untouched", not (paths.data_dir() / "workspaces.json").exists())
+check("workspace story thật không bị đụng trong lúc test",
+      (real_ws_file.read_bytes() if real_ws_file.is_file() else None) == real_ws_before)
 
 stories._recents_path = orig_recents_path
 shutil.rmtree(smoke_ws, ignore_errors=True)
