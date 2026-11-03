@@ -116,6 +116,39 @@ def filter_rows(rows: list[dict], choice: str) -> list[dict]:
     return [r for r in rows if not key or r.get("bucket") == key]
 
 
+def count_buckets(rows: list[dict]) -> dict:
+    """Đếm theo nhóm việc cho thanh tổng kết — 'queued' không phải nhóm nên không bị tính hai lần."""
+    counts = {"total": len(rows), "queued": 0, "waiting": 0, "running": 0, "error": 0, "done": 0}
+    for row in rows:
+        counts[row.get("bucket") or "waiting"] = counts.get(row.get("bucket") or "waiting", 0) + 1
+        if row.get("queued"):
+            counts["queued"] += 1
+    return counts
+
+
+def error_ids(rows: list[dict]) -> list[str]:
+    """Bài lỗi chưa được đánh dấu — xếp vào hàng đợi thì giữ nguyên thứ tự bài đã chờ trước đó."""
+    return [str(r["id"]) for r in rows if r.get("bucket") == "error" and not r.get("queued")]
+
+
+def clean_url(raw) -> str:
+    value = str(raw or "").strip().replace(" ", "")
+    if value in ("—", "-"):
+        return ""
+    if value and "//" not in value and not value.startswith("@"):
+        value = "https://" + value
+    return value
+
+
+def buckets_for(ctx: Ctx) -> list[dict]:
+    """id + nhóm việc + cờ hàng đợi của cả workspace — để dispatcher tự đếm khi người dùng bấm nút tổng kết."""
+    out = []
+    for sid in stories.list_story_ids(ctx.root):
+        story = stories.load_story(ctx.root, sid)
+        out.append({"id": sid, "bucket": bucket(display_states(ctx.root, sid)), "queued": bool(story.get("queued"))})
+    return out
+
+
 def preset_for(ctx: Ctx, story: dict):
     preset = ctx.presets.get(story.get("preset_id"))
     return preset if preset is not None else ctx.fallback_preset
@@ -239,6 +272,17 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "mark_posted":
             stories.update_story(ctx.root, sid, status="posted")
             out.lines, out.touched = [f"{sid}: status = posted."], [sid]
+        elif source == "link_save":
+            url = clean_url(event.get("value"))
+            stories.update_story(ctx.root, sid, link=url)
+            out.lines, out.touched = [f"{sid}: Link = {url or '(trống)'}."], [sid]
+        elif source == "queue_add_errors":
+            ids = error_ids(buckets_for(ctx))
+            base = time.time()
+            for i, eid in enumerate(ids):
+                stories.update_story(ctx.root, eid, queued=True, queued_at=base + i / 1000)
+            out.lines = [f"Đã xếp {len(ids)} bài lỗi vào cuối hàng đợi." if ids else "Không có bài nào đang lỗi."]
+            out.touched = ids
         elif source == "archive":
             dest = stories.archive_story(ctx.root, sid)
             out.lines = [f"{sid}: đã dời folder vào {dest.name} trong .trash — kéo ngược ra ngoài là khôi phục."]

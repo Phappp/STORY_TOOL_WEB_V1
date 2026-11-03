@@ -88,6 +88,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "topic": summary["topic"],
             "status": summary["status"],
             "link": summary["link"],
+            "source": str(story.get("source") or ""),
             "has_input": summary["has_input"],
             "image": summary["image"],
             "detail": summary["detail"],
@@ -158,10 +159,17 @@ def show_log() -> None:
         st.caption("· " + line)
 
 
-def render_component(ctx: ga.Ctx, rows: list[dict]) -> bool:
-    """Vẽ grid bằng component; trả False nếu component không dùng được."""
+def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> bool:
+    """Vẽ grid bằng component; trả False nếu component không dùng được.
+
+    rows là phần đang hiện (sau bộ lọc) nhưng số liệu hàng đợi + tổng kết lấy từ cả
+    workspace, để '▶ Bắt đầu' chạy đúng thứ tự kể cả khi người dùng đang lọc.
+    """
     try:
         component()(rows=rows, workspace=str(ctx.root),
+                    summary=ga.count_buckets(all_rows),
+                    queue_ids=ga.queue_ids(all_rows),
+                    error_ids=ga.error_ids(all_rows),
                     copy_response=st.session_state.get("grid_copy_response") or {},
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
@@ -180,15 +188,43 @@ def _short_link(link: str) -> str:
     return str(link or "").replace("https://", "").replace("http://", "").rstrip("/")
 
 
+def summary_line(all_rows: list[dict]) -> str:
+    c = ga.count_buckets(all_rows)
+    return (f"Tổng {c['total']} bài · hàng đợi {c['queued']} · chờ {c['waiting']} · "
+            f"đang chạy {c['running']} · lỗi {c['error']} · xong {c['done']}")
+
+
+def link_editor(ctx: ga.Ctx, sid: str, current: str) -> None:
+    """Cột Link sửa được ở bảng native — ghi straight vào story.json qua event link_save."""
+    if st.session_state.pop("native_link_resync", False) or st.session_state.get("native_link_sid") != sid:
+        st.session_state["native_link_sid"] = sid
+        st.session_state["native_link_edit"] = current
+    edited = st.text_input(f"Link của {sid}", key="native_link_edit",
+                           help="Link bài của bạn đã đăng (khác cột Nguồn = link gốc B0 trích nội dung).")
+    changed = ga.clean_url(edited) != current
+    lcols = st.columns(2)
+    if lcols[0].button("💾 Lưu Link", key="native_link_save", disabled=not changed,
+                       help="Ghi link vào story.json của bài này" if changed else "Chưa sửa gì để lưu"):
+        _after(ctx, {"source": "link_save", "id": sid, "value": edited})
+        st.session_state["native_link_resync"] = True
+        st.rerun()
+    if lcols[1].button("↩ Bỏ sửa", key="native_link_reset", disabled=not changed):
+        st.session_state["native_link_resync"] = True
+        st.rerun()
+
+
 def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = None) -> None:
+    scope = all_rows if all_rows is not None else rows
+    if scope:
+        st.caption(summary_line(scope))
     if not rows:
         st.info("Workspace này chưa có story nào (hoặc bộ lọc đang che hết) — mở trang Tạo bài, hoặc vào Cấu hình ▸ Workspace chọn folder khác.")
         return
     st.dataframe(
-        [{"#": r["queue_pos"] or "", "story": r["id"], "chủ đề": r["topic"] or "(chưa đặt)",
+        [{"#": r["queue_pos"] or "", "story": r["id"], "nguồn": _short_link(r["source"]) or "—",
           "B1 B2 B3": " ".join(f"{step.upper()} {STATE_GLYPH.get(r['states'][step], '?')}" for step in ("b1", "b2", "b3")),
           "ảnh": "có" if r["image"] else "—", "status": r["status"],
-          "Link": _short_link(r["link"]) or "—", "sửa lúc": r["updated"]}
+          "Link": _short_link(r["link"]) or "—"}
          for r in rows],
         width="stretch", hide_index=True,
     )
@@ -215,19 +251,26 @@ def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = N
         _after(ctx, {"source": "archive", "id": sid})
         st.rerun()
 
+    link_editor(ctx, sid, by_id[sid]["link"])
+
     in_queue = bool(by_id[sid]["queued"])
-    queued_ids = ga.queue_ids(all_rows if all_rows is not None else rows)
-    qcols = st.columns(3)
+    queued_ids = ga.queue_ids(scope)
+    err_ids = ga.error_ids(scope)
+    qcols = st.columns(4)
     if qcols[0].button("✕ Bỏ hàng đợi" if in_queue else "➕ Vào hàng đợi", key="native_queue_toggle",
                        help="Bài trong hàng đợi nổi lên đầu grid và được ⚡ Chạy hàng đợi làm tuần tự"):
         _after(ctx, {"source": "queue_remove" if in_queue else "queue_add", "id": sid})
         st.rerun()
-    if qcols[1].button(f"⚡ Chạy hàng đợi ({min(len(queued_ids), ga.MAX_BATCH)}/{len(queued_ids)})",
+    if qcols[1].button(f"▶ Bắt đầu ({min(len(queued_ids), ga.MAX_BATCH)}/{len(queued_ids)})",
                        disabled=not queued_ids, key="native_queue_run",
-                       help=f"Chạy tuần tự, tối đa {ga.MAX_BATCH} bài/lần"):
+                       help=f"Chạy tuần tự các bài trong hàng đợi, tối đa {ga.MAX_BATCH} bài/lần"):
         _after(ctx, {"source": "batch_run", "ids": queued_ids})
         st.rerun()
-    if qcols[2].button(f"Bỏ hết hàng đợi ({len(queued_ids)})", disabled=not queued_ids, key="native_queue_clear"):
+    if qcols[2].button(f"⚠ Xếp {len(err_ids)} bài lỗi vào hàng đợi", disabled=not err_ids, key="native_queue_errors",
+                       help="Đánh dấu mọi bài đang lỗi (kể cả treo/mất file) để chạy lại một loạt"):
+        _after(ctx, {"source": "queue_add_errors"})
+        st.rerun()
+    if qcols[3].button(f"Bỏ hết hàng đợi ({len(queued_ids)})", disabled=not queued_ids, key="native_queue_clear"):
         _after(ctx, {"source": "queue_clear"})
         st.rerun()
 
@@ -263,14 +306,14 @@ def _body(ctx: ga.Ctx) -> None:
     outcome = consume_event(ctx)
     show_log()
     if outcome is not None and outcome.nav:
-        st.rerun(scope="app")  # nút ✎: nhảy sang trang Tạo bài với bài vừa chọn
+        st.rerun(scope="app")  # nút ↗: nhảy sang trang Tạo bài với bài vừa chọn
     all_rows = rows_for(ctx)
     choice = str(st.session_state.get("grid_filter") or ga.FILTERS[0])
     rows = ga.filter_rows(all_rows, choice)
     if choice != ga.FILTERS[0]:
         st.caption(f"Lọc “{choice}”: {len(rows)}/{len(all_rows)} bài trong workspace.")
     if str(st.session_state.get("grid_mode") or MODE_COMPONENT) == MODE_COMPONENT:
-        if render_component(ctx, rows):
+        if render_component(ctx, rows, all_rows):
             return
         st.warning(f"Grid component không chạy được ({st.session_state.get('grid_component_error')}) — chuyển sang bảng nút.")
     render_native(ctx, rows, all_rows)

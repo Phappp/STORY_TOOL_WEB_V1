@@ -476,6 +476,37 @@ check("bài báo done mà mất file hiện 'mất file' và vẫn tính là ch�
       r_miss["states"]["b3"] == stories.MISSING and r_miss["bucket"] == "waiting")
 stories.save_step_text(ga_root, sid_extra[1], "b3", "SEO khôi phục sau test")
 
+# --- P4a: cột Link sửa được + 'nguồn' tách riêng + nút xếp lỗi + tổng kết ---
+sid_err = stories.create_story(ga_root, "Bài lỗi grid", input_text="nội dung lỗi")["id"]
+stories.set_step_state(ga_root, sid_err, "b1", stories.ERROR, detail="provider trả lỗi")
+out = ga.apply_event(gctx, {"source": "link_save", "id": sid_err, "value": " fb.watch/abc "})
+check("link_save chuẩn hóa link rồi ghi vào story.json",
+      stories.load_story(ga_root, sid_err)["link"] == "https://fb.watch/abc" and "fb.watch" in out.lines[0])
+out = ga.apply_event(gctx, {"source": "link_save", "id": sid_err, "value": "—"})
+check("link_save ô trống/gạch ngang -> link rỗng, không lưu dấu —",
+      stories.load_story(ga_root, sid_err)["link"] == "" and "(trống)" in out.lines[0])
+stories.update_story(ga_root, sid_err, source="https://www.facebook.com/r/nguong")
+r_src = next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_err)
+check("rows_for mang 'nguồn' (link B0) tách khỏi 'link' (bài đã đăng)",
+      r_src["source"] == "https://www.facebook.com/r/nguong" and r_src["link"] == "")
+ga.apply_event(gctx, {"source": "queue_add", "id": sid_ok})
+out = ga.apply_event(gctx, {"source": "queue_add_errors"})
+rows_e = fbgrid.rows_for(gctx)
+check("queue_add_errors chỉ xếp bài đang lỗi và nói rõ số bài",
+      out.touched == [sid_err] and stories.load_story(ga_root, sid_err).get("queued") is True
+      and "1 bài" in out.lines[0])
+check("bài lỗi xếp vào cuối hàng đợi, sau bài đã chờ trước đó",
+      [r["id"] for r in rows_e if r["queued"]] == [sid_ok, sid_err]
+      and [r["queue_pos"] for r in rows_e if r["queued"]] == [1, 2])
+check("queue_add_errors lần 2 không xếp lại bài lỗi đã nằm trong hàng đợi",
+      ga.apply_event(gctx, {"source": "queue_add_errors"}).lines[0].startswith("Không có bài nào đang lỗi"))
+counts = ga.count_buckets(rows_e)
+check("tổng kết đếm đủ bài theo nhóm, bài hàng đợi tính riêng",
+      counts["error"] == 1 and counts["queued"] == 2 and counts["total"] == len(rows_e)
+      and counts["waiting"] + counts["running"] + counts["error"] + counts["done"] == counts["total"])
+ga.apply_event(gctx, {"source": "queue_clear"})
+check("test P4a không để sót bài trong hàng đợi", ga.queue_ids(fbgrid.rows_for(gctx)) == [])
+
 stories.set_step_state(ga_root, sid_ok, "b1", "running")
 check("running còn mới hiện running", ga.step_states(ga_root, sid_ok)["b1"] == "running")
 old = stories.load_story(ga_root, sid_ok)
@@ -693,23 +724,57 @@ at_gq.session_state["grid_mode"] = fbgrid.MODE_NATIVE
 at_gq.session_state["native_pick"] = q_sid
 at_gq.run()
 btn_add = next((b for b in at_gq.button if b.label == "➕ Vào hàng đợi"), None)
-check("Grid native có nút vào hàng đợi, nút chạy bị chặn khi hàng đợi trống",
+check("Grid native có nút vào hàng đợi, nút bắt đầu bị chặn khi hàng đợi trống",
       btn_add is not None and not at_gq.exception
-      and any(b.label == "⚡ Chạy hàng đợi (0/0)" and b.disabled for b in at_gq.button))
+      and any(b.label == "▶ Bắt đầu (0/0)" and b.disabled for b in at_gq.button))
 if btn_add is not None:
     btn_add.click().run()
     check("bấm vào hàng đợi -> story.json có cờ queued, nút đổi thành bỏ",
           not at_gq.exception and stories.load_story(smoke_root, q_sid).get("queued") is True
           and any(b.label == "✕ Bỏ hàng đợi" for b in at_gq.button))
-btn_qr = next((b for b in at_gq.button if "Chạy hàng đợi" in b.label), None)
-check("nút chạy hàng đợi nói đúng số bài sẽ làm và hết bị chặn",
-      btn_qr is not None and btn_qr.label == "⚡ Chạy hàng đợi (1/1)" and not btn_qr.disabled)
+btn_qr = next((b for b in at_gq.button if b.label.startswith("▶ Bắt đầu")), None)
+check("nút bắt đầu nói đúng số bài sẽ làm và hết bị chặn",
+      btn_qr is not None and btn_qr.label == "▶ Bắt đầu (1/1)" and not btn_qr.disabled)
+check("Grid native có ô Link sửa được, nút Lưu chặn khi chưa sửa gì",
+      any(w.key == "native_link_edit" for w in at_gq.text_input)
+      and any(b.label == "💾 Lưu Link" and b.disabled for b in at_gq.button))
+link_box = next((w for w in at_gq.text_input if w.key == "native_link_edit"), None)
+save_btn = next((b for b in at_gq.button if b.label == "💾 Lưu Link"), None)
+if link_box is not None and save_btn is not None:
+    link_box.set_value("facebook.com/me/posts/9").run()
+    save_btn = next((b for b in at_gq.button if b.label == "💾 Lưu Link"), None)
+    check("nhập link xong thì nút Lưu mở ra", not at_gq.exception and save_btn is not None and not save_btn.disabled)
+    save_btn.click().run()
+    check("Lưu Link ghi link đã chuẩn hóa vào story.json",
+          not at_gq.exception and stories.load_story(smoke_root, q_sid)["link"] == "https://facebook.com/me/posts/9"
+          and any("Link =" in line for line in at_gq.session_state.get("grid_log", [])))
+    check("lưu xong thì ô Link hiện lại đúng chữ trong file",
+          any(w.key == "native_link_edit" and w.value == "https://facebook.com/me/posts/9" for w in at_gq.text_input))
 btn_rm = next((b for b in at_gq.button if b.label == "✕ Bỏ hàng đợi"), None)
 if btn_rm is not None:
     btn_rm.click().run()
-    check("bấm bỏ hàng đợi -> cờ queued tắt, nút chạy chặn lại",
+    check("bấm bỏ hàng đợi -> cờ queued tắt, nút bắt đầu chặn lại",
           not at_gq.exception and stories.load_story(smoke_root, q_sid).get("queued") is False
-          and any(b.label == "⚡ Chạy hàng đợi (0/0)" and b.disabled for b in at_gq.button))
+          and any(b.label == "▶ Bắt đầu (0/0)" and b.disabled for b in at_gq.button))
+
+err_grid_sid = stories.create_story(smoke_root, "Bài lỗi trên grid")["id"]
+stories.set_step_state(smoke_root, err_grid_sid, "b1", stories.ERROR, detail="provider trả lỗi")
+at_ge = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_ge.session_state["nav_page"] = "Grid"
+at_ge.session_state["grid_mode"] = fbgrid.MODE_NATIVE
+at_ge.session_state["native_pick"] = err_grid_sid
+at_ge.run()
+check("Grid native có thanh tổng kết đếm theo nhóm việc",
+      not at_ge.exception and any("Tổng " in (c.value or "") and "lỗi 1" in (c.value or "") for c in at_ge.caption))
+btn_err = next((b for b in at_ge.button if "Xếp" in b.label and "bài lỗi" in b.label), None)
+check("nút xếp lỗi vào hàng đợi nói đúng số bài lỗi và bấm được",
+      btn_err is not None and btn_err.label == "⚠ Xếp 1 bài lỗi vào hàng đợi" and not btn_err.disabled)
+if btn_err is not None:
+    btn_err.click().run()
+    check("bấm xếp lỗi -> bài lỗi có cờ queued, grid nói rõ số bài",
+          not at_ge.exception and stories.load_story(smoke_root, err_grid_sid).get("queued") is True
+          and any("1 bài lỗi" in line for line in at_ge.session_state.get("grid_log", [])))
+    stories.update_story(smoke_root, err_grid_sid, queued=False)
 
 at_gf = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at_gf.session_state["nav_page"] = "Grid"
@@ -736,6 +801,29 @@ at_gu.run()
 check("Grid component: queue_clear bỏ hết hàng đợi của workspace",
       not at_gu.exception and not any(stories.load_story(smoke_root, s).get("queued")
                                       for s in stories.list_story_ids(smoke_root)))
+at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-link-1", "source": "link_save", "id": q_sid, "value": "https://fb.watch/comp-1"}
+at_gu.run()
+check("Grid component: event link_save ghi đúng link vào story.json",
+      not at_gu.exception and stories.load_story(smoke_root, q_sid)["link"] == "https://fb.watch/comp-1")
+
+captured = {}
+real_component = fbgrid.component
+fbgrid.component = lambda: (lambda **kw: captured.update(kw))
+at_gp = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_gp.session_state["nav_page"] = "Grid"
+at_gp.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+at_gp.run()
+fbgrid.component = real_component
+pconn = db.connect()
+expect_rows = fbgrid.rows_for(ga.build_ctx(pconn, smoke_root))
+pconn.close()
+check("component được đưa tổng kết + thứ tự hàng đợi của CẢ workspace, không chỉ phần đang lọc",
+      not at_gp.exception and captured.get("summary") == ga.count_buckets(expect_rows)
+      and captured.get("queue_ids") == ga.queue_ids(expect_rows)
+      and captured.get("error_ids") == ga.error_ids(expect_rows)
+      and captured["summary"]["error"] == 1 and captured["summary"]["total"] == len(expect_rows))
+check("mỗi dòng component nhận có 'nguồn' để vẽ cột nguồn",
+      all("source" in r for r in expect_rows) and any(r["id"] == q_sid for r in expect_rows))
 
 # --- AppTest: B3 format selector + copy block ---
 at_fmt = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)

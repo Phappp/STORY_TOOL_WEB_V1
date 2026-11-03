@@ -19,29 +19,38 @@
   html,body { margin:0; padding:0; background:transparent; color:var(--text);
     font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif; font-size:13px; }
   .wrap { border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg); }
-  .bar { display:flex; gap:10px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); background:var(--header); }
+  .bar { display:flex; gap:10px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
   .bar .count { color:var(--muted); margin-left:auto; }
+  .stat { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; background:var(--pending); color:var(--pending-t); }
+  .stat.waiting { background:var(--pending); color:var(--pending-t); }
+  .stat.running { background:var(--running); color:var(--running-t); }
+  .stat.error { background:var(--error); color:var(--error-t); }
+  .stat.done { background:var(--done); color:var(--done-t); }
+  .stat.queued { background:var(--queued); color:var(--queued-t); }
+  .stats { display:inline-flex; gap:4px; }
   .scroll { max-height:520px; overflow:auto; }
-  table { width:100%; min-width:1080px; border-collapse:separate; border-spacing:0; table-layout:fixed; }
+  /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
+  .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; }
+  .wrap.expanded .scroll { max-height:calc(100vh - 118px); }
+  table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; }
   thead th { position:sticky; top:0; z-index:3; background:var(--header); text-align:left;
     font-weight:600; padding:7px 8px; border-bottom:1px solid var(--border); white-space:nowrap; user-select:none; }
+  th.resizable { position:relative; }
+  th .grip { position:absolute; right:0; top:0; width:7px; height:100%; cursor:col-resize; }
+  th .grip:hover, th .grip.dragging { background:rgba(23,95,168,.35); }
   tbody td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:middle;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:38px; }
   tbody tr:hover td { background:var(--hover); }
   tbody tr.queued td { background:#fbf7ff; }
   th.c, td.c { text-align:center; }
-  th.steps, td.steps { width:92px; text-align:center; }
-  th.pick, td.pick { width:30px; text-align:center; }
-  th.q, td.q { width:40px; text-align:center; }
-  th.id, td.id { width:92px; font-family:ui-monospace,Consolas,monospace; }
-  th.img, td.img { width:48px; text-align:center; }
-  th.status, td.status { width:66px; text-align:center; }
-  th.link, td.link { width:168px; }
-  th.when, td.when { width:88px; color:var(--muted); }
-  th.act, td.act { width:134px; }
-  th.copy, td.copy { width:212px; }
+  th.steps, td.steps, th.q, td.q, th.pick, td.pick, th.img, td.img, th.status, td.status { text-align:center; }
+  th.id, td.id { font-family:ui-monospace,Consolas,monospace; }
   a.link { color:var(--running-t); text-decoration:none; }
   a.link:hover { text-decoration:underline; }
+  .src { color:var(--running-t); }
+  input.lin { width:calc(100% - 62px); height:22px; font:inherit; font-size:12px; padding:1px 5px;
+    border:1px solid var(--running-t); border-radius:5px; }
+  button.ln { width:22px; padding:0; height:22px; margin-left:2px; }
   button.copy { font-size:11px; padding:2px 5px; height:22px; margin-right:3px; }
   button.copy.off { opacity:.4; }
   button.copy.wait { opacity:.6; }
@@ -95,11 +104,42 @@ const STEP_TITLE = { b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
 const COPY_FIELDS = ["Caption", "Bài SEO", "Input", "Link"];
 const COPY_SHORT = { "Caption": "Caption", "Bài SEO": "SEO", "Input": "Input", "Link": "Link" };
 const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy · xanh dương đang chạy · xanh lá xong · đỏ lỗi · đỏ nét đứt treo >15 phút · cam mất file";
+// Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
+const COLS = [
+  { key: "q", label: "#", w: 40, min: 34, align: "c" },
+  { key: "pick", label: "", w: 30, min: 26 },
+  { key: "id", label: "story", w: 92, min: 64 },
+  { key: "src", label: "nguồn", w: 210, min: 80 },
+  { key: "steps", label: "B1 B2 B3", w: 92, min: 84, align: "c" },
+  { key: "img", label: "ảnh", w: 48, min: 40, align: "c" },
+  { key: "status", label: "status", w: 66, min: 50, align: "c" },
+  { key: "link", label: "Link", w: 200, min: 90 },
+  { key: "copy", label: "copy", w: 212, min: 120 },
+  { key: "act", label: "", w: 134, min: 90 },
+];
+const COLS_KEY = "fbgrid:cols:v1";
+const EXPANDED_KEY = "fbgrid:expanded:v1";
+const SUMMARY_ORDER = [["queued", "hàng đợi"], ["waiting", "chờ"], ["running", "đang chạy"], ["error", "lỗi"], ["done", "xong"]];
+
+function widths() {
+  const saved = JSON.parse(lsGet(COLS_KEY) || "{}") || {};
+  const out = {};
+  COLS.forEach(c => { out[c.key] = Math.max(c.min, Number(saved[c.key]) || c.w); });
+  return out;
+}
+function saveWidths(map) {
+  lsSet(COLS_KEY, JSON.stringify(map));
+}
+function expandedMode() { return lsGet(EXPANDED_KEY) === "1"; }
 
 function sendMessage(type, data) {
   window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data || {}), "*");
 }
+function outerHeight() {
+  try { return window.parent.innerHeight || window.innerHeight; } catch (_) { return window.innerHeight; }
+}
 function setFrameHeight() {
+  if (expandedMode()) { sendMessage(SET_FRAME_HEIGHT, { height: Math.min(Math.max(outerHeight(), 360), 4000) }); return; }
   const h = Math.min(Math.max(document.documentElement.scrollHeight, 120), 640);
   sendMessage(SET_FRAME_HEIGHT, { height: h });
 }
@@ -133,9 +173,10 @@ function button(label, title, fn, cls) {
   return b;
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {} };
+let MODEL = { rows: [], workspace: "", copy_response: {}, summary: {}, queue_ids: [], error_ids: [] };
 const PICKED = new Set();
 let boxes = [];
+let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 
 function rows() { return Array.isArray(MODEL.rows) ? MODEL.rows : []; }
 
@@ -234,15 +275,67 @@ function queueCell(row) {
   return td;
 }
 
+function shortUrl(raw) { return String(raw || "").replace(/^https?:\/\//, "").replace(/\/$/, ""); }
+
+function repaint() {
+  render({ rows: MODEL.rows, workspace: MODEL.workspace, copy_response: MODEL.copy_response,
+           summary: MODEL.summary, queue_ids: MODEL.queue_ids, error_ids: MODEL.error_ids });
+}
+
+function linkEditor(row, td) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "lin";
+  input.value = EDITING.value;
+  input.title = "Link bài của bạn đã đăng — Enter để lưu, Esc để hủy";
+  input.addEventListener("click", e => e.stopPropagation());
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); save(); }
+    else if (e.key === "Escape") { e.preventDefault(); EDITING = null; repaint(); }
+  });
+  function save() {
+    const value = input.value;
+    EDITING = null;
+    send({ source: "link_save", id: row.id, value });
+  }
+  td.appendChild(input);
+  td.appendChild(button("✓", "Lưu link vào story.json của " + row.id, () => save(), "ln"));
+  td.appendChild(button("✕", "Hủy, giữ link cũ", () => { EDITING = null; repaint(); }, "ln"));
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+
 function linkCell(row) {
   const td = el("td", "link");
+  if (EDITING && String(EDITING.id) === String(row.id)) { linkEditor(row, td); return td; }
   const raw = String(row.link || "");
-  if (!raw.trim()) { td.appendChild(el("span", "muted", "—")); return td; }
-  const a = el("a", "link", raw.replace(/^https?:\/\//, "").replace(/\/$/, ""));
+  if (raw.trim()) {
+    const a = el("a", "link", shortUrl(raw));
+    a.href = raw;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.title = raw;
+    td.appendChild(a);
+  } else {
+    td.appendChild(el("span", "muted", "—"));
+  }
+  td.appendChild(button("✎", (raw ? "Sửa link" : "Nhập link") + " của " + row.id,
+    () => { EDITING = { id: String(row.id), value: raw }; repaint(); }, "ln"));
+  return td;
+}
+
+function sourceCell(row) {
+  const td = el("td", "src");
+  const raw = String(row.source || "");
+  if (!raw.trim()) {
+    td.appendChild(el("span", "muted", "—"));
+    td.title = "Chưa có link nguồn (chưa import B0)";
+    return td;
+  }
+  const a = el("a", "link", shortUrl(raw));
   a.href = raw;
   a.target = "_blank";
   a.rel = "noopener noreferrer";
-  a.title = raw;
+  a.title = "Nguồn B0: " + raw;
   td.appendChild(a);
   return td;
 }
@@ -286,10 +379,7 @@ function rowNode(row) {
   id.title = String(row.topic || row.id);
   tr.appendChild(id);
 
-  const topic = el("td", "topic", row.topic || "(chưa đặt chủ đề)");
-  topic.title = String(row.topic || "") + (row.has_input ? "" : " · chưa có input");
-  if (!row.has_input) topic.style.color = "var(--muted)";
-  tr.appendChild(topic);
+  tr.appendChild(sourceCell(row));
 
   tr.appendChild(stepsCell(row));
 
@@ -303,13 +393,11 @@ function rowNode(row) {
 
   tr.appendChild(linkCell(row));
 
-  tr.appendChild(el("td", "when", row.updated || ""));
-
   tr.appendChild(copyCell(row));
 
   const act = el("td", "act");
   act.appendChild(button("⚡", "Chạy đủ pipeline B1 → (B2 ∥ B3)", () => send({ source: "run_all", id: row.id }), "act"));
-  act.appendChild(button("✎", "Mở bài này ở trang Tạo bài", () => send({ source: "open", id: row.id }), "act"));
+  act.appendChild(button("↗", "Mở bài này ở trang Tạo bài", () => send({ source: "open", id: row.id }), "act"));
   act.appendChild(button("✅", "Đánh dấu đã đăng", () => send({ source: "mark_posted", id: row.id }), "act"));
   act.appendChild(trashButton(row));
   tr.appendChild(act);
@@ -327,17 +415,51 @@ function batchButton() {
 }
 
 function queueIds() {
-  return rows().filter(r => r.queued).map(r => String(r.id));
+  return (MODEL.queue_ids || []).map(String);
 }
 
+function errorCount() { return (MODEL.error_ids || []).length; }
+
 function queueButton() {
-  const b = button("⚡ Chạy hàng đợi", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #", () => {
+  const b = button("▶ Bắt đầu", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #", () => {
     const ids = queueIds();
     if (ids.length) send({ source: "batch_run", ids });
   });
   b.id = "queuerun";
   b.disabled = true;
   return b;
+}
+
+function errorsButton() {
+  const b = button("⚠ Xếp lỗi vào hàng đợi", "Đánh dấu mọi bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt",
+    () => send({ source: "queue_add_errors" }));
+  b.id = "queueerr";
+  b.disabled = true;
+  return b;
+}
+
+function expandButton() {
+  return button(expandedMode() ? "🗗 Thu lại" : "⛢ Mở rộng",
+    expandedMode() ? "Trả grid về khung thường" : "Grid chiếm kín cửa sổ trình duyệt", () => {
+      lsSet(EXPANDED_KEY, expandedMode() ? "0" : "1");
+      try {
+        if (expandedMode() && document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else if (!expandedMode() && document.fullscreenElement && document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+      } catch (_) {}  // iframe không được phép full-screen thì chỉ cần khung cao kín trang
+      repaint();
+    });
+}
+
+function statsBar() {
+  const s = MODEL.summary || {};
+  const box = el("span", "stats");
+  SUMMARY_ORDER.forEach(pair => {
+    box.appendChild(el("span", "stat " + pair[0], pair[1] + " " + Number(s[pair[0]] || 0)));
+  });
+  return box;
 }
 
 function updateBar() {
@@ -353,13 +475,57 @@ function updateBar() {
   if (q) {
     const ids = queueIds();
     q.disabled = ids.length === 0;
-    q.textContent = "⚡ Chạy hàng đợi (" + Math.min(ids.length, MAX_BATCH) + "/" + ids.length + ")";
+    q.textContent = "▶ Bắt đầu (" + Math.min(ids.length, MAX_BATCH) + (ids.length > MAX_BATCH ? "/" + ids.length : "") + ")";
     q.title = ids.length > MAX_BATCH
       ? "Tối đa " + MAX_BATCH + " bài/lần — " + (ids.length - MAX_BATCH) + " bài để lượt sau"
       : "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #";
   }
+  const e = document.getElementById("queueerr");
+  if (e) {
+    const n = errorCount();
+    e.disabled = n === 0;
+    e.textContent = "⚠ Xếp " + n + " bài lỗi vào hàng đợi";
+    e.title = n ? "Đánh dấu " + n + " bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt" : "Chưa có bài nào đang lỗi";
+  }
   const all = document.getElementById("pickall");
   if (all) all.checked = rows().length > 0 && rows().every(r => PICKED.has(String(r.id)));
+}
+
+let drag = null;
+
+function applyWidths(map, table) {
+  const total = COLS.reduce((sum, c) => sum + Number(map[c.key]), 0) + 2;
+  table.style.minWidth = total + "px";
+  COLS.forEach(c => {
+    const col = table.querySelector('col[data-k="' + c.key + '"]');
+    if (col) col.style.width = map[c.key] + "px";
+  });
+}
+
+function startDrag(ev, col, map, table, grip) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  drag = { x: ev.clientX, key: col.key, start: map[col.key], map, table, grip };
+  grip.classList.add("dragging");
+  document.body.style.userSelect = "none";
+  document.addEventListener("mousemove", onDrag);
+  document.addEventListener("mouseup", endDrag);
+}
+function onDrag(ev) {
+  if (!drag) return;
+  const col = COLS.find(c => c.key === drag.key);
+  drag.map[col.key] = Math.max(col.min, Math.round(drag.start + (ev.clientX - drag.x)));
+  applyWidths(drag.map, drag.table);
+}
+function endDrag() {
+  if (!drag) return;
+  saveWidths(drag.map);
+  drag.grip.classList.remove("dragging");
+  document.body.style.userSelect = "";
+  document.removeEventListener("mousemove", onDrag);
+  document.removeEventListener("mouseup", endDrag);
+  drag = null;
+  setFrameHeight();
 }
 
 function render(args) {
@@ -367,14 +533,18 @@ function render(args) {
     rows: Array.isArray(args.rows) ? args.rows : [],
     workspace: String(args.workspace || ""),
     copy_response: args.copy_response && typeof args.copy_response === "object" ? args.copy_response : {},
+    summary: args.summary && typeof args.summary === "object" ? args.summary : {},
+    queue_ids: Array.isArray(args.queue_ids) ? args.queue_ids : [],
+    error_ids: Array.isArray(args.error_ids) ? args.error_ids : [],
   };
   const alive = new Set(rows().map(r => String(r.id)));
   Array.from(PICKED).forEach(id => { if (!alive.has(id)) PICKED.delete(id); });
+  if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
   boxes = [];
 
   const root = document.getElementById("root");
   root.textContent = "";
-  const wrap = el("div", "wrap");
+  const wrap = el("div", "wrap" + (expandedMode() ? " expanded" : ""));
 
   const bar = el("div", "bar");
   const allWrap = el("label", "muted");
@@ -392,19 +562,30 @@ function render(args) {
   allWrap.appendChild(el("span", "muted", " chọn tất cả"));
   bar.appendChild(batchButton());
   bar.appendChild(queueButton());
+  bar.appendChild(errorsButton());
   bar.appendChild(allWrap);
-  bar.appendChild(el("span", "count", rows().length + " bài" + (MODEL.workspace ? " · " + MODEL.workspace : "")));
+  bar.appendChild(expandButton());
+  bar.appendChild(statsBar());
+  bar.appendChild(el("span", "count", "hiện " + rows().length + " bài" + (MODEL.workspace ? " · " + MODEL.workspace : "")));
   wrap.appendChild(bar);
 
   if (!rows().length) {
-    wrap.appendChild(el("div", "empty", "Workspace này chưa có story nào — mở trang Tạo bài, hoặc vào Cấu hình ▸ Workspace chọn folder khác."));
+    wrap.appendChild(el("div", "empty", "Workspace này chưa có story nào (hoặc bộ lọc đang che hết) — mở trang Tạo bài, hoặc đổi bộ lọc 'Lọc bài'."));
   } else {
     const scroll = el("div", "scroll");
     const table = document.createElement("table");
+    const W = widths();
+    const group = el("colgroup");
+    COLS.forEach(c => { const col = el("col"); col.dataset.k = c.key; group.appendChild(col); });
+    table.appendChild(group);
     const head = el("tr");
-    [["q", "#"], ["pick", ""], ["id", "story"], ["topic", "chủ đề"], ["steps", "B1 B2 B3"],
-     ["img", "ảnh"], ["status", "status"], ["link", "Link"], ["when", "sửa lúc"], ["copy", "copy"], ["act", ""]].forEach(pair => {
-      head.appendChild(el("th", pair[0], pair[1]));
+    COLS.forEach(c => {
+      const th = el("th", c.key + (c.align === "c" ? " c" : ""), c.label);
+      const grip = el("span", "grip");
+      grip.title = "Kéo để đổi độ rộng cột — nhớ theo workspace này";
+      grip.addEventListener("mousedown", ev => startDrag(ev, c, W, table, grip));
+      th.appendChild(grip);
+      head.appendChild(th);
     });
     const thead = el("thead");
     thead.appendChild(head);
@@ -412,11 +593,12 @@ function render(args) {
     const tbody = document.createElement("tbody");
     rows().forEach(row => tbody.appendChild(rowNode(row)));
     table.appendChild(tbody);
+    applyWidths(W, table);
     scroll.appendChild(table);
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "màu ô B1 B2 B3: " + LEGEND + " — bấm ô để chạy đúng bước đó · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · copy lấy chữ vào clipboard (chỉ xin nội dung khi bấm) · ✎ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục)"));
+    "màu ô B1 B2 B3: " + LEGEND + " — bấm ô để chạy đúng bước đó · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ✎ ở cột Link để sửa link đã đăng · copy lấy chữ vào clipboard (chỉ xin nội dung khi bấm) · ↗ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục) · kéo mép tiêu đề để đổi độ rộng cột · ⛢ mở rộng kín cửa sổ"));
   root.appendChild(wrap);
   unmarkSent();
   updateBar();
