@@ -121,6 +121,9 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
         states = ga.display_states(ctx.root, sid, story=story)
         detail = dict(summary["detail"])
         detail["b0"] = str((story.get("b0") or {}).get("detail") or "")
+        corrupt = str(story.get("_corrupt") or "")
+        if corrupt:
+            detail["b0"] = "story.json hỏng, đọc không được — coi như bài chưa chạy gì; lần lưu tới sẽ dời file cũ sang story.bad-…"
         out.append({
             "id": sid,
             "topic": summary["topic"],
@@ -133,7 +136,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "states": states,
             "b0": ga.b0_state(ctx.root, sid, story=story),  # B0 có state riêng, không nằm trong states/bucket
             "b0meta": ga.b0_meta(story),
-            "bucket": ga.bucket(states),
+            "bucket": "error" if corrupt else ga.bucket(states),  # bài không đọc được story.json là việc phải xử lý, không phải "chờ"
             "queued": bool(story.get("queued")),
             "queued_at": float(story.get("queued_at") or 0),
             "queue_pos": 0,

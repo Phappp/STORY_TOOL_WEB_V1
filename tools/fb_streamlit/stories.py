@@ -213,13 +213,43 @@ def _read_text(path: Path) -> str:
         return ""
 
 
+def _quarantine(file: Path) -> str:
+    """Đổi tên file đọc không được sang story.bad-<mốc> để lần ghi đè không nuốt mất nội dung cũ."""
+    stamp = int(time.time() * 1000)
+    dest = file.with_name(f"story.bad-{stamp}.json")
+    n = 1
+    while dest.exists():  # hai bản hỏng trong cùng một mili giây thì đánh số, đừng đè nhau
+        n += 1
+        dest = file.with_name(f"story.bad-{stamp}-{n}.json")
+    try:
+        file.rename(dest)
+        return dest.name
+    except OSError:
+        return "(giữ nguyên file hỏng)"
+
+
+def _quarantine_if_unreadable(file: Path) -> None:
+    """Trước khi ghi đè, xem file trên đĩa còn parse được không — mọi đường lưu đều qua đây nên
+    không cần tin cờ _corrupt trong bộ nhớ (caller có thể tự dựng dict mới mà vẫn ghi đè lên bản hỏng)."""
+    if not file.is_file():
+        return
+    try:
+        json.loads(file.read_text(encoding="utf-8-sig"))
+    except ValueError:
+        _quarantine(file)
+
+
 def load_story(root: Path, sid: str) -> dict:
     folder = story_dir(root, sid)
     file = folder / "story.json"
     try:
-        data = json.loads(file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        data = json.loads(file.read_text(encoding="utf-8-sig"))
+    except OSError:
         data = {}
+    except ValueError:
+        # đừng đổi tên ngay lúc đọc: grid đọc liên tục nên dấu hiệu "hỏng" sẽ biến mất ở tick kế tiếp.
+        # chỉ ghi (_corrupt) và giữ nguyên file cho tới khi có lần lưu thì mới dời sang story.bad-…
+        data = {"_corrupt": file.name}
     if not isinstance(data, dict):
         data = {}
     data.setdefault("schema", SCHEMA)
@@ -231,20 +261,30 @@ def load_story(root: Path, sid: str) -> dict:
 @serialized
 def save_story(root: Path, sid: str, story: dict) -> dict:
     folder = story_dir(root, sid)
+    file = folder / "story.json"
     story = dict(story)
     story.pop("folder", None)
+    story.pop("_corrupt", None)  # cờ nội bộ, không bao giờ được ghi xuống đĩa
+    _quarantine_if_unreadable(file)  # bản cũ đọc không được thì giữ lại thành story.bad-… trước khi đè
     story["schema"] = SCHEMA
     story["id"] = sid
     story["updated_at"] = time.time()
-    _write_json(folder / "story.json", story)
+    _write_json(file, story)
     return story
 
 
 @serialized
 def create_story(root: Path, topic: str = "", preset_id=None, input_text: str = "", link: str = "") -> dict:
-    sid = next_story_id(root)
-    folder = root / sid
-    folder.mkdir(parents=True)
+    for _ in range(5):
+        sid = next_story_id(root)
+        folder = root / sid
+        try:
+            folder.mkdir(parents=True)
+            break
+        except FileExistsError:
+            continue  # hai cửa sổ Streamlit cùng bấm tạo bài: khóa chỉ chặn trong một tiến trình, số id có thể trùng
+    else:
+        raise WorkspaceError(f"Không tạo được folder bài trong {root} — thử lại sau vài giây")
     story = {
         "schema": SCHEMA,
         "id": sid,
@@ -327,7 +367,11 @@ def save_image(root: Path, sid: str, src, method: str = "", refs: list[str] | No
     old = _image_file(folder)
     if old is not None and old.name != IMAGE_FILE:
         old.unlink()
-    shutil.copy2(src, folder / IMAGE_FILE)
+    # ghi qua file tạm tên bắt đầu bằng dấu chấm (không dính glob "image.*") rồi replace:
+    # chết giữa chừng không để lại ảnh_half.png mà grid sẽ nhận là ảnh của bài
+    tmp = folder / ".image.tmp"
+    shutil.copy2(src, tmp)
+    os.replace(tmp, folder / IMAGE_FILE)
     story = load_story(root, sid)
     block = dict(story.get("b2") or {})
     block.update(
@@ -399,7 +443,12 @@ def archive_story(root: Path, sid: str) -> Path:
     folder = story_dir(root, sid)
     trash = root / ".trash"
     trash.mkdir(parents=True, exist_ok=True)
-    dest = trash / f"{sid}__{time.strftime('%Y%m%d-%H%M%S')}"
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = trash / f"{sid}__{stamp}"
+    n = 1
+    while dest.exists():  # hai lần archive cùng tên trong cùng một giây thì đánh số thêm, đừng đè nhau
+        n += 1
+        dest = trash / f"{sid}__{stamp}-{n}"
     folder.rename(dest)
     return dest
 

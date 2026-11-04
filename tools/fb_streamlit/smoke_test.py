@@ -1493,6 +1493,35 @@ stories.set_step_state(root, "story_001", "b1", "done")
 (root / "story_001" / "caption.txt").write_text("", encoding="utf-8")
 check("done but file gone -> missing", stories.states(root, "story_001")["b1"] == "missing")
 check("no .tmp residue after atomic writes", not list((root / "story_001").rglob("*.tmp")))
+check("save_image không để lại file tạm .image (glob image.* phải chỉ thấy ảnh thật)",
+      not list((root / "story_001").glob(".*")))
+
+# --- P6b: story.json hỏng, bài hỏng trên grid, archive trùng tên (workspace riêng, không đụng root ở trên) ---
+p6b_root = stories.validate_root(Path(tempfile.mkdtemp(prefix="fbp6b_")) / "ws")
+broken = stories.create_story(p6b_root, "Bài story.json hỏng")["id"]
+bdir = p6b_root / broken
+(bdir / "story.json").write_text('{"topic": "chữ cũ còn đọc được", ', encoding="utf-8")  # file bị cắt giữa chừng
+check("story.json hỏng -> load_story báo _corrupt và GIỮ NGUYÊN file (grid đọc suốt, đổi tên lúc đọc là mất dấu hỏng)",
+      stories.load_story(p6b_root, broken).get("_corrupt") == "story.json"
+      and (bdir / "story.json").is_file()
+      and "chữ cũ còn đọc được" in (bdir / "story.json").read_text(encoding="utf-8"))
+check("đọc bài hỏng lần thứ hai vẫn còn dấu hỏng (bucket không tụt về 'chờ')",
+      stories.load_story(p6b_root, broken).get("_corrupt") == "story.json")
+brow = next(r for r in fbgrid.rows_for(ga.Ctx(root=p6b_root, providers={}, presets={}, defaults={})) if r["id"] == broken)
+check("grid tính bài hỏng story.json là Lỗi (lọc + đếm đúng), tooltip ghi rõ tên file dự phòng",
+      brow["bucket"] == "error" and "story.bad-" in brow["detail"]["b0"])
+stories.save_story(p6b_root, broken, {"topic": "hồi sinh"})
+bad = sorted(p.name for p in bdir.glob("story.bad-*.json"))
+check("lưu đè bài hỏng: dời bản cũ sang story.bad-… rồi ghi story.json mới, không mất trắng",
+      len(bad) == 1 and "chữ cũ còn đọc được" in (bdir / bad[0]).read_text(encoding="utf-8")
+      and stories.load_story(p6b_root, broken)["topic"] == "hồi sinh"
+      and "_corrupt" not in stories.load_story(p6b_root, broken))
+third = stories.create_story(p6b_root, "Bài archive lần nhất")["id"]
+first_trash = stories.archive_story(p6b_root, third)
+again = stories.create_story(p6b_root, "Bài lấy lại đúng số id đó")["id"]
+second_trash = stories.archive_story(p6b_root, again)
+check("archive hai lần cùng tên trong cùng một giây -> hai folder khác nhau trong .trash",
+      again == third and first_trash != second_trash and first_trash.is_dir() and second_trash.is_dir())
 
 second = stories.create_story(root, "Chủ đề 2")
 check("next_story_id increments", second["id"] == "story_002" and stories.next_story_id(root) == "story_003")
