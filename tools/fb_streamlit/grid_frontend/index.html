@@ -504,31 +504,19 @@ function renderMarkdown(text, box) {
   });
 }
 
-// Ô sửa caption tay của tab B0 — bản nháp giữ trong DRAFT theo key nên grid vẽ lại (5s) không nuốt chữ đang gõ.
-function captionEditor(row, key, loaded) {
-  const box = el("div");
-  const bar = el("div", "save");
-  const note = el("span", "upnote", "đang khớp input.txt");
-  const ta = document.createElement("textarea");
-  ta.className = "ta";
-  ta.value = DRAFT.has(key) ? String(DRAFT.get(key)) : loaded;
-  ta.spellcheck = false;
-  ta.dataset.fid = "cap:" + row.id;  // để vẽ lại vẫn trả đúng con trỏ về ô đang gõ
-  const save = button("💾 Lưu caption", "", b => {
-    b.disabled = true;
-    send({ source: "b0_save", id: row.id, text: ta.value });
-    flash(b, "…đã gửi", "");
-  }, "act");
-  const sync = () => {
-    const dirty = ta.value !== loaded;
-    save.disabled = !dirty;
-    save.title = dirty ? "Ghi chữ đang hiện vào input.txt của " + row.id +
-      " — B0 sẽ không đè bản sửa tay; muốn trích lại từ link thì xóa input.txt trước"
-      : "Chưa sửa gì so với caption đang có trong input.txt";
-    note.textContent = dirty ? "bản nháp — chưa lưu" : "đang khớp input.txt";
-  };
-  ta.addEventListener("input", () => { DRAFT.set(key, ta.value); sync(); });
-  ta.addEventListener("click", e => e.stopPropagation());
+// Ba tab chữ của modal sửa được tại chỗ: B0 -> input.txt, B1 -> caption.txt, B3 -> seo.md.
+// EDITORS chỉ nói ghi file nào và nguồn nào sẽ đè lại — việc thật do Python làm theo event.
+const EDITORS = {
+  b0: { label: "💾 Lưu caption", source: "b0_save", file: "input.txt",
+        over: "B0 sẽ không đè bản sửa tay; muốn trích lại từ link thì xóa input.txt trước" },
+  b1: { label: "💾 Lưu caption", source: "text_save", file: "caption.txt",
+        over: "chạy lại B1 sẽ ghi đè bản sửa này" },
+  b3: { label: "💾 Lưu bài SEO", source: "text_save", file: "seo.md",
+        over: "chạy lại B3 sẽ ghi đè bản sửa này" },
+};
+
+// Ảnh tham chiếu B0 đi base64 qua event (component không upload thẳng được).
+function refPicker(row, note) {
   const file = document.createElement("input");
   file.type = "file";
   file.accept = REF_ACCEPT;
@@ -552,8 +540,40 @@ function captionEditor(row, key, loaded) {
     rd.onerror = () => { note.textContent = "đọc file hỏng — thử lại"; };
     rd.readAsDataURL(f);
   });
+  return file;
+}
+
+// Bản nháp giữ trong DRAFT theo key nên mỗi 5s grid vẽ lại không nuốt chữ đang gõ.
+function textEditor(row, key, tab, loaded) {
+  const cfg = EDITORS[tab];
+  const busy = flowNote(row, tab);  // bước đang nằm trong luồng nền thì chỉ cho xem, kẻo lưu xong bị AI đè
+  const clean = "đang khớp " + cfg.file;
+  const box = el("div");
+  const bar = el("div", "save");
+  const note = el("span", "upnote", busy ? "⏳ " + busy : clean);
+  const ta = document.createElement("textarea");
+  ta.className = "ta";
+  ta.value = DRAFT.has(key) ? String(DRAFT.get(key)) : loaded;
+  ta.spellcheck = false;
+  ta.readOnly = !!busy;
+  ta.dataset.fid = "cap:" + row.id + ":" + tab;  // để vẽ lại vẫn trả đúng con trỏ về ô đang gõ
+  const save = button(cfg.label, "", b => {
+    b.disabled = true;
+    send({ source: cfg.source, id: row.id, step: tab, text: ta.value });
+    flash(b, "…đã gửi", "");
+  }, "act");
+  const sync = () => {
+    const dirty = ta.value !== loaded;
+    save.disabled = !dirty || !!busy;
+    save.title = busy ? "Đang chờ/chạy trong luồng nền — sửa sau khi ô này đổi màu, kẻo bản sửa bị ghi đè"
+      : dirty ? "Ghi chữ đang hiện vào " + cfg.file + " của " + row.id + " — " + cfg.over
+        : "Chưa sửa gì so với chữ đang có trong " + cfg.file;
+    note.textContent = busy ? "⏳ " + busy : dirty ? "bản nháp — chưa lưu" : clean;
+  };
+  ta.addEventListener("input", () => { DRAFT.set(key, ta.value); sync(); });
+  ta.addEventListener("click", e => e.stopPropagation());
   bar.appendChild(save);
-  bar.appendChild(file);
+  if (tab === "b0") bar.appendChild(refPicker(row, note));
   bar.appendChild(note);
   sync();
   box.appendChild(bar);
@@ -582,7 +602,7 @@ function modalBody(row, tab, key) {
     if (cap == null && !src) { body.appendChild(el("div", "loading", "… đang đọc caption + ảnh từ folder story")); return body; }
     const shown = cap == null ? "" : String(cap);
     if (!shown.trim() && !src) body.appendChild(el("div", "muted", "input.txt đang trống — gõ caption tay rồi bấm “💾 Lưu caption”, hoặc bấm “▶ Trích lại B0” để lấy từ link."));
-    body.appendChild(captionEditor(row, key, shown));
+    body.appendChild(textEditor(row, key, "b0", shown));
     return body;
   }
   if (tab === "b2") {
@@ -596,8 +616,17 @@ function modalBody(row, tab, key) {
     return body;
   }
   const text = CONTENT.get(key);
-  if (text == null) { body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc nội dung từ folder story")); return body; }
+  if (text == null) {
+    // file trống thì Python không trả payload nào — với B1/B3 vẫn phải mở được ô chữ để gõ từ đầu
+    if (EDITORS[tab] && row.copyable && row.copyable[tabField(tab)] === false) {
+      body.appendChild(textEditor(row, key, tab, ""));
+      return body;
+    }
+    body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc nội dung từ folder story"));
+    return body;
+  }
   if (tab === "b3" && SHOW_MD) { renderMarkdown(String(text), body); return body; }
+  if (EDITORS[tab]) { body.appendChild(textEditor(row, key, tab, String(text))); return body; }
   body.appendChild(el("pre", "doc", String(text)));
   return body;
 }
@@ -692,7 +721,8 @@ function modalNode() {
   }
   tools.appendChild(el("span", "muted", ref.tab === "b2" ? "ảnh đọc từ image.png trong folder story"
     : ref.tab === "b0" ? "caption đọc từ input.txt và sửa tay được · ảnh tham chiếu đọc từ refs/ của " + row.id
-    : "nội dung đọc từ file trong folder story (" + row.id + ")"));
+      : "chữ đọc từ " + (EDITORS[ref.tab] ? EDITORS[ref.tab].file : "folder story") +
+      " của " + row.id + (EDITORS[ref.tab] ? " — sửa tay rồi bấm lưu, file vẫn là nguồn thật" : "")));
   modal.appendChild(tools);
   modal.appendChild(modalBody(row, ref.tab, key));
   modal.appendChild(el("div", "mfoot",

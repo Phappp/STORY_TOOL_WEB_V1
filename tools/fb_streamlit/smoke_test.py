@@ -761,7 +761,7 @@ out = ga.apply_event(gctx, {"source": "b0_save", "id": sid_manual, "text": "Capt
 block_m = stories.load_story(ga_root, sid_manual)["b0"]
 check("b0_save: chữ vào input.txt, state done + method 'thủ công', đếm chữ hộ anh",
       (ga_root / sid_manual / "input.txt").read_text(encoding="utf-8").startswith("Caption tôi gõ tay")
-      and block_m["state"] == stories.DONE and block_m["method"] == ga.B0_MANUAL
+      and block_m["state"] == stories.DONE and block_m["method"] == ga.MANUAL_METHOD
       and block_m["words"] == 6 and any("đã lưu caption tay" in line for line in out.lines))
 out = ga.apply_event(gctx, {"source": "b0_run", "id": sid_manual})
 check("B0 không đè caption tay: run_b0 bỏ qua, không gọi extract, chữ vẫn nguyên",
@@ -769,7 +769,7 @@ check("B0 không đè caption tay: run_b0 bỏ qua, không gọi extract, chữ 
       and (ga_root / sid_manual / "input.txt").read_text(encoding="utf-8").startswith("Caption tôi gõ tay"))
 row_m = next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_manual)
 check("ô B0 bài nhập tay hiện 'thủ công' và không bị gom vào danh sách trích lại",
-      row_m["b0"] == stories.DONE and ga.B0_MANUAL in row_m["b0meta"]
+      row_m["b0"] == stories.DONE and ga.MANUAL_METHOD in row_m["b0meta"]
       and sid_manual not in ga.b0_todo_ids(gctx))
 ga.apply_event(gctx, {"source": "b0_save", "id": sid_manual, "text": "   "})
 check("xóa hết chữ -> ô B0 về 'chưa chạy' chứ không báo 'mất file'",
@@ -1459,7 +1459,7 @@ at_im.run()
 check("event b0_save từ modal -> grid ghi input.txt, đánh dấu 'thủ công', báo log và vẽ lại ô B0",
       not at_im.exception
       and (smoke_root / made[1] / "input.txt").read_text(encoding="utf-8") == "Caption dán tay từ modal"
-      and stories.load_story(smoke_root, made[1])["b0"]["method"] == ga.B0_MANUAL
+      and stories.load_story(smoke_root, made[1])["b0"]["method"] == ga.MANUAL_METHOD
       and any("đã lưu caption tay" in line for line in at_im.session_state.get("grid_log", []))
       and any(r["id"] == made[1] and r["b0"] == "done" for r in captured.get("rows", []))
       and len(ui_calls) == 8)  # lưu tay không được gọi mạng
@@ -1470,6 +1470,36 @@ check("event b0_ref_add -> ảnh vào refs/ của story (ref_2.png) và grid bá
       not at_im.exception and [p.name for p in refs_im] == ["ref_1.jpg", "ref_2.png"]
       and stories.load_story(smoke_root, made[1])["b0"]["refs"] == 2
       and any("ref_2.png" in line for line in at_im.session_state.get("grid_log", [])))
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b1-save", "source": "text_save", "id": made[1],
+                                   "step": "b1", "text": "Caption sửa tay trong modal B1"}
+at_im.run()
+b1_block = stories.load_story(smoke_root, made[1]).get("b1") or {}
+check("event text_save b1 -> grid ghi caption.txt, bài thành 'xong' + method 'thủ công', không gọi mạng",
+      not at_im.exception and stories.step_text(smoke_root, made[1], "b1") == "Caption sửa tay trong modal B1"
+      and b1_block.get("state") == stories.DONE and b1_block.get("method") == ga.MANUAL_METHOD
+      and any(r["id"] == made[1] and r["states"]["b1"] == "done" for r in captured.get("rows", []))
+      and len(ui_calls) == 8 and any("đã lưu tay caption.txt" in line for line in at_im.session_state.get("grid_log", [])))
+seo_txt = "## SEO sửa tay"
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b3-save", "source": "text_save", "id": made[1],
+                                   "step": "b3", "text": seo_txt}
+at_im.run()
+check("event text_save b3 -> seo.md + đếm chữ hộ anh (word count là số liệu, không phải gate)",
+      not at_im.exception and (smoke_root / made[1] / "seo.md").read_text(encoding="utf-8") == seo_txt
+      and stories.load_story(smoke_root, made[1])["b3"]["words"] == len(seo_txt.split()))
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b1-clear", "source": "text_save", "id": made[1],
+                                   "step": "b1", "text": "   "}
+at_im.run()
+check("xóa hết chữ B1 trong modal -> caption.txt trống và ô quay về 'chưa chạy', không thành 'mất file'",
+      not at_im.exception and stories.step_text(smoke_root, made[1], "b1") == ""
+      and stories.load_story(smoke_root, made[1])["b1"]["state"] == stories.PENDING
+      and any(r["id"] == made[1] and r["states"]["b1"] == "pending" for r in captured.get("rows", [])))
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-bad-save", "source": "text_save", "id": made[1],
+                                   "step": "b2", "text": "ảnh thì sửa bằng chữ thế nào"}
+at_im.run()
+check("text_save cho bước không có file chữ -> grid nói rõ ngay, không ghi đè gì",
+      not at_im.exception and any("bước b2 không có file chữ" in line for line in at_im.session_state.get("grid_log", []))
+      and (smoke_root / made[1] / "seo.md").read_text(encoding="utf-8") == seo_txt)
 fbgrid.st.file_uploader = real_uploader
 fb_import.extract = real_extract_ui
 images.download_ref = real_download

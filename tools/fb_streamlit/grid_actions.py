@@ -32,7 +32,7 @@ QUEUED = "queued"
 PREFS_FILE = ".fbtool-grid-prefs.json"
 PROV_NONE = ""  # để trống nghĩa là bài này không chọn riêng, theo workspace/preset
 B0_PREVIEW_FIELD = "B0 preview"
-B0_MANUAL = "thủ công"  # method trong block b0 khi anh dán caption tay — phân biệt với og-tags/yt-dlp
+MANUAL_METHOD = "thủ công"  # method ghi vào block khi anh sửa chữ tay trong modal — B0 phân biệt với og-tags/yt-dlp, B1/B3 phân biệt với chữ AI
 B0_UPLOAD_MAX = 4 * 1024 * 1024  # ảnh tay gửi base64 qua event, để message từ component không phình vô hạn
 REF_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
@@ -485,10 +485,25 @@ def save_b0_caption(ctx: Ctx, sid: str, text: str) -> list[str]:
     stories.save_input(ctx.root, sid, text)
     words = len(text.split())
     steps.set_b0(ctx.root, sid, state=stories.DONE if text.strip() else stories.PENDING,
-                 method=B0_MANUAL, words=words, detail="")
+                 method=MANUAL_METHOD, words=words, detail="")
     if not text.strip():
         return [f"{sid}: input.txt đã trống — ô B0 về 'chưa chạy', còn ảnh tham chiếu trong refs/ vẫn giữ."]
     return [f"{sid}: đã lưu caption tay ({words} chữ) — B0 không đè chữ này; muốn trích lại từ link thì xóa input.txt rồi bấm “▶ Trích lại B0”."]
+
+
+def save_step_text(ctx: Ctx, sid: str, step: str, text: str) -> list[str]:
+    """Sửa tay caption.txt (B1) / seo.md (B3) ngay trong modal — file vẫn là nguồn thật, grid đọc lại từ đó.
+
+    Cố ý KHÔNG chặn AI ghi đè: chạy lại bước là ý anh, nên chỉ báo rõ trong log rằng bản sửa tay sẽ bị thay.
+    """
+    if step not in ("b1", "b3"):
+        return [f"{sid}: modal chỉ sửa được B1 (caption.txt) hoặc B3 (seo.md) — bước {step or '(trống)'} không có file chữ."]
+    text = text if text.strip() else ""  # xóa sạch chữ (còn mỗi khoảng trắng) thì ghi file rỗng, để ô về 'chưa chạy' chứ không báo 'xong'
+    stories.save_step_text(ctx.root, sid, step, text, method=MANUAL_METHOD)
+    name = stories.STEP_FILE[step]
+    if not text.strip():
+        return [f"{sid}: {name} đã trống — ô {step.upper()} về 'chưa chạy'."]
+    return [f"{sid}: đã lưu tay {name} ({len(text.split())} chữ) — chạy lại {STEP_NAMES[step]} sẽ ghi đè bản sửa này."]
 
 
 def add_b0_ref(ctx: Ctx, sid: str, data: str, name: str) -> list[str]:
@@ -562,6 +577,8 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             out.lines, out.touched = _run_b0(ctx, sid), [sid]
         elif source == "b0_save":
             out.lines, out.touched = save_b0_caption(ctx, sid, str(event.get("text") or "")), [sid]
+        elif source == "text_save":
+            out.lines, out.touched = save_step_text(ctx, sid, step, str(event.get("text") or "")), [sid]
         elif source == "b0_ref_add":
             out.lines, out.touched = add_b0_ref(ctx, sid, str(event.get("data") or ""), str(event.get("name") or "")), [sid]
         elif source in ("batch_run", "b0_batch"):
