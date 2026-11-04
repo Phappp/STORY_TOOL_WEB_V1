@@ -22,7 +22,7 @@ KEY = "fb_story_grid"
 LOG_LIMIT = 8  # số dòng log hiện ngay dưới lưới
 LOG_KEEP = 60  # số dòng giữ trong session_state — phần hơn nằm trong expander "Log cũ"
 MODE_COMPONENT = "Grid (component)"
-MODE_NATIVE = "Bảng nút (native)"
+MODE_NATIVE = "Bảng chẩn đoán (native)"
 REFRESH_KEY = "grid_refresh"
 REFRESH_SECONDS = 5
 POLL_SECONDS = 1.5  # khi luồng nền còn việc thì poll nhanh, để ô vuông đổi màu gần lúc bài xong
@@ -38,7 +38,7 @@ GRID_STEPS = ("b0", "b1", "b2", "b3")
 STEP_LABELS = {"b0": "▶ B0", "b1": "▶ B1", "b2": "▶ B2", "b3": "▶ B3"}
 STATE_LABELS = {stories.PENDING: "chưa chạy", ga.QUEUED: "đợi", stories.DONE: "xong", stories.RUNNING: "đang chạy",
                 stories.ERROR: "lỗi", stories.MISSING: "mất file", ga.STALE: "treo"}
-# Bảng nút (native) không tô màu được từng ô như component, nên dùng ký hiệu + chú giải.
+# Bảng chẩn đoán (native) không tô màu được từng ô như component, nên dùng ký hiệu + chú giải.
 STATE_GLYPH = {stories.PENDING: "·", ga.QUEUED: "◇", stories.DONE: "✓", stories.RUNNING: "▶",
                stories.ERROR: "✗", stories.MISSING: "!", ga.STALE: "⏱"}
 LEGEND = "◇ đợi (đã vào hàng đợi) · · chưa chạy · ▶ đang chạy · ✓ xong · ✗ lỗi · ⏱ treo >15 phút · ! mất file"
@@ -375,26 +375,24 @@ def summary_line(all_rows: list[dict]) -> str:
             + (f" · B0 lỗi {c['b0_error']}" if c["b0_error"] else ""))
 
 
-def link_editor(ctx: ga.Ctx, sid: str, current: str) -> None:
-    """Cột Link sửa được ở bảng native — ghi thẳng vào story.json qua event link_save."""
-    if st.session_state.pop("native_link_resync", False) or st.session_state.get("native_link_sid") != sid:
-        st.session_state["native_link_sid"] = sid
-        st.session_state["native_link_edit"] = current
-    edited = st.text_input(f"Link của {sid}", key="native_link_edit",
-                           help="Link bài của bạn đã đăng (khác cột Nguồn = link gốc B0 trích nội dung).")
-    changed = ga.clean_url(edited) != current
-    lcols = st.columns(2)
-    if lcols[0].button("💾 Lưu Link", key="native_link_save", disabled=not changed,
-                       help="Ghi link vào story.json của bài này" if changed else "Chưa sửa gì để lưu"):
-        _after(ctx, {"source": "link_save", "id": sid, "value": edited})
-        st.session_state["native_link_resync"] = True
-        st.rerun()
-    if lcols[1].button("↩ Bỏ sửa", key="native_link_reset", disabled=not changed):
-        st.session_state["native_link_resync"] = True
-        st.rerun()
+def diagnostic_text(row: dict) -> str:
+    """Vì sao một hàng đang nằm trong nhóm việc của nó — chữ trong detail của story.json."""
+    lines = [row_label(row)]
+    for step in GRID_STEPS:
+        state = state_of(row, step)
+        note = str((row.get("detail") or {}).get(step) or "")
+        if note or state in (stories.ERROR, stories.MISSING, ga.STALE):
+            lines.append(f"   {STEP_LABELS[step].replace('▶ ', '')} {STATE_LABELS.get(state, state)}: {note or '(không có mô tả)'}")
+    return "\n".join(lines)
 
 
 def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = None) -> None:
+    """Bản ĐỌC THUẦN để chẩn đoán: thấy grid đang đọc được gì từ folder khi component không hiện lên.
+
+    Ở đây cố ý không còn nút chạy nào: một bài chỉ được chạy ở đúng một nơi (luồng nền trên
+    Grid hoặc trang Tạo bài). Bộ nút thứ hai là mời gọi AI hai lần cho cùng một bài và để hai
+    nơi ghi đè nhau — muốn thao tác thì về Grid (component) hay mở bài ở trang Tạo bài.
+    """
     scope = all_rows if all_rows is not None else rows
     if scope:
         st.caption(summary_line(scope))
@@ -410,57 +408,23 @@ def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = N
         width="stretch", hide_index=True,
     )
     st.caption(LEGEND)
+    bad = [r for r in rows if r["bucket"] == "error"
+           or str(r.get("b0") or "") in (stories.ERROR, ga.STALE, stories.MISSING)]
+    if bad:
+        with st.expander(f"🩺 {len(bad)} bài đang có việc phải xử lý", expanded=True):
+            for row in bad:
+                st.code(diagnostic_text(row), language=None)
+    else:
+        st.caption("Không bài nào đang lỗi — bảng trên là nguyên những gì đọc được từ folder story.")
     ids = [r["id"] for r in rows]
     labels = {r["id"]: row_label(r) for r in rows}
-    by_id = {r["id"]: r for r in rows}
-    sid = st.selectbox("Bài để thao tác", ids, format_func=lambda i: labels[i], key="native_pick")
-    cols = st.columns(8)
-    for col, step in zip(cols[:4], GRID_STEPS, strict=True):
-        if col.button(STEP_LABELS[step], key=f"native_run_{step}"):
-            _after(ctx, {"source": "b0_run" if step == "b0" else "run_step", "id": sid, "step": step})
-            st.rerun()
-    if cols[4].button("⚡ Chạy đủ", key="native_all"):
-        _after(ctx, {"source": "run_all", "id": sid})
-        st.rerun()
-    if cols[5].button("✎ Mở ở Tạo bài", key="native_open"):
-        _after(ctx, {"source": "open", "id": sid})
-        st.rerun()
-    if cols[6].button("✅ Đã đăng", key="native_posted"):
-        _after(ctx, {"source": "mark_posted", "id": sid})
-        st.rerun()
-    if cols[7].button("🗑 Vào .trash", key="native_archive", help="Kéo folder ngược ra ngoài .trash là khôi phục"):
-        _after(ctx, {"source": "archive", "id": sid})
-        st.rerun()
-
-    link_editor(ctx, sid, by_id[sid]["link"])
-
-    in_queue = bool(by_id[sid]["queued"])
-    queued_ids = ga.queue_ids(scope)
-    err_ids = ga.error_ids(scope)
-    qcols = st.columns(4)
-    if qcols[0].button("✕ Bỏ hàng đợi" if in_queue else "➕ Vào hàng đợi", key="native_queue_toggle",
-                       help="Bài trong hàng đợi nổi lên đầu grid và được ⚡ Chạy hàng đợi làm tuần tự"):
-        _after(ctx, {"source": "queue_remove" if in_queue else "queue_add", "id": sid})
-        st.rerun()
-    if qcols[1].button(f"▶ Bắt đầu {len(queued_ids)} bài",
-                       disabled=not queued_ids, key="native_queue_run",
-                       help=f"Luồng nền chạy tuần tự cả hàng đợi, {ga.MAX_BATCH} bài/lượt và tự chạy tiếp tới khi hết"):
-        _after(ctx, {"source": "batch_run", "ids": queued_ids})
-        st.rerun()
-    if qcols[2].button(f"⚠ Xếp {len(err_ids)} bài lỗi vào hàng đợi", disabled=not err_ids, key="native_queue_errors",
-                       help="Đánh dấu mọi bài đang lỗi (kể cả treo/mất file) để chạy lại một loạt"):
-        _after(ctx, {"source": "queue_add_errors"})
-        st.rerun()
-    if qcols[3].button(f"Bỏ hết hàng đợi ({len(queued_ids)})", disabled=not queued_ids, key="native_queue_clear"):
-        _after(ctx, {"source": "queue_clear"})
-        st.rerun()
-
-    picked = st.multiselect("Bài chạy batch", ids, format_func=lambda i: labels[i], key="native_batch")
-    if st.button(f"⚡ Chạy {len(picked)} bài đã chọn", disabled=not picked, key="native_batch_run",
-                 help=f"Luồng nền chạy tuần tự, {ga.MAX_BATCH} bài/lượt và tự chạy tiếp tới khi hết"):
-        _after(ctx, {"source": "batch_run", "ids": picked})
-        st.rerun()
+    sid = st.selectbox("Bài để xem nội dung file", ids, format_func=lambda i: labels[i], key="native_pick")
     copy_blocks(ctx, sid)
+    st.caption("Bảng này chỉ để đọc. Bấm chạy, hàng đợi, sửa link đều làm ở Grid (component) hoặc trang Tạo bài.")
+    if st.button("↩ Về Grid (component)", key="native_back",
+                 help="Trở lại lưới có màu và bấm được từng ô — bảng chẩn đoán không có nút chạy."):
+        st.session_state["grid_mode_pending"] = MODE_COMPONENT
+        st.rerun(scope="app")  # radio 'Kiểu hiển thị' sinh ra ngoài fragment nên phải vẽ lại cả trang
 
 
 def copy_blocks(ctx: ga.Ctx, sid: str) -> None:
@@ -519,7 +483,8 @@ def _body(ctx: ga.Ctx) -> None:
     if str(st.session_state.get("grid_mode") or MODE_COMPONENT) == MODE_COMPONENT:
         if render_component(ctx, rows, all_rows):
             return
-        st.warning(f"Grid component không chạy được ({st.session_state.get('grid_component_error')}) — chuyển sang bảng nút.")
+        st.warning(f"Grid component không chạy được ({st.session_state.get('grid_component_error')}) — "
+                   "dưới đây là bảng đọc thuần cùng dữ liệu, chỉ để thấy grid đang thấy gì chứ không bấm chạy.")
     render_native(ctx, rows, all_rows)
 
 
@@ -527,10 +492,14 @@ def render(ctx: ga.Ctx) -> None:
     st.subheader("Grid story")
     st.caption(f"Workspace: `{ctx.root}` — mỗi ô là file thật trong folder story (`caption.txt`, `image.png`, `seo.md`).")
     auto = refresh_toggle(ctx.root)
+    pending_mode = st.session_state.pop("grid_mode_pending", None)  # nút ↩ trong bảng chẩn đoán: đổi TRƯỚC khi radio sinh ra
+    if pending_mode:
+        st.session_state["grid_mode"] = pending_mode
     col_mode, col_filter = st.columns(2)
     with col_mode:
         st.radio("Kiểu hiển thị", (MODE_COMPONENT, MODE_NATIVE), key="grid_mode", horizontal=True,
-                 help="Component cần mở grid trong trình duyệt; bảng nút là đường lùi khi component lỗi.")
+                 help="Lưới component là nơi bấm chạy; bảng chẩn đoán chỉ đọc để thấy grid đang thấy gì "
+                      "khi component không hiện được.")
     with col_filter:
         st.selectbox("Lọc bài", list(ga.FILTERS), key="grid_filter",
                      help="Bài lỗi lên đầu, rồi chờ chạy, đang chạy, xong. Bài đã vào hàng đợi luôn ở trên cùng.")
