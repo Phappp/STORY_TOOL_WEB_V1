@@ -1858,6 +1858,23 @@ check("P8iii giao việc cho luồng nền không còn vẽ lại cả trang —
 check("P8iii nhịp fragment 2s tách khỏi nhịp đọc folder 5s của toggle",
       fbgrid.POLL_SECONDS == 2.0 and fbgrid.REFRESH_SECONDS == 5
       and "READ_SOURCES" in grid_src and fbgrid.PAYLOAD_KEY == "grid_payload")
+src_body = inspect.getsource(fbgrid._body)
+src_flow = inspect.getsource(fbgrid.flow_bar)
+lines_body = src_body.splitlines()
+i_slot = next(i for i, l in enumerate(lines_body) if l.strip() == "with st.container():")
+i_comp = next(i for i, l in enumerate(lines_body) if "render_component(ctx, rows, all_rows)" in l)
+emitters = ("st.caption", "st.columns", "st.button", "flow_bar(", "show_log(")
+before_slot = [l for l in lines_body[:i_slot] if l.strip().startswith(emitters)]
+outside = [l for l in lines_body[i_slot + 1:i_comp]
+           if l.strip().startswith(emitters) and len(l) - len(l.lstrip()) == 4]
+check("P8iv chữ đổi số dòng (trạng thái luồng + log + chú thích lọc) nằm hết trong ĐÚNG MỘT "
+      "container tạo vô điều kiện ngay trước component — số phần tử đứng trước lưới không đổi nên "
+      "Streamlit không thay node, hết dựng lại iframe sau ＋/⚡/▶",
+      src_body.count("with st.container():") == 1 and 0 < i_slot < i_comp
+      and not before_slot and not outside)
+check("P8iv nút phanh đổi trạng thái trong on_click — grid khỏi cần vẽ lại lượt nào nữa",
+      "on_click=lambda: _flow_switch" in src_flow and "st.rerun" not in src_flow
+      and src_body.count("st.rerun(") == 1 and 'st.rerun(scope="app")' in src_body)
 fbgrid.rows_for = _real_rows_for
 fbgrid.component = _real_component_p8
 p8_conn.close()

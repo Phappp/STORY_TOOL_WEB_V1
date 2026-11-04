@@ -196,22 +196,32 @@ def runner_line(snap: dict) -> str:
 
 
 def flow_bar(snap: dict) -> None:
-    """Phanh luồng nền: dừng là NGĂN VIỆC MỚI BẮT ĐẦU, không phải cắt giữa lượt gọi AI."""
+    """Phanh luồng nền: dừng là NGĂN VIỆC MỚI BẮT ĐẦU, không phải cắt giữa lượt gọi AI.
+
+    Nút đổi trạng thái trong on_click, nên chính lượt vẽ lại do cú bấm đã thấy trạng thái
+    mới — khỏi cần vẽ lại thêm lượt nào nữa (vẽ lại cả trang ở đây chính là cú loé trắng).
+    """
     if not (snap["busy"] or snap.get("paused")):
         return
     st.caption(runner_line(snap))
     col_btn, _ = st.columns([1, 6])
     if snap.get("paused"):
-        if col_btn.button(f"▶ Chạy tiếp ({snap['queued']} việc chờ)", key="grid_flow_resume",
-                          help="Bỏ phanh để luồng nền làm tiếp đúng hàng đợi đang xếp."):
-            n = RUNNER.resume()
-            _push([f"Luồng nền chạy tiếp — còn {n} việc trong hàng đợi."])
-            st.rerun()
-    elif col_btn.button("⏸ Dừng", key="grid_flow_pause",
-                        help="Bài ĐANG chạy vẫn chạy cho xong; những việc còn xếp trong hàng đợi sẽ dừng lại."):
-        n = RUNNER.pause()
+        col_btn.button(f"▶ Chạy tiếp ({snap['queued']} việc chờ)", key="grid_flow_resume",
+                       help="Bỏ phanh để luồng nền làm tiếp đúng hàng đợi đang xếp.",
+                       on_click=lambda: _flow_switch(False))
+    else:
+        col_btn.button("⏸ Dừng", key="grid_flow_pause",
+                       help="Bài ĐANG chạy vẫn chạy cho xong; những việc còn xếp trong hàng đợi sẽ dừng lại.",
+                       on_click=lambda: _flow_switch(True))
+
+
+def _flow_switch(paused: bool) -> None:
+    """Callback của nút phanh: đổi trạng thái luồng + ghi log TRƯỚC khi fragment vẽ lại."""
+    n = RUNNER.pause() if paused else RUNNER.resume()
+    if paused:
         _push([f"Đã phanh luồng nền — {n} việc chờ, bấm ▶ Chạy tiếp để làm tiếp."])
-        st.rerun()
+    else:
+        _push([f"Luồng nền chạy tiếp — còn {n} việc trong hàng đợi."])
 
 
 def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
@@ -512,16 +522,11 @@ def _body(ctx: ga.Ctx) -> None:
     outcome, event = consume_event(ctx)
     snap = RUNNER.snapshot()
     was_busy = bool(st.session_state.get("grid_flow_busy"))
-    if snap["busy"] or snap.get("paused"):
-        flow_bar(snap)
-    elif was_busy:
-        st.caption(runner_line(snap))  # luồng nền vừa cạn -> nói một câu cho biết đã xong bao nhiêu bài
     lines, seen = RUNNER.new_lines(int(st.session_state.get("grid_flow_seen") or 0))
     if lines:
         _push(lines)
         st.session_state["grid_flow_seen"] = seen
     st.session_state["grid_flow_busy"] = snap["busy"]
-    show_log()
     if outcome is not None and outcome.nav:
         st.rerun(scope="app")  # nút ↗: nhảy sang trang Tạo bài với bài vừa chọn
     app_run = int(st.session_state.get(APP_RUN_KEY) or 0)
@@ -534,8 +539,17 @@ def _body(ctx: ga.Ctx) -> None:
     all_rows = mark_flow(cached["all_rows"], snap)  # dấu bài do luồng nền giữ là bộ nhớ, khỏi đọc folder
     choice = str(st.session_state.get("grid_filter") or ga.FILTERS[0])
     rows = ga.filter_rows(all_rows, choice)
-    if choice != ga.FILTERS[0]:
-        st.caption(f"Lọc “{choice}”: {len(rows)}/{len(all_rows)} bài trong workspace.")
+    # ĐÚNG MỘT container cho toàn bộ chữ đổi số dòng (trạng thái luồng + log + chú thích lọc), tạo
+    # vô điều kiện TRƯỚC component: số phần tử đứng trước grid mà đổi là Streamlit thay node
+    # component -> iframe lưới bị gỡ và dựng lại, thành cú loé trắng ~1 giây ngay sau ＋/⚡/▶.
+    with st.container():
+        if snap["busy"] or snap.get("paused"):
+            flow_bar(snap)
+        elif was_busy:
+            st.caption(runner_line(snap))  # luồng nền vừa cạn -> nói một câu cho biết đã xong bao nhiêu bài
+        show_log()
+        if choice != ga.FILTERS[0]:
+            st.caption(f"Lọc “{choice}”: {len(rows)}/{len(all_rows)} bài trong workspace.")
     if str(st.session_state.get("grid_mode") or MODE_COMPONENT) == MODE_COMPONENT:
         if render_component(ctx, rows, all_rows):
             return
