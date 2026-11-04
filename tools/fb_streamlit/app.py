@@ -249,19 +249,43 @@ def page_create(c):
         st.session_state["saved_images"] = json.loads(post["images"]) if post else []
         st.session_state["keywords_text"] = ", ".join(json.loads(post["keywords"])) if post and post["keywords"] != "[]" else ""
         st.session_state["b0_ref_paths"] = [str(p) for p in stories.refs_of(root, story_id)] if (root and story_id) else []
+        # bài đang mở dùng preset nào thì ô preset phải hiện đúng cái đó — trước đây nó luôn nhảy về
+        # preset đầu danh sách mỗi lần tải lại trang nên "gán preset" trông như không bao giờ trụ
+        own = stories.load_story(root, story_id).get("preset_id") if (root and story_id) else None
+        if own in {p["id"] for p in presets}:
+            st.session_state["create_preset"] = own
+        else:
+            st.session_state.pop("create_preset", None)  # bài chưa gán -> để widget bắt đầu từ preset đầu
 
     if not presets:
         st.info("Chưa có preset nào. Vào **Cấu hình ▸ Presets** tạo bộ prompt cho chủ đề trước.")
         return
 
     preset_map = {p["id"]: p for p in presets}
+
+    def assign_preset(sid, pid_val) -> None:
+        """Gán thẳng vào story.json: chọn preset là bài mang preset đó, tải lại trang vẫn còn."""
+        if root and sid:
+            stories.update_story(root, sid, preset_id=pid_val)
+
     pid = st.selectbox(
         "Preset (bộ prompt theo chủ đề)",
         list(preset_map.keys()),
         format_func=lambda i: preset_map[i]["name"],
         key="create_preset",
+        on_change=lambda: assign_preset(story_id, st.session_state["create_preset"]),
+        help="Đổi là gán luôn cho bài đang mở (ghi preset_id vào story.json); đang ở “— Story mới —” "
+             "thì preset này dùng cho bài tạo ra. Grid chạy bài nào cũng lấy preset của bài đó.",
     )
     preset = preset_map[pid]
+    own = stories.load_story(root, story_id).get("preset_id") if (root and story_id) else None
+    if own not in preset_map:
+        st.caption(f"{story_id or 'Bài mới'} chưa gán preset — các bước đang lấy bừa bộ đầu danh sách. "
+                   f"Chọn lại ô trên là gán luôn, hoặc bấm nút này để gán đúng “{preset['name']}” đang hiện:")
+        if st.button(f"📌 Gán “{preset['name']}” cho bài này", key="assign_preset_now", disabled=not story_id,
+                     help="Ghi preset_id vào story.json của bài đang mở — không chạy AI, không sửa nội dung nào khác."):
+            assign_preset(story_id, pid)
+            st.rerun()
 
     b0_import_block()
 

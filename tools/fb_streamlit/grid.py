@@ -34,6 +34,10 @@ APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt m�
 READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"}
 PROV_DEFAULT_LABEL = "Theo preset"
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
+# Khi fragment vẽ lại, Streamlit đánh dấu phần tử của nó bằng data-stale và gắn class có `opacity: .33`
+# kèm `transition: opacity 1s ease-in .5s` -> lưới mờ rồi hiện lại MỖI NHỊP (2s), chính là cái nhấp nháy
+# thấy được dù không chạy gì. Lưới không cần tín hiệu "đang tải" đó nên tắt đúng phần tử của nó.
+NO_DIM_CSS = f"<style>.st-key-{KEY}[data-stale=\"true\"] {{ opacity: 1 !important; transition: none !important; }}</style>"
 CSV_KEY = "grid_import_file"
 CSV_DONE_KEY = "grid_import_done"  # dấu vân tay file vừa import — chặn bấm đôi tạo nhầm gấp đôi bài
 IMPORT_TYPES = ["csv", "txt", "xlsx", "xls", "xlsm"]
@@ -77,39 +81,48 @@ def refresh_toggle(root: Path) -> bool:
     return bool(on)
 
 
+def save_provider_pref(ctx: ga.Ctx, step: str) -> None:
+    """on_change của dropdown: chỉ lúc anh thật sự đổi mới ghi prefs của workspace đang mở.
+
+    st.caption không vẽ được trong callback nên gửi ghi chú qua session_state cho lượt sau hiển thị.
+    """
+    label = str(st.session_state.get(PROV_KEYS[step]) or PROV_DEFAULT_LABEL)
+    note = ga.set_pref_provider(ctx.root, step, "" if label == PROV_DEFAULT_LABEL else label)
+    if note:
+        st.session_state["grid_pref_note"] = note
+
+
 def provider_bar(ctx: ga.Ctx) -> None:
-    """3 dropdown provider cho B1/B2/B3 đặt ở đầu grid — lưu vào prefs của workspace.
+    """3 dropdown provider cho B1/B2/B3 đặt ở đầu grid — prefs của workspace là sự thật duy nhất.
 
     Bài nào được chọn riêng trong modal (prov_pick) thì quyền ưu tiên cao hơn chỗ này.
+    Trước đây mỗi lượt vẽ lại so giá trị widget với file rồi ghi chênh lệch xuống file — nhưng widget
+    có thể mang giá trị của workspace khác hoặc giá trị trình duyệt khôi phục, nên prefs bị xoá âm
+    thầm ngay sau khi chọn ("vừa gán provider đã reset"). Nay file chỉ đổi khi anh bấm đổi.
     """
     names = ga.provider_names(ctx)
     stored = ga.pref_providers(ctx.root)
+    note = st.session_state.pop("grid_pref_note", None)
+    if note:
+        st.caption(note)
     cols = st.columns(3)
     for col, step in zip(cols, ga.ALL_STEPS, strict=True):
         current = str(stored.get(step) or "")
         options = [PROV_DEFAULT_LABEL] + names
         if current and current not in names:  # provider đã bị xóa ở Cấu hình -> bỏ khỏi prefs, vẽ lại "Theo preset"
-            st.session_state.pop(PROV_KEYS[step], None)
             note = ga.set_pref_provider(ctx.root, step, "")
             if note:
                 st.caption(note)
             ctx.defaults.pop(step, None)
             current = ""
-        value = col.selectbox(f"Provider {STEP_LABELS[step].replace('▶ ', '')}", options,
-                              key=PROV_KEYS[step],
-                              index=options.index(current) if current in options else 0,
-                              help=("Bài chưa chọn riêng thì bước này chạy bằng provider đặt ở đây; "
-                                    "chọn “Theo preset” để dùng provider của preset như trang Tạo bài.")
-                                   + ("" if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
-        want = "" if value == PROV_DEFAULT_LABEL else str(value)
-        if want != current:
-            note = ga.set_pref_provider(ctx.root, step, want)
-            if note:
-                st.caption(note)
-            if want:
-                ctx.defaults[step] = want
-            else:
-                ctx.defaults.pop(step, None)
+        st.session_state[PROV_KEYS[step]] = current or PROV_DEFAULT_LABEL
+        col.selectbox(f"Provider {STEP_LABELS[step].replace('▶ ', '')}", options,
+                      key=PROV_KEYS[step],
+                      on_change=lambda s=step: save_provider_pref(ctx, s),
+                      help=("Bài chưa chọn riêng thì bước này chạy bằng provider đặt ở đây; "
+                            "chọn “Theo preset” để dùng provider của preset như trang Tạo bài. "
+                            f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
+                            if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
 
 
 def _when(ts: float) -> str:
@@ -560,6 +573,7 @@ def _body(ctx: ga.Ctx) -> None:
 
 def render(ctx: ga.Ctx) -> None:
     st.subheader("Grid story")
+    st.markdown(NO_DIM_CSS, unsafe_allow_html=True)
     st.caption(f"Workspace: `{ctx.root}` — mỗi ô là file thật trong folder story (`caption.txt`, `image.png`, `seo.md`).")
     refresh_toggle(ctx.root)
     pending_mode = st.session_state.pop("grid_mode_pending", None)  # nút ↩ trong bảng chẩn đoán: đổi TRƯỚC khi radio sinh ra
