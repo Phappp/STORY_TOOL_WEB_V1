@@ -159,6 +159,7 @@ const COLS = [
   { key: "act", label: "", w: 108, min: 96 },
 ];
 const COLS_KEY = "fbgrid:cols:v1";
+const COMPONENT_MARK = "fb_story_grid";  // khớp tên khai báo trong grid.py — dùng chọn iframe của chính lưới ở trang cha
 const EXPANDED_KEY = "fbgrid:expanded:v1";
 const MODAL_KEY = "fbgrid:modal:v1";
 const LAST_RESP_KEY = "fbgrid:lastresp:v1";
@@ -944,49 +945,39 @@ function errorsButton() {
   return b;
 }
 
-const PIN_FLAG = "fbgrid-pinned";
+const PIN_FLAG = "fbgrid-pin-css";
+const PIN_CSS = 'html[data-fbgrid="expanded"] iframe[src*="' + COMPONENT_MARK + '"]{'
+  + "position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;"
+  + "max-height:none!important;min-height:0!important;z-index:2147483000!important;"
+  + "border:0!important;border-radius:0!important;background:#fff!important;}"
+  + 'html[data-fbgrid="expanded"] body{overflow:hidden!important;}';
 
 function pinFrame() {
-  // "Mở rộng" ghim thẳng iframe lên trang cha bằng CSS, không dùng requestFullscreen:
-  // mỗi event làm Streamlit dựng lại iframe -> fullscreen bị thoát, grid co về khung thường.
-  // Trả True nếu thật sự đổi trạng thái ghim: ghi đè style mỗi lần vẽ cũng làm trang cha vẽ lại.
-  let host = null;
-  try { host = window.frameElement; } catch (_) { return false; }
-  if (!host || !host.ownerDocument || !host.ownerDocument.body) return false;
-  const doc = host.ownerDocument;
-  const flag = doc.getElementById(PIN_FLAG);
-  const pinned = host.style.getPropertyValue("position") === "fixed";
-  if (expandedMode()) {
-    if (flag && pinned) return false;
-    if (!flag) {
-      doc.documentElement.dataset.fbgridScroll = String((doc.scrollingElement || doc.body).scrollTop || 0);
-      const f = el("div", null, null);
-      f.id = PIN_FLAG;
-      f.style.display = "none";
-      doc.body.appendChild(f);
-    }
-    ["position", "inset", "width", "height", "max-height", "min-height", "z-index",
-      "border", "border-radius", "margin"].forEach(p => host.style.removeProperty(p));
-    host.style.setProperty("position", "fixed", "important");
-    host.style.setProperty("inset", "0", "important");
-    host.style.setProperty("width", "100vw", "important");
-    host.style.setProperty("height", "100vh", "important");
-    host.style.setProperty("max-height", "none", "important");
-    host.style.setProperty("z-index", "2147483000", "important");
-    host.style.setProperty("border", "0", "important");
-    host.style.setProperty("border-radius", "0", "important");
-    host.style.setProperty("background", "#fff", "important");
-    doc.body.style.setProperty("overflow", "hidden", "important");
-    return true;
+  // "Mở rộng" ghim lưới kín cửa sổ bằng <style> trong trang cha, KHÔNG bằng inline style trên iframe:
+  // mỗi lần Streamlit dựng lại iframe (event, tick đổi payload) là node mới sinh ra chưa có style nào,
+  // và trong khoảng JS của component chưa chạy thì sidebar/header trang cha đè lên lưới. Stylesheet nằm
+  // ở head sống qua mọi lần dựng lại nên iframe mới được ghim ngay từ frame đầu.
+  // requestFullscreen không dùng được: nó bị thoát đúng vì lần dựng lại đó.
+  // Trả True nếu thật sự đổi trạng thái ghim (để setFrameHeight bỏ chiều cao cũ).
+  let doc = null;
+  try { doc = window.frameElement && window.frameElement.ownerDocument; } catch (_) { return false; }
+  if (!doc || !doc.documentElement || !doc.head) return false;
+  const want = expandedMode() ? "expanded" : "";
+  if ((doc.documentElement.dataset.fbgrid || "") === want) return false;
+  if (want) {
+    doc.documentElement.dataset.fbgridScroll = String((doc.scrollingElement || doc.body).scrollTop || 0);
+    const tag = doc.createElement("style");
+    tag.id = PIN_FLAG;
+    tag.textContent = PIN_CSS;
+    doc.head.appendChild(tag);
+  } else {
+    const tag = doc.getElementById(PIN_FLAG);
+    if (tag) tag.remove();
+    const top = parseInt(String(doc.documentElement.dataset.fbgridScroll || "0"), 10);
+    delete doc.documentElement.dataset.fbgridScroll;
+    (doc.scrollingElement || doc.body).scrollTop = top;
   }
-  if (!flag && !pinned) return false;
-  if (flag) flag.remove();
-  ["position", "inset", "width", "height", "max-height", "min-height", "z-index",
-    "border", "border-radius", "background"].forEach(p => host.style.removeProperty(p));
-  doc.body.style.removeProperty("overflow");
-  const top = parseInt(String(doc.documentElement.dataset.fbgridScroll || "0"), 10);
-  delete doc.documentElement.dataset.fbgridScroll;
-  (doc.scrollingElement || doc.body).scrollTop = top;
+  doc.documentElement.dataset.fbgrid = want;
   return true;
 }
 
