@@ -2,7 +2,8 @@
 
 Lý do có file này: script Streamlit chỉ gửi frame khi lượt chạy kết thúc, nên nếu bước
 B1-B3 chạy ngay trong lượt vẽ thì ô vuông nhảy thẳng từ xám sang xanh lá, không bao giờ
-thấy "đang chạy". Ở đây việc nặng nằm ở thread khác, grid chỉ đọc story.json mỗi 1.5 giây.
+thấy "đang chạy". Ở đây việc nặng nằm ở thread khác, grid chỉ đọc story.json mỗi 2 giây
+(trong lúc luồng còn việc; hết việc thì lưới đứng yên nếu anh tắt tự làm mới).
 
 Runner không đụng Streamlit: executor do grid.py đưa vào (event, root -> dòng log), còn test
 thì nối executor giả. sqlite connection không dùng xuyên thread được nên executor tự mở kết

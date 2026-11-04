@@ -1,5 +1,7 @@
 import base64
+import inspect
 import json
+import re
 import shutil
 import sys
 import threading
@@ -1743,6 +1745,124 @@ check("P8ii cột steps đủ chỗ cho 4 pill, prefs cũ không cắt chữ",
       'key: "steps"' in js_p8i and "w: 160, min: 156" in js_p8i)
 check("P8ii phông lót khi mở rộng cũng tối — lưới tối mà lót trắng thì loé trắng giữa hai lần vẽ",
       js_p8i.count("background:#101821") == 2)
+
+# --- P8iii: fragment chạy đều 2s nhưng tick rẻ không được quét lại cả workspace ---
+# 150 bài là 150 lần đọc file; trước đây mỗi tick (và mỗi event, kể cả chỉ để copy chữ) đều quét.
+# Event sửa file / luồng đang chạy / lượt vẽ cả trang thì vẫn phải đọc mới, không được để cache che.
+scan_count = {"n": 0}
+_real_rows_for = fbgrid.rows_for
+_real_runner = fbgrid.RUNNER
+_real_component_p8 = fbgrid.component
+_real_recents_p8 = stories._recents_path
+
+# AppTest đọc workspace từ file recents, và các test ở trên đã khôi phục về file THẬT của anh,
+# nên block này phải trỏ recents vào folder tạm của riêng mình: vừa không đụng workspaces.json
+# thật, vừa đảm bảo app dưới AppTest và các assertion nhìn đúng một folder.
+p8_ws = Path(tempfile.mkdtemp(prefix="fbp8_ws_"))
+stories._recents_path = lambda: p8_ws / "workspaces.json"
+p8_root = stories.set_current(stories.validate_root(p8_ws / "ws"))
+p8_show_sid = stories.create_story(p8_root, "Bài tick rẻ", input_text="INPUT TICK RE")["id"]
+stories.save_step_text(p8_root, p8_show_sid, "b1", "CHỮ CỦA TICK RE")
+p8_q_sid = stories.create_story(p8_root, "Bài queue tick rẻ")["id"]
+p8_conn = db.connect()
+_p8ctx = ga.build_ctx(p8_conn, p8_root)
+
+p8_cap = {}  # props thật gửi sang component của RIÊNG app dưới đây (cap ở trên thuộc app khác)
+fbgrid.component = lambda: (lambda **kw: p8_cap.update(kw))
+
+
+def _counting_rows_for(ctx):
+    scan_count["n"] += 1
+    return _real_rows_for(ctx)
+
+
+def _seed_cache(at, age=600.0):
+    """ đặt lại đồng hồ quét (lượt sau vẫn còn hạn) """
+    at.session_state[fbgrid.PAYLOAD_KEY] = {"run": int(at.session_state.get(fbgrid.APP_RUN_KEY) or 0) + 1,
+                                            "at": time.monotonic() + age,
+                                            "all_rows": _real_rows_for(_p8ctx)}
+
+
+class _BusyRunner:
+    """Chỉ đủ mấy hàm _body gọi, để đo 'luồng đang có việc' có bắt buộc đọc lại folder không."""
+
+    def __init__(self, real):
+        self.real = real
+
+    def snapshot(self):
+        return dict(self.real.snapshot(), busy=True, flow={p8_show_sid: {"b1": "running"}})
+
+    def new_lines(self, seen):
+        return self.real.new_lines(seen)
+
+
+fbgrid.rows_for = _counting_rows_for
+at_p8 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_p8.session_state["nav_page"] = "Grid"
+at_p8.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+at_p8.session_state["grid_refresh"] = False  # tắt tự làm mới: không ai được tự đọc folder
+at_p8.run()
+check("P8iii cả trang vừa vẽ thì phải đọc folder (lượt đầu, và mọi lần đổi widget/trang)",
+      not at_p8.exception and scan_count["n"] == 1 and int(at_p8.session_state.get(fbgrid.APP_RUN_KEY) or 0) >= 1)
+
+# prefs của workspace mới được nạp ở lượt đầu nên đặt lại SAU lượt đó, không bị ghi đè mất
+at_p8.session_state["grid_refresh"] = False
+scan_count["n"] = 0
+p8_cap.clear()
+_seed_cache(at_p8)
+at_p8.run()  # mô phỏng tick fragment: epoch app-run không đổi nên bản đọc cũ còn hạn
+check("P8iii tick fragment rẻ dùng bản đọc cũ — hết quét 150 folder mỗi nhịp khi lưới đang nhàn",
+      not at_p8.exception and scan_count["n"] == 0 and bool(p8_cap.get("rows")))
+
+scan_count["n"] = 0
+p8_cap.clear()
+_seed_cache(at_p8)
+at_p8.session_state[fbgrid.KEY] = {"event_id": "evt-p8-1", "source": "content_request", "id": p8_show_sid,
+                                   "field": "Caption", "request_id": "req-p8-1"}
+at_p8.run()
+check("P8iii bấm ô chỉ để XEM (copy/modal) không kéo theo quét lại cả workspace",
+      not at_p8.exception and scan_count["n"] == 0
+      and (p8_cap.get("copy_response") or {}).get("text") == stories.step_text(p8_root, p8_show_sid, "b1"))
+
+scan_count["n"] = 0
+p8_cap.clear()
+_seed_cache(at_p8)
+at_p8.session_state[fbgrid.KEY] = {"event_id": "evt-p8-2", "source": "queue_add", "id": p8_q_sid}
+at_p8.run()
+check("P8iii event SỬA file thì tick đó phải đọc lại folder — cache không được che trạng thái thật",
+      not at_p8.exception and scan_count["n"] == 1 and p8_q_sid in (p8_cap.get("queue_ids") or []))
+
+scan_count["n"] = 0
+p8_cap.clear()
+fbgrid.RUNNER = _BusyRunner(_real_runner)
+_seed_cache(at_p8)
+at_p8.run()
+check("P8iii luồng nền đang chạy thì mỗi tick (2s) đều đọc mới nên ô đổi màu gần lúc bài xong",
+      not at_p8.exception and scan_count["n"] == 1
+      and any((r.get("flow") or {}).get("b1") == "running" for r in (p8_cap.get("rows") or [])))
+fbgrid.RUNNER = _real_runner
+
+at_p8.session_state["grid_refresh"] = True
+scan_count["n"] = 0
+p8_cap.clear()
+_seed_cache(at_p8, age=-999.0)  # bản đọc quá hạn -> bật tự làm mới là phải quét lại
+at_p8.run()
+check("P8iii bật 'Tự làm mới grid (5s)' vẫn đúng chữ: quá 5 giây là đọc lại folder",
+      not at_p8.exception and scan_count["n"] == 1)
+
+src_hand_off = inspect.getsource(fbgrid.hand_off)
+grid_src = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
+check("P8iii giao việc cho luồng nền không còn vẽ lại cả trang — hết cú loé trắng ngay sau ⚡/▶",
+      not re.search(r"^\s+st\.rerun\(", src_hand_off, re.M) and "bỏ fragment polling" not in grid_src
+      and "st.fragment(_body, run_every=POLL_SECONDS)(ctx)" in grid_src)
+check("P8iii nhịp fragment 2s tách khỏi nhịp đọc folder 5s của toggle",
+      fbgrid.POLL_SECONDS == 2.0 and fbgrid.REFRESH_SECONDS == 5
+      and "READ_SOURCES" in grid_src and fbgrid.PAYLOAD_KEY == "grid_payload")
+fbgrid.rows_for = _real_rows_for
+fbgrid.component = _real_component_p8
+p8_conn.close()
+stories._recents_path = _real_recents_p8
+shutil.rmtree(p8_ws, ignore_errors=True)
 
 # cleanup test rows
 c = db.connect()

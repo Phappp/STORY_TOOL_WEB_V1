@@ -5,6 +5,7 @@ nên state hiển thị luôn đọc lại từ folder story (không có bản s
 """
 
 import mimetypes
+import time
 from datetime import datetime
 from hashlib import sha1
 from pathlib import Path
@@ -25,8 +26,12 @@ LOG_KEEP = 60  # số dòng giữ trong session_state — phần hơn nằm tron
 MODE_COMPONENT = "Grid (component)"
 MODE_NATIVE = "Bảng chẩn đoán (native)"
 REFRESH_KEY = "grid_refresh"
-REFRESH_SECONDS = 5
-POLL_SECONDS = 1.5  # khi luồng nền còn việc thì poll nhanh, để ô vuông đổi màu gần lúc bài xong
+REFRESH_SECONDS = 5   # nhịp ĐỌC FOLDER khi bật tự làm mới — đúng với chữ "(5s)" trên toggle
+POLL_SECONDS = 2.0    # nhịp fragment: chỉ đọc lại folder khi có việc, tick rẻ thì dùng bản cache
+PAYLOAD_KEY = "grid_payload"       # bản đọc folder gần nhất — 150 bài là 150 lần đọc file
+APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt mới thì phải đọc lại folder
+# mấy event này chỉ XEM nội dung (copy/mở modal), không sửa file -> khỏi đọc lại cả workspace
+READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"}
 PROV_DEFAULT_LABEL = "Theo preset"
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
 CSV_KEY = "grid_import_file"
@@ -60,7 +65,9 @@ def refresh_toggle(root: Path) -> bool:
         st.session_state["grid_prefs_root"] = str(root)
         st.session_state[REFRESH_KEY] = bool(ga.load_prefs(root).get("auto_refresh"))
     on = st.toggle(f"Tự làm mới grid ({REFRESH_SECONDS}s)", key=REFRESH_KEY,
-                   help="Bật: mỗi 5 giây đọc lại folder story. Tắt khi không muốn màn hình nhảy.")
+                   help=f"Bật: đọc lại folder story mỗi {REFRESH_SECONDS} giây. "
+                        f"Tắt: lưới đứng yên, không tự đọc folder — chỉ tự cập nhật khi luồng nền đang "
+                        f"chạy ({POLL_SECONDS:g} giây một lần) hoặc khi anh bấm gì đó.")
     prefs = ga.load_prefs(root)
     if bool(prefs.get("auto_refresh")) is not bool(on):
         prefs["auto_refresh"] = bool(on)
@@ -210,8 +217,9 @@ def flow_bar(snap: dict) -> None:
 def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     """Việc dài (gọi AI, trích B0) giao cho thread nền rồi trả lời ngay — grid khỏi bí.
 
-    auto_refresh tắt mà vừa giao việc thì phải dựng lại fragment có polling, nên kết thúc
-    bằng st.rerun(scope='app'): nếu không, trang chỉ vẽ lại khi anh tự bấm gì đó.
+    Không vẽ lại cả trang: fragment của lưới đã chạy đều 2 giây nên chính nó sẽ thấy
+    luồng vừa có việc và đọc lại folder. st.rerun(scope='app') ở đây từng là cú loé trắng
+    ngay sau khi bấm ⚡/▶ (kèm cả lượt vẽ lại import_form/provider_bar vô việc).
     """
     jobs, notes = gr.job_for(event, ctx.root)
     msgs = [RUNNER.submit(job) for job in jobs]
@@ -222,8 +230,6 @@ def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
         notes.append(accepted[0] + (f" · còn {len(accepted) - 1} lượt kế tiếp đã xếp" if len(accepted) > 1 else ""))
     out = ga.Outcome(lines=notes)
     _collect(out, event)
-    if not bool(st.session_state.get(REFRESH_KEY)):
-        st.rerun(scope="app")
     return out
 
 
@@ -324,16 +330,20 @@ def import_form(ctx: ga.Ctx) -> None:
             run_b0_import(ctx, ids)
 
 
-def consume_event(ctx: ga.Ctx):
-    """Event component gửi về -> chạy đúng 1 lần (latch theo event_id) rồi trả Outcome."""
+def consume_event(ctx: ga.Ctx) -> tuple:
+    """Event component gửi về -> chạy đúng 1 lần (latch theo event_id) rồi trả (outcome, event).
+
+    Trả kèm event vì `_body` cần biết nguồn là loại chỉ-XEM hay có sửa file:
+    tick rẻ thì khỏi đọc lại cả workspace, nhưng đã sửa gì thì số liệu phải mới.
+    """
     event = st.session_state.get(KEY)
     if not isinstance(event, dict):
-        return None
+        return None, None
     eid = str(event.get("event_id") or "")
     if not eid or st.session_state.get("grid_last_event") == eid:
-        return None
+        return None, None
     st.session_state["grid_last_event"] = eid
-    return _after(ctx, event)
+    return _after(ctx, event), event
 
 
 def show_log() -> None:
@@ -473,13 +483,33 @@ def mark_flow(rows: list[dict], snap: dict) -> list[dict]:
     return rows
 
 
+def scan_needed(snap: dict, event, payload, was_busy: bool) -> bool:
+    """Tick nào thật sự phải đọc lại folder story.
+
+    Fragment chạy đều 2 giây mà 150 bài là 150 lần đọc file, nên lúc lưới đang nhàn thì dùng
+    bản đọc cũ; màu ô vẫn đổi trong 2 giây vì đang có việc nền là lần nào cũng đọc mới.
+    """
+    if payload is None:
+        return True
+    if snap["busy"] or snap.get("paused"):
+        return True  # có việc nền: queue/flow phải hiện gần lúc bài xong, không chờ tới nhịp 5s
+    if event is not None and str(event.get("source") or "") not in READ_SOURCES:
+        return True  # anh vừa sửa gì đó (hàng đợi, link, provider, giao việc) -> số liệu thật đã đổi
+    if was_busy and not snap["busy"]:
+        return True  # luồng vừa cạn -> đọc kết quả lần cuối, kẻo ô dừng ở trạng thái giữa chừng
+    if bool(st.session_state.get(REFRESH_KEY)) and \
+            time.monotonic() - float(payload.get("at") or 0.0) >= REFRESH_SECONDS:
+        return True  # bật tự làm mới thì giữ đúng lời hứa "mỗi 5 giây" của cái nhãn
+    return False
+
+
 def _body(ctx: ga.Ctx) -> None:
     """Phần vẽ lại khi tự làm mới — chỉ đọc folder nên không có state riêng."""
     if "grid_flow_seen" not in st.session_state:
         # bản ghi log của luồng nền là của cả app, còn ô log này thuộc về một trang đang mở:
         # mốc bắt đầu đặt TRƯỚC khi tiêu thụ event -> dòng do chính mình giao vẫn hiện, log cũ thì bỏ.
         st.session_state["grid_flow_seen"] = RUNNER.snapshot()["lines"]
-    outcome = consume_event(ctx)
+    outcome, event = consume_event(ctx)
     snap = RUNNER.snapshot()
     was_busy = bool(st.session_state.get("grid_flow_busy"))
     if snap["busy"] or snap.get("paused"):
@@ -494,9 +524,14 @@ def _body(ctx: ga.Ctx) -> None:
     show_log()
     if outcome is not None and outcome.nav:
         st.rerun(scope="app")  # nút ↗: nhảy sang trang Tạo bài với bài vừa chọn
-    if was_busy and not snap["busy"] and not bool(st.session_state.get(REFRESH_KEY)):
-        st.rerun(scope="app")  # luồng nền vừa cạn mà auto tắt -> bỏ fragment polling
-    all_rows = mark_flow(rows_for(ctx), snap)
+    app_run = int(st.session_state.get(APP_RUN_KEY) or 0)
+    cached = st.session_state.get(PAYLOAD_KEY)
+    if cached and int(cached.get("run") or -1) != app_run:
+        cached = None  # cả trang vừa vẽ lại (load trang, đổi filter, đổi kiểu hiển thị) -> phải đọc mới
+    if scan_needed(snap, event, cached, was_busy):
+        cached = {"run": app_run, "at": time.monotonic(), "all_rows": rows_for(ctx)}
+        st.session_state[PAYLOAD_KEY] = cached
+    all_rows = mark_flow(cached["all_rows"], snap)  # dấu bài do luồng nền giữ là bộ nhớ, khỏi đọc folder
     choice = str(st.session_state.get("grid_filter") or ga.FILTERS[0])
     rows = ga.filter_rows(all_rows, choice)
     if choice != ga.FILTERS[0]:
@@ -512,7 +547,7 @@ def _body(ctx: ga.Ctx) -> None:
 def render(ctx: ga.Ctx) -> None:
     st.subheader("Grid story")
     st.caption(f"Workspace: `{ctx.root}` — mỗi ô là file thật trong folder story (`caption.txt`, `image.png`, `seo.md`).")
-    auto = refresh_toggle(ctx.root)
+    refresh_toggle(ctx.root)
     pending_mode = st.session_state.pop("grid_mode_pending", None)  # nút ↩ trong bảng chẩn đoán: đổi TRƯỚC khi radio sinh ra
     if pending_mode:
         st.session_state["grid_mode"] = pending_mode
@@ -526,8 +561,7 @@ def render(ctx: ga.Ctx) -> None:
                      help="Bài lỗi lên đầu, rồi chờ chạy, đang chạy, xong. Bài đã vào hàng đợi luôn ở trên cùng.")
     provider_bar(ctx)
     import_form(ctx)
-    busy = RUNNER.snapshot()["busy"]
-    if auto or busy:  # có việc nền thì phải poll nhanh, kể cả khi anh tắt tự làm mới
-        st.fragment(_body, run_every=POLL_SECONDS if busy else REFRESH_SECONDS)(ctx)
-    else:
-        _body(ctx)
+    # Fragment luôn chạy đều: event từ lưới chỉ vẽ lại đúng nó, nên giao việc cho luồng nền
+    # không cần vẽ lại cả trang nữa (đó chính là cú loé trắng sau khi bấm ⚡/▶).
+    st.session_state[APP_RUN_KEY] = int(st.session_state.get(APP_RUN_KEY) or 0) + 1
+    st.fragment(_body, run_every=POLL_SECONDS)(ctx)
