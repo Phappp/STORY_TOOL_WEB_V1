@@ -1706,12 +1706,16 @@ stories._recents_path = orig_recents_path
 shutil.rmtree(smoke_ws, ignore_errors=True)
 shutil.rmtree(ws_box, ignore_errors=True)
 
-# P7d: "Mở rộng" phải ẩn luôn sidebar + tiêu đề trang cha — hai thứ duy nhất còn có thể đè lên lưới.
+# P7d/P7e: "Mở rộng" phải bịt hết chữ của trang cha — sidebar + tiêu đề (ẩn) và label ở cột chính
+# (phông trắng body::after), vì tụi nó vẫn visible ngay dưới lưới nên mới còn nhấp nháy.
 pin_p7d = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(
     encoding="utf-8").split("const PIN_CSS", 1)[-1].split("function pinFrame", 1)[0]
 check("P7d stylesheet ghim lưới khi mở rộng có ẩn sidebar + tiêu đề trang",
       'data-testid="stSidebar"' in pin_p7d and 'data-testid="stHeader"' in pin_p7d
       and "visibility:hidden" in pin_p7d and "2147483000" in pin_p7d)
+check("P7e có phông trắng chặn label cột chính khi mở rộng, lưới vẫn cao hơn phông",
+      "body::after" in pin_p7d and "z-index:1000000" in pin_p7d and "pointer-events:none" in pin_p7d
+      and "2147483000" in pin_p7d)
 
 # cleanup test rows
 c = db.connect()

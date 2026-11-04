@@ -978,9 +978,15 @@ function errorsButton() {
 }
 
 const PIN_FLAG = "fbgrid-pin-css";
-// Kèm dòng ẩn sidebar + tiêu đề: khi lưới đã chiếm kín cửa sổ thì hai thanh đó chỉ còn là thứ
-// có thể đè lên lưới (z-index 999991/999990) — ẩn đi là hết đường đè, kể cả lúc Streamlit vừa chèn
-// iframe mà chưa kịp gắn src (selector theo src khi đó chưa khớp, node mới chỉ static).
+// Ba lớp bịt trang cha khi lưới mở rộng, số liệu đo trên Streamlit 1.66 (không có tổ tiên nào của
+// iframe tạo stacking context nên các z-index này so trực tiếp được):
+// 1) ghim iframe kín cửa sổ bằng stylesheet trong head -> sống qua mọi lần iframe bị dựng lại;
+// 2) ẩn sidebar (999991) + tiêu đề (999990);
+// 3) body::after = phông trắng z 1000000, chặn nốt các label ở CỘT CHÍNH ("Grid story", "Kiểu hiển
+//    thị", "Provider B1"…) — tụi nó vẫn visible ngay dưới lưới nên chỉ cần một thoáng lưới chưa
+//    kịp phủ (lúc mới dựng, lúc đổi kích thước) là chúng nhấp nháy lên. Lưới z 2147483000 vẫn nằm
+//    trên phông; portal (toast/dialog, 1000110) cũng trên phông; phông pointer-events:none nên bấm
+//    vào lưới không bị chặn.
 // visibility chứ không display: layout của Streamlit khỏi nhảy theo khi thu/mở.
 const PIN_CSS = 'html[data-fbgrid="expanded"] iframe[src*="' + COMPONENT_MARK + '"]{'
   + "position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;"
@@ -988,13 +994,16 @@ const PIN_CSS = 'html[data-fbgrid="expanded"] iframe[src*="' + COMPONENT_MARK + 
   + "border:0!important;border-radius:0!important;background:#fff!important;}"
   + 'html[data-fbgrid="expanded"] body{overflow:hidden!important;}'
   + 'html[data-fbgrid="expanded"] [data-testid="stSidebar"],'
-  + 'html[data-fbgrid="expanded"] [data-testid="stHeader"]{visibility:hidden!important;}';
+  + 'html[data-fbgrid="expanded"] [data-testid="stHeader"]{visibility:hidden!important;}'
+  + 'html[data-fbgrid="expanded"] body::after{content:"";position:fixed;inset:0;background:#fff;'
+  + 'z-index:1000000;pointer-events:none;}';
 
 function pinFrame() {
   // "Mở rộng" ghim lưới kín cửa sổ bằng <style> trong trang cha, KHÔNG bằng inline style trên iframe:
-  // mỗi lần Streamlit dựng lại iframe (event, tick đổi payload) là node mới sinh ra chưa có style nào,
-  // và trong khoảng JS của component chưa chạy thì sidebar/header trang cha đè lên lưới. Stylesheet nằm
-  // ở head sống qua mọi lần dựng lại nên iframe mới được ghim ngay từ frame đầu.
+  // inline style chết theo node, mà iframe thì bị Streamlit dựng lại khi đổi trang/đổi kiểu hiển thị —
+  // stylesheet ở head vẫn nằm đó nên iframe mới sinh ra là được ghim ngay từ frame đầu.
+  // Đo thật 2026-11-04: tick làm mới 5s và event KHÔNG dựng lại iframe; sở dĩ vẫn phải chặn chữ của
+  // trang cha là vì label ở cột chính luôn visible ngay dưới lưới (xem PIN_CSS).
   // requestFullscreen không dùng được: nó bị thoát đúng vì lần dựng lại đó.
   // Trả True nếu thật sự đổi trạng thái ghim (để setFrameHeight bỏ chiều cao cũ).
   let doc = null;
