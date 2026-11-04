@@ -101,10 +101,12 @@
   button.sq.missing { background:var(--missing); color:var(--missing-t); }
   button.sq.queued { background:var(--queued); color:var(--queued-t); }
   button.sq.stale { background:var(--error); color:var(--error-t); border-style:dashed; }
-  /* ô đang/do luồng nền giữ: chờ tới lượt = tím, đang gọi AI = xanh dương nhấp nháy */
+  /* ô đang/do luồng nền giữ: chờ tới lượt = tím, đang gọi AI = xanh dương TĨNH.
+     P8i bỏ nhịp nhấp nháy: legacy FX97 cũng chỉ tô màu, không animation cho trạng thái chạy —
+     vuông sáng-tối 1,15 giây một lần trông đúng như lỗi, mà mỗi lần lưới vẽ lại nó còn nhảy về đầu pha. */
   button.sq.flow-waiting { background:var(--queued); color:var(--queued-t); border-color:rgba(107,63,160,.5); }
-  button.sq.flow-running { background:var(--running); color:var(--running-t); animation:flowpulse 1.15s ease-in-out infinite; }
-  @keyframes flowpulse { 50% { filter:brightness(.8); } }
+  button.sq.flow-running { background:var(--running); color:var(--running-t); border-color:var(--running-t); font-weight:800; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none!important; transition:none!important; } }
   button.q { width:26px; padding:0; }
   button.q.on { background:var(--queued); color:var(--queued-t); border-color:rgba(107,63,160,.35); font-weight:700; }
   .badge { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; background:var(--pending); color:var(--pending-t); }
@@ -182,6 +184,19 @@ let COPY_NOW = null;        // {text, flash} — response xin copy vừa về, g
 let SHOW_MD = true;         // tab B3: hiển thị markdown đã render hay để nguyên chữ
 let LAST_ARGS = "";         // chữ ký payload lần vẽ trước — tick nào không có gì đổi thì bỏ qua, khỏi vẽ lại
 let LAST_H = 0;             // chiều cao iframe vừa xin Streamlit lần gần nhất (0 = chưa xin)
+// Bộ nhớ cho lối vẽ "vá tại chỗ" (P8i, học từ grid status legacy FX97): giữ lại cây lưới đang có và
+// chỉ thay ô nào chữ ký đổi. Trước đây mỗi tick là root.textContent="" rồi dựng ~3.600 node, tốn
+// ~120 ms main-thread và làm ô đang chạy nhảy lại animation từ đầu -> anh thấy nhấp nháy liên tục.
+let LAST_TBODY = null;      // tbody của lần dựng đầy đủ gần nhất (null = màn hình trống/không có lưới)
+let LAST_TABLE = null;      // table chứa nó, để đổi độ rộng cột khỏi cần dựng lại
+let LAST_IDS = "";          // danh sách hàng đang vẽ (thứ tự + bộ lọc tìm)
+let LAST_SIGS = null;       // [[chữ ký từng cột] cho từng hàng] — chỉ ô khác chữ ký mới bị thay
+let LAST_WANT_MODAL = false;
+let LAST_EXPANDED = false;
+let LAST_WORKSPACE = "";
+let LAST_WIDTHS = "";
+let LAST_MODAL_SIG = "";
+let LAST_SUMMARY = "";
 
 function colsCacheKey() { return COLS_KEY + ":" + (MODEL.workspace || "default"); }
 function widths() {
@@ -212,7 +227,7 @@ function setFrameHeight() {
   if (expandedMode()) { LAST_H = 0; return; }  // đang ghim: CSS inset:0 quyết định, khỏi xin chiều cao
   const h = modalRef() ? Math.min(Math.max(outerHeight(), 360), 4000)
     : Math.min(Math.max(document.documentElement.scrollHeight, 120), 640);
-  if (h === LAST_H) return;
+  if (Math.abs(h - LAST_H) < 4) return;  // legacy FX97: nhảy < 4 px coi như không đổi, khỏi co giãn iframe
   LAST_H = h;
   sendMessage(SET_FRAME_HEIGHT, { height: h });
 }
@@ -749,9 +764,9 @@ function shortUrl(raw) { return String(raw || "").replace(/^https?:\/\//, "").re
 function repaint() {
   // Vẽ lại theo trạng thái cục bộ (mở modal, đổi tab, thu/mở rộng, sửa link, tìm kiếm): payload giữ
   // nguyên nên phải ép render, nếu không chữ ký ở trên sẽ bỏ qua.
-  render({ rows: MODEL.rows, workspace: MODEL.workspace, copy_response: MODEL.copy_response,
-           summary: MODEL.summary, queue_ids: MODEL.queue_ids, error_ids: MODEL.error_ids,
-           providers: MODEL.providers, defaults: MODEL.defaults, cols: MODEL.cols }, true);
+  render({ rows: MODEL.rows, workspace: MODEL.workspace, image_max: MODEL.image_max,
+           copy_response: MODEL.copy_response, summary: MODEL.summary, queue_ids: MODEL.queue_ids,
+           error_ids: MODEL.error_ids, providers: MODEL.providers, defaults: MODEL.defaults, cols: MODEL.cols }, true);
 }
 
 function linkEditor(row, td) {
@@ -763,16 +778,18 @@ function linkEditor(row, td) {
   input.addEventListener("click", e => e.stopPropagation());
   input.addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); save(); }
-    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); EDITING = null; repaint(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); EDITING = null; leave(); repaint(); }
   });
+  function leave() { if (document.activeElement === input) input.blur(); }  // ô đang focus được vá-trễ, phải nhả focus thì tick sau mới thay được
   function save() {
     const value = input.value;
     EDITING = null;
+    leave();
     send({ source: "link_save", id: row.id, value });
   }
   td.appendChild(input);
   td.appendChild(button("✓", "Lưu link vào story.json của " + row.id, () => save(), "ln"));
-  td.appendChild(button("✕", "Hủy, giữ link cũ", () => { EDITING = null; repaint(); }, "ln"));
+  td.appendChild(button("✕", "Hủy, giữ link cũ", () => { EDITING = null; leave(); repaint(); }, "ln"));
   setTimeout(() => { input.focus(); input.select(); }, 0);
 }
 
@@ -876,13 +893,11 @@ function rowClasses(row) {
   return cls.join(" ");
 }
 
-function rowNode(row) {
-  const tr = el("tr", rowClasses(row));
-  tr.dataset.id = String(row.id);
-
-  tr.appendChild(queueCell(row));
-
-  const pick = el("td", "pick");
+// Mỗi cột một hàm dựng ô, và ô nào cũng tự dựng lại được từ đúng (row, key) -> lần vẽ sau chỉ thay
+// ô có chữ ký đổi, không đụng phần còn lại. boxes[] phải giữ thứ tự theo hàng nên pickCell trả ô
+// chưa append; rowNode/patchCells mới ghi con trỏ checkbox vào boxes.
+function pickCell(row) {
+  const td = el("td", "pick");
   const box = document.createElement("input");
   box.type = "checkbox";
   box.checked = PICKED.has(String(row.id));
@@ -891,35 +906,106 @@ function rowNode(row) {
     if (box.checked) PICKED.add(String(row.id)); else PICKED.delete(String(row.id));
     updateBar();
   });
-  pick.appendChild(box);
-  boxes.push(box);
-  tr.appendChild(pick);
+  td.appendChild(box);
+  return td;
+}
 
-  const id = el("td", "id", row.id);
-  id.title = String(row.topic || row.id);
-  tr.appendChild(id);
+function idCell(row) {
+  const td = el("td", "id", row.id);
+  td.title = String(row.topic || row.id);
+  return td;
+}
 
-  tr.appendChild(sourceCell(row));
+function imgCell(row) {
+  const td = el("td", "img");
+  td.appendChild(el("span", row.image ? "chip done" : "chip", row.image ? "có" : "—"));
+  return td;
+}
 
-  tr.appendChild(stepsCell(row));
+function statusCell(row) {
+  const td = el("td", "status");
+  td.appendChild(el("span", row.status === "posted" ? "badge posted" : "badge", row.status || "draft"));
+  return td;
+}
 
-  const img = el("td", "img");
-  img.appendChild(el("span", row.image ? "chip done" : "chip", row.image ? "có" : "—"));
-  tr.appendChild(img);
-
-  const status = el("td", "status");
-  status.appendChild(el("span", row.status === "posted" ? "badge posted" : "badge", row.status || "draft"));
-  tr.appendChild(status);
-
-  tr.appendChild(linkCell(row));
-
-  const act = el("td", "act");
-  act.appendChild(button("☰", "Mở modal xem kết quả từng bước của " + row.id, () => openModal(row.id, "b1"), "act"));
-  act.appendChild(button("⚡", "Chạy đủ pipeline B1 → (B2 ∥ B3)", () => send({ source: "run_all", id: row.id }), "act"));
-  act.appendChild(button("⋮", "Thêm thao tác với " + row.id + " — mở ở trang Tạo bài · đã đăng · hàng đợi · dời vào .trash",
+function actCell(row) {
+  const td = el("td", "act");
+  td.appendChild(button("☰", "Mở modal xem kết quả từng bước của " + row.id, () => openModal(row.id, "b1"), "act"));
+  td.appendChild(button("⚡", "Chạy đủ pipeline B1 → (B2 ∥ B3)", () => send({ source: "run_all", id: row.id }), "act"));
+  td.appendChild(button("⋮", "Thêm thao tác với " + row.id + " — mở ở trang Tạo bài · đã đăng · hàng đợi · dời vào .trash",
     b => rowMenu(b, row), "act"));
-  tr.appendChild(act);
+  return td;
+}
+
+function cellNode(row, key) {
+  if (key === "q") return queueCell(row);
+  if (key === "pick") return pickCell(row);
+  if (key === "id") return idCell(row);
+  if (key === "src") return sourceCell(row);
+  if (key === "steps") return stepsCell(row);
+  if (key === "img") return imgCell(row);
+  if (key === "status") return statusCell(row);
+  if (key === "link") return linkCell(row);
+  return actCell(row);
+}
+
+// Thứ tự <td> trong hàng BẰNG đúng thứ tự COLS — vá ô bằng replaceChild theo index cột.
+function rowNode(row) {
+  const tr = el("tr", rowClasses(row));
+  tr.dataset.id = String(row.id);
+  COLS.forEach(c => {
+    const td = cellNode(row, c.key);
+    if (c.key === "pick") boxes.push(td.querySelector("input"));
+    tr.appendChild(td);
+  });
   return tr;
+}
+
+// Chữ ký của MỘT Ô: gộp đúng những chữ rowNode/cellNode đang hiển thị từ row đó.
+// Bỏ hẳn thứ không đổi (act) và thứ nằm ngoài payload (PICKED, EDITING).
+function cellSig(row, key) {
+  switch (key) {
+    case "q": return (row.queued ? "1" : "0") + String(row.queue_pos || "");
+    case "pick": return PICKED.has(String(row.id)) ? "1" : "0";
+    case "id": return String(row.topic || "");
+    case "src": return String(row.source || "");
+    case "steps": return JSON.stringify([row.b0, row.states, row.detail, row.b0meta, row.flow]);
+    case "img": return String(row.image || "");
+    case "status": return String(row.status || "");
+    case "link": return String(row.link || "") + (EDITING && String(EDITING.id) === String(row.id) ? "|#" + EDITING.value : "");
+    default: return "";
+  }
+}
+function rowSigs(row) { return COLS.map(c => cellSig(row, c.key)); }
+
+function listSigOf(list) {
+  // màn hình trống thì chữ ký phải theo ô tìm, nếu không "không hàng nào" sẽ bị coi là không đổi
+  return list.length ? list.map(r => String(r.id)).join(",") : "#empty:" + SEARCH.trim().toLowerCase();
+}
+
+function patchCells(list) {
+  let touched = 0;
+  list.forEach((row, i) => {
+    const tr = LAST_TBODY.children[i];
+    const sigs = LAST_SIGS[i];
+    if (!tr || !sigs) return;
+    const cls = rowClasses(row);
+    if (tr.className !== cls) tr.className = cls;  // queued/cursor đổi là đổi cả màu hàng
+    COLS.forEach((c, k) => {
+      const sig = cellSig(row, c.key);
+      if (sigs[k] === sig) return;
+      const old = tr.children[k];
+      // ô đang nhận con trỏ gõ (Link sửa tay, checkbox đang focus) thì để yên — tick sau vá tiếp,
+      // kẻo anh gõ dở bị xóa giữa chữ (legacy cũng bỏ qua ô có activeElement)
+      if (!old || old.contains(document.activeElement)) return;
+      const td = cellNode(row, c.key);
+      if (c.key === "pick") boxes[i] = td.querySelector("input");
+      tr.replaceChild(td, old);
+      sigs[k] = sig;
+      touched++;
+    });
+  });
+  return touched;
 }
 
 function batchButton() {
@@ -1040,12 +1126,52 @@ function expandButton() {
 function statsBar() {
   const s = MODEL.summary || {};
   const box = el("span", "stats");
+  box.id = "stats";  // patchCells đi kèm syncStats: thay đúng khối này, không đụng phần còn lại của bar
   SUMMARY_ORDER.forEach(pair => {
     box.appendChild(el("span", "stat " + pair[0], pair[1] + " " + Number(s[pair[0]] || 0)));
   });
   const b0err = Number(s.b0_error || 0);
   if (b0err) box.appendChild(el("span", "stat b0err", "B0 lỗi " + b0err));  // lỗi trích link không tính vào 'lỗi' của hàng đợi
   return box;
+}
+
+function countText() {
+  return "hiện " + visible().length + " bài"
+    + (SEARCH.trim() ? "/" + rows().length + " (đang tìm “" + SEARCH.trim() + "”)" : "")
+    + (MODEL.workspace ? " · " + MODEL.workspace : "");
+}
+
+// Modal chỉ cần dựng lại khi chính nó đổi: khác tab/bài, file đổi dấu mốc, flow đổi, có response mới.
+// Chữ ký này là thứ khiến mở modal lúc batch chạy không bị vẽ lại 3 lần/phút.
+function modalSig() {
+  const ref = modalRef();
+  if (!ref) return "";
+  const row = findRow(ref.id);
+  if (!row) return "gone";
+  return JSON.stringify([ref.id, ref.tab, stampOf(row), row.flow, row.prov, row.b0meta, row.image, row.link,
+    row.copyable, SHOW_MD, (MODEL.copy_response || {}).request_id || "", (MODEL.providers || []).join("|"),
+    String(MODEL.image_max || 0)]);
+}
+
+function syncModal() {
+  const sig = modalSig();
+  if (sig === LAST_MODAL_SIG) return;
+  LAST_MODAL_SIG = sig;
+  const root = document.getElementById("root");
+  const old = root.querySelector(":scope > .overlay");
+  const fresh = modalNode();
+  if (!fresh) { if (old) old.remove(); return; }
+  if (old) old.replaceWith(fresh); else root.appendChild(fresh);
+}
+
+function syncStats() {
+  const s = JSON.stringify(MODEL.summary || {});
+  if (s === LAST_SUMMARY) return;
+  LAST_SUMMARY = s;
+  const box = document.getElementById("stats");
+  if (box) box.replaceWith(statsBar());
+  const rc = document.getElementById("rowcount");
+  if (rc) rc.textContent = countText();
 }
 
 function updateBar() {
@@ -1123,6 +1249,7 @@ function render(args, force) {
   MODEL = {
     rows: Array.isArray(args.rows) ? args.rows : [],
     workspace: String(args.workspace || ""),
+    image_max: Number(args.image_max || 0),
     copy_response: args.copy_response && typeof args.copy_response === "object" ? args.copy_response : {},
     summary: args.summary && typeof args.summary === "object" ? args.summary : {},
     queue_ids: Array.isArray(args.queue_ids) ? args.queue_ids : [],
@@ -1132,13 +1259,37 @@ function render(args, force) {
     cols: args.cols && typeof args.cols === "object" ? args.cols : {},
   };
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
-  closeMenu();  // menu ⋮ gắn ngoài cây lưới; hàng chủ của nó vừa bị vẽ lại nên để nó treo là sai
   const alive = new Set(rows().map(r => String(r.id)));
   Array.from(PICKED).forEach(id => { if (!alive.has(id)) PICKED.delete(id); });
   if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
   if (CURSOR && !alive.has(CURSOR)) CURSOR = "";
+  const list = visible();
+  const lsig = listSigOf(list);
+  const wantModal = !!modalRef();
+  const W = widths();
+  const wSig = JSON.stringify(W);
+  // Tick lúc batch chạy chỉ đổi vài ô (state/flow của một bài) nhưng trước đây phá cả cây lưới rồi dựng
+  // lại 3.600 node (~120 ms). Hàng/cột/modal vẫn nguyên thì vá từng ô đổi chữ ký là đủ.
+  if (LAST_TBODY && LAST_TBODY.isConnected && LAST_TABLE && LAST_TABLE.isConnected
+      && lsig === LAST_IDS && wantModal === LAST_WANT_MODAL
+      && expandedMode() === LAST_EXPANDED && MODEL.workspace === LAST_WORKSPACE) {
+    if (wSig !== LAST_WIDTHS) { LAST_WIDTHS = wSig; applyWidths(W, LAST_TABLE); }
+    patchCells(list);
+    unmarkSent();
+    updateBar();
+    syncStats();
+    syncModal();
+    restoreView(view);
+    finishCopy();
+    applyFlash();
+    setFrameHeight();
+    return;
+  }
+  closeMenu();  // menu ⋮ gắn ngoài cây lưới; hàng chủ của nó vừa bị vẽ lại nên để nó treo là sai
   boxes = [];
 
+  let tbody = null;
+  let table = null;
   const root = document.getElementById("root");
   root.textContent = "";
   const wrap = el("div", "wrap" + (expandedMode() ? " expanded" : ""));
@@ -1164,9 +1315,9 @@ function render(args, force) {
   bar.appendChild(allWrap);
   bar.appendChild(expandButton());
   bar.appendChild(statsBar());
-  bar.appendChild(el("span", "count", "hiện " + visible().length + " bài"
-    + (SEARCH.trim() ? "/" + rows().length + " (đang tìm “" + SEARCH.trim() + "”)" : "")
-    + (MODEL.workspace ? " · " + MODEL.workspace : "")));
+  const cnt = el("span", "count", countText());
+  cnt.id = "rowcount";  // syncStats đổi chữ này tại chỗ khi số hàng thay đổi
+  bar.appendChild(cnt);
   wrap.appendChild(bar);
 
   if (!rows().length) {
@@ -1176,8 +1327,7 @@ function render(args, force) {
       + " bài đang hiện — thử từ ngắn hơn (id, một chữ trong chủ đề) hoặc xoá ô tìm."));
   } else {
     const scroll = el("div", "scroll");
-    const table = document.createElement("table");
-    const W = widths();
+    table = document.createElement("table");
     const group = el("colgroup");
     COLS.forEach(c => { const col = el("col"); col.dataset.k = c.key; group.appendChild(col); });
     table.appendChild(group);
@@ -1193,8 +1343,8 @@ function render(args, force) {
     const thead = el("thead");
     thead.appendChild(head);
     table.appendChild(thead);
-    const tbody = document.createElement("tbody");
-    visible().forEach(row => tbody.appendChild(rowNode(row)));
+    tbody = document.createElement("tbody");
+    list.forEach(row => tbody.appendChild(rowNode(row)));
     table.appendChild(tbody);
     applyWidths(W, table);
     scroll.appendChild(table);
@@ -1208,6 +1358,17 @@ function render(args, force) {
   if (modal) root.appendChild(modal);
   restoreView(view);
   updateBar();
+  // chữ ký cho lần vá sau: hàng nào/cột nào vẽ ra sao, modal + khối đếm đang ở bản nào
+  LAST_TBODY = tbody;
+  LAST_TABLE = table;
+  LAST_IDS = lsig;
+  LAST_SIGS = list.map(row => COLS.map(c => cellSig(row, c.key)));
+  LAST_WANT_MODAL = wantModal;
+  LAST_EXPANDED = expandedMode();
+  LAST_WORKSPACE = MODEL.workspace;
+  LAST_WIDTHS = wSig;
+  LAST_MODAL_SIG = modalSig();
+  LAST_SUMMARY = JSON.stringify(MODEL.summary || {});
   finishCopy();   // response xin copy vừa về -> ghi clipboard, gắn nhãn lên nút vừa vẽ
   applyFlash();
   setFrameHeight();

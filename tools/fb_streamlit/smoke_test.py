@@ -1717,6 +1717,18 @@ check("P7e có phông trắng chặn label cột chính khi mở rộng, lưới
       "body::after" in pin_p7d and "z-index:1000000" in pin_p7d and "pointer-events:none" in pin_p7d
       and "2147483000" in pin_p7d)
 
+# P8i: tick lúc chạy batch phải vá từng ô, không phá cả cây lưới (đo thật: 1 ô đổi = 199 ms -> 5 ms),
+# và ô đang chạy không còn animation vì mỗi lần vẽ lại nó nhảy về đầu pha -> trông như lỗi nhấp nháy.
+js_p8i = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+check("P8i lưới vá theo chữ ký từng ô (cellSig/patchCells) và giữ node tbody",
+      "function cellSig" in js_p8i and "function patchCells" in js_p8i and "replaceChild(td, old)" in js_p8i
+      and "LAST_TBODY && LAST_TBODY.isConnected" in js_p8i)
+check("P8i không còn animation cho ô đang chạy + có dead-band 4px cho chiều cao iframe",
+      "flowpulse" not in js_p8i and "prefers-reduced-motion" in js_p8i
+      and "Math.abs(h - LAST_H) < 4" in js_p8i)
+check("P8i bỏ qua ô đang nhận con trỏ gõ khi vá, nhưng vẫn giữ đường thoát blur cho ô Link",
+      "old.contains(document.activeElement)" in js_p8i and "function leave() { if (document.activeElement === input) input.blur(); }" in js_p8i)
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")
