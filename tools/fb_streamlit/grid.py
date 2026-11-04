@@ -19,7 +19,8 @@ import stories
 FRONTEND = Path(__file__).resolve().parent / "grid_frontend"
 COMPONENT_NAME = "fb_story_grid_v1"
 KEY = "fb_story_grid"
-LOG_LIMIT = 8
+LOG_LIMIT = 8  # số dòng log hiện ngay dưới lưới
+LOG_KEEP = 60  # số dòng giữ trong session_state — phần hơn nằm trong expander "Log cũ"
 MODE_COMPONENT = "Grid (component)"
 MODE_NATIVE = "Bảng nút (native)"
 REFRESH_KEY = "grid_refresh"
@@ -108,12 +109,16 @@ def _when(ts: float) -> str:
 
 
 def rows_for(ctx: ga.Ctx) -> list[dict]:
-    """Chỉ đủ dữ liệu cho ô grid; state qua ga.display_states nên 'treo >15 phút' hiện đúng là stale."""
+    """Chỉ đủ dữ liệu cho ô grid; state qua ga.display_states nên 'treo >15 phút' hiện đúng là stale.
+
+    Mỗi bài đọc story.json ĐÚNG MỘT lần rồi đưa dict đó cho các hàm state — trước đây
+    một hàng phải parse file đó 5 lần nên 150 bài tốn gần 1 giây cho mỗi tick làm mới.
+    """
     out = []
     for sid in stories.list_story_ids(ctx.root):
-        summary = stories.story_summary(ctx.root, sid)
         story = stories.load_story(ctx.root, sid)
-        states = ga.display_states(ctx.root, sid)
+        summary = stories.story_summary(ctx.root, sid, story=story)
+        states = ga.display_states(ctx.root, sid, story=story)
         detail = dict(summary["detail"])
         detail["b0"] = str((story.get("b0") or {}).get("detail") or "")
         out.append({
@@ -126,7 +131,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "image": summary["image"],
             "detail": detail,
             "states": states,
-            "b0": ga.b0_state(ctx.root, sid),  # B0 có state riêng, không nằm trong states/bucket
+            "b0": ga.b0_state(ctx.root, sid, story=story),  # B0 có state riêng, không nằm trong states/bucket
             "b0meta": ga.b0_meta(story),
             "bucket": ga.bucket(states),
             "queued": bool(story.get("queued")),
@@ -190,14 +195,14 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
 
 
 def _push(lines: list[str]) -> None:
-    st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + [line for line in lines if line])[-LOG_LIMIT:]
+    st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + [line for line in lines if line])[-LOG_KEEP:]
 
 
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     _push(out.lines)
     if str(event.get("source") or "") in ("copy_request", "content_request", "image_request", "b0_request"):
-        # prop copy_response chỉ đi kèm 1 lần render -> giữ lại để JS làm đúng 1 lần theo request_id
+        # render_component giao response đúng 1 lần rồi xóa; JS latch theo request_id nên không xử lý trùng
         st.session_state["grid_copy_response"] = out.copy or {
             "id": str(event.get("id") or ""), "field": str(event.get("field") or "Ảnh"),
             "request_id": str(event.get("request_id") or ""),
@@ -272,8 +277,14 @@ def consume_event(ctx: ga.Ctx):
 
 
 def show_log() -> None:
-    for line in st.session_state.get("grid_log", []):
+    """8 dòng gần nhất hiện ngay; dòng cũ hơn gom vào expander để kết quả batch/import không bị đẩy mất."""
+    lines = st.session_state.get("grid_log", [])
+    for line in lines[-LOG_LIMIT:]:
         st.caption("· " + line)
+    if len(lines) > LOG_LIMIT:
+        with st.expander(f"Log cũ ({len(lines) - LOG_LIMIT} dòng)", expanded=False):
+            for line in lines[:-LOG_LIMIT]:
+                st.caption("· " + line)
 
 
 def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> bool:
@@ -283,13 +294,16 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
     workspace, để '▶ Bắt đầu' chạy đúng thứ tự kể cả khi người dùng đang lọc.
     """
     try:
+        # response chỉ cần đi đúng 1 lần render (lượt ngay sau event đã dựng lại iframe): xong thì xóa,
+        # nếu không ảnh base64 vài MB bị gửi lại mọi tick và modal tự xin lại khi cần.
+        resp = st.session_state.pop("grid_copy_response", None) or {}
         component()(rows=rows, workspace=str(ctx.root),
                     summary=ga.count_buckets(all_rows),
                     queue_ids=ga.queue_ids(all_rows),
                     error_ids=ga.error_ids(all_rows),
                     providers=ga.provider_names(ctx),
                     defaults=dict(ctx.defaults),
-                    copy_response=st.session_state.get("grid_copy_response") or {},
+                    copy_response=resp,
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
         st.session_state["grid_component_error"] = f"{type(exc).__name__}: {exc}"

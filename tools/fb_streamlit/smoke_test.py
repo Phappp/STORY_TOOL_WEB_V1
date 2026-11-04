@@ -996,21 +996,30 @@ check("Grid component: event open chuyển sang trang Tạo bài",
 copy_sid = stories.create_story(smoke_root, "Grid copy", input_text="INPUT GỐC CỦA BÀI COPY")["id"]
 stories.save_step_text(smoke_root, copy_sid, "b1", "CAPTION TỪ FILE")
 
+real_component = fbgrid.component
+cap = {}  # props thật sự gửi sang component — response chỉ được giao ĐÚNG MỘT lần rồi xóa
+fbgrid.component = lambda: (lambda **kw: cap.update(kw))
+
 at_cp = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at_cp.session_state["nav_page"] = "Grid"
 at_cp.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
 at_cp.session_state[fbgrid.KEY] = {"event_id": "evt-copy-1", "source": "copy_request", "id": copy_sid,
                                    "field": "Caption", "request_id": "req-1"}
 at_cp.run()
-resp = at_cp.session_state.get("grid_copy_response") or {}
+resp = cap.get("copy_response") or {}
 check("Grid copy: request Caption trả đúng chữ trong caption.txt + request_id",
       not at_cp.exception and resp.get("text") == "CAPTION TỪ FILE" and resp.get("id") == copy_sid
       and resp.get("field") == "Caption" and resp.get("request_id") == "req-1")
+cap.clear()
+at_cp.run()
+check("Grid copy: response đã giao không gửi lại ở render sau (ảnh base64 không bị lặp mọi tick)",
+      not at_cp.exception and (cap.get("copy_response") or {}) == {}
+      and "grid_copy_response" not in at_cp.session_state)
 at_cp.session_state[fbgrid.KEY] = {"event_id": "evt-copy-2", "source": "copy_request", "id": copy_sid,
                                    "field": "Link", "request_id": "req-2"}
 at_cp.run()
 check("Grid copy: field trống -> text rỗng + log báo rõ",
-      not at_cp.exception and at_cp.session_state.get("grid_copy_response", {}).get("text") == ""
+      not at_cp.exception and (cap.get("copy_response") or {}).get("text") == ""
       and any("trống" in line for line in at_cp.session_state.get("grid_log", [])))
 at_cp.run()
 check("Grid copy: response không sinh thêm việc ở rerun sau",
@@ -1158,26 +1167,25 @@ stories.save_step_text(smoke_root, copy_sid, "b3", "## Tiêu đề **đậm**\n\
 at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-show-1", "source": "content_request", "id": copy_sid,
                                    "field": "Bài SEO", "request_id": "req-show-1"}
 at_gu.run()
-resp = at_gu.session_state.get("grid_copy_response") or {}
+resp = cap.get("copy_response") or {}
 check("Grid component: content_request về payload mode show, modal hiện đúng chữ seo.md",
       not at_gu.exception and resp.get("mode") == "show" and resp.get("request_id") == "req-show-1"
       and resp.get("text", "").startswith("## Tiêu đề"))
 at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-show-2", "source": "copy_request", "id": copy_sid,
                                    "field": "Caption", "request_id": "req-copy-1"}
 at_gu.run()
-resp = at_gu.session_state.get("grid_copy_response") or {}
+resp = cap.get("copy_response") or {}
 check("Grid component: copy_request về payload mode copy cho click đơn",
       not at_gu.exception and resp.get("mode") == "copy" and resp.get("text") == "CAPTION TỪ FILE")
 at_gu.session_state[fbgrid.KEY] = {"event_id": "evt-show-3", "source": "image_request", "id": copy_sid,
                                    "request_id": "req-img-1"}
 at_gu.run()
-resp = at_gu.session_state.get("grid_copy_response") or {}
+resp = cap.get("copy_response") or {}
 check("Grid component: request ảnh cho bài chưa có ảnh -> modal nhận field Ảnh + dòng lỗi, không crash",
       not at_gu.exception and resp.get("field") == "Ảnh" and resp.get("mode") == "show"
       and resp.get("text") == "" and "chưa có ảnh" in (resp.get("error") or ""))
 
 captured = {}
-real_component = fbgrid.component
 fbgrid.component = lambda: (lambda **kw: captured.update(kw))
 at_gp = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at_gp.session_state["nav_page"] = "Grid"

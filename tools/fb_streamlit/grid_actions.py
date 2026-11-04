@@ -120,10 +120,18 @@ def build_ctx(conn, root: Path) -> Ctx:
                defaults=pref_providers(root))
 
 
-def step_states(root: Path, sid: str, now: float | None = None) -> dict:
-    """state hiển thị: 'running' lâu quá STALE_SECONDS coi là 'stale' (tiến trình đã chết giữa chừng)."""
-    story = stories.load_story(root, sid)
-    folder = stories.story_dir(root, sid)
+def _folder(story: dict, root: Path, sid: str) -> Path:
+    """Folder của bài: load_story đã gắn sẵn, khỏi resolve lại đường dẫn từng hàng."""
+    return Path(story["folder"]) if story.get("folder") is not None else stories.story_dir(root, sid)
+
+
+def step_states(root: Path, sid: str, now: float | None = None, story: dict | None = None) -> dict:
+    """state hiển thị: 'running' lâu quá STALE_SECONDS coi là 'stale' (tiến trình đã chết giữa chừng).
+
+    story truyền vào khi quét cả workspace, để một bài chỉ phải đọc story.json một lần.
+    """
+    story = story if story is not None else stories.load_story(root, sid)
+    folder = _folder(story, root, sid)
     out = {}
     for step in ALL_STEPS:
         state = stories.step_state(story, folder, step)
@@ -134,17 +142,19 @@ def step_states(root: Path, sid: str, now: float | None = None) -> dict:
     return out
 
 
-def display_states(root: Path, sid: str, now: float | None = None) -> dict:
+def display_states(root: Path, sid: str, now: float | None = None, story: dict | None = None) -> dict:
     """state để tô màu ô: pending của bài đã vào hàng đợi thành 'queued' (tím), không ghi ngược vào story.json."""
-    states = step_states(root, sid, now=now)
-    if not stories.load_story(root, sid).get("queued"):
+    story = story if story is not None else stories.load_story(root, sid)
+    states = step_states(root, sid, now=now, story=story)
+    if not story.get("queued"):
         return states
     return {step: (QUEUED if state == stories.PENDING else state) for step, state in states.items()}
 
 
-def b0_state(root: Path, sid: str, now: float | None = None) -> str:
+def b0_state(root: Path, sid: str, now: float | None = None, story: dict | None = None) -> str:
     """B0 có state riêng trong story.json — không đi qua step_states vì nó không phải bước AI."""
-    block = stories.load_story(root, sid).get("b0") or {}
+    story = story if story is not None else stories.load_story(root, sid)
+    block = story.get("b0") or {}
     state = str(block.get("state") or stories.PENDING)
     if state == stories.RUNNING and (now if now is not None else time.time()) - float(block.get("updated_at") or 0) > STALE_SECONDS:
         return STALE
@@ -232,11 +242,15 @@ def clean_url(raw) -> str:
 
 
 def buckets_for(ctx: Ctx) -> list[dict]:
-    """id + nhóm việc + cờ hàng đợi của cả workspace — để dispatcher tự đếm khi người dùng bấm nút tổng kết."""
+    """id + nhóm việc + cờ hàng đợi của cả workspace — để dispatcher tự đếm khi người dùng bấm nút tổng kết.
+
+    Một bài chỉ parse story.json một lần (display_states nhận dict đã đọc), nếu không chỗ này
+    quét lại cả workspace tốn gấp ba lần số lượt đọc file.
+    """
     out = []
     for sid in stories.list_story_ids(ctx.root):
         story = stories.load_story(ctx.root, sid)
-        out.append({"id": sid, "bucket": bucket(display_states(ctx.root, sid)), "queued": bool(story.get("queued"))})
+        out.append({"id": sid, "bucket": bucket(display_states(ctx.root, sid, story=story)), "queued": bool(story.get("queued"))})
     return out
 
 
@@ -299,7 +313,7 @@ def b0_todo_ids(ctx: Ctx) -> list[str]:
         story = stories.load_story(ctx.root, sid)
         if not clean_url(story.get("source") or (story.get("b0") or {}).get("url")):
             continue
-        if b0_state(ctx.root, sid) != stories.DONE:
+        if b0_state(ctx.root, sid, story=story) != stories.DONE:
             out.append(sid)
     return out
 

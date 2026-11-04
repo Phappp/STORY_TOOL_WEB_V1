@@ -442,10 +442,11 @@ def states(root: Path, sid: str) -> dict:
     return {step: step_state(story, folder, step) for step in STEPS}
 
 
-def story_summary(root: Path, sid: str) -> dict:
-    folder = story_dir(root, sid)
-    story = load_story(root, sid)
-    image = image_of(root, sid)
+def story_summary(root: Path, sid: str, story: dict | None = None) -> dict:
+    """Tóm tắt một bài. story truyền vào (từ load_story) để quét cả workspace chỉ phải đọc file một lần."""
+    story = story if story is not None else load_story(root, sid)
+    folder = Path(story["folder"]) if story.get("folder") is not None else story_dir(root, sid)
+    image = _image_file(folder)
     out = {
         "id": sid,
         "topic": str(story.get("topic") or ""),
