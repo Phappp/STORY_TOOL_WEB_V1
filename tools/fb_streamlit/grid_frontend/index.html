@@ -101,6 +101,10 @@
   button.sq.missing { background:var(--missing); color:var(--missing-t); }
   button.sq.queued { background:var(--queued); color:var(--queued-t); }
   button.sq.stale { background:var(--error); color:var(--error-t); border-style:dashed; }
+  /* ô đang/do luồng nền giữ: chờ tới lượt = tím, đang gọi AI = xanh dương nhấp nháy */
+  button.sq.flow-waiting { background:var(--queued); color:var(--queued-t); border-color:rgba(107,63,160,.5); }
+  button.sq.flow-running { background:var(--running); color:var(--running-t); animation:flowpulse 1.15s ease-in-out infinite; }
+  @keyframes flowpulse { 50% { filter:brightness(.8); } }
   button.q { width:26px; padding:0; }
   button.q.on { background:var(--queued); color:var(--queued-t); border-color:rgba(107,63,160,.35); font-weight:700; }
   .badge { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; background:var(--pending); color:var(--pending-t); }
@@ -182,6 +186,7 @@ function outerHeight() {
   try { return window.parent.innerHeight || window.innerHeight; } catch (_) { return window.innerHeight; }
 }
 function setFrameHeight() {
+  pinFrame();  // mỗi lượt vẽ ghim lại, vì Streamlit dựng iframe mới sau mỗi event
   // Modal overlay cần kín vùng đọc, nên xin iframe cao bằng cửa sổ (như chế độ mở rộng).
   if (expandedMode() || modalRef()) { sendMessage(SET_FRAME_HEIGHT, { height: Math.min(Math.max(outerHeight(), 360), 4000) }); return; }
   const h = Math.min(Math.max(document.documentElement.scrollHeight, 120), 640);
@@ -333,12 +338,18 @@ function stateOf(row, step) {
   return String(step === "b0" ? (row.b0 || "pending") : ((row.states || {})[step] || "pending"));
 }
 
+function flowNote(row, step) {
+  const f = String((row.flow || {})[step] || "");
+  return f === "running" ? "đang chạy" : f === "waiting" ? "đã giao, chờ tới lượt" : "";
+}
+
 function stepsCell(row) {
   const td = el("td", "steps");
   GRID_STEPS.forEach(step => {
     const state = stateOf(row, step);
     const detail = String((row.detail || {})[step] || "");
-    const b = el("button", "b sq " + state);
+    const flow = flowNote(row, step);
+    const b = el("button", "b sq " + state + (flow ? " flow-" + ((row.flow || {})[step]) : ""));
     b.type = "button";
     b.textContent = step.toUpperCase();
     b.dataset.id = String(row.id);
@@ -348,7 +359,7 @@ function stepsCell(row) {
     const how = preview ? "bấm để mở modal xem " + (step === "b0" ? "caption + ảnh trích được, sửa caption hoặc thêm ảnh tay ở đó" : "ảnh")
       : "bấm 1 lần để copy, bấm đúp để mở modal";
     b.title = STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state) + (detail ? " · " + detail : "")
-      + (step === "b0" && row.b0meta ? " · " + row.b0meta : "") + " — " + how;
+      + (step === "b0" && row.b0meta ? " · " + row.b0meta : "") + (flow ? " · " + flow : "") + " — " + how;
     const single = preview ? () => openModal(row.id, step)
       : () => copyField(row, STEP_FIELD[step], b, b.dataset.flash);
     const onClick = splitClick(single, () => openModal(row.id, step));  // 1 closure/ô: bấm đúp mới tính
@@ -547,19 +558,30 @@ function modalNode() {
 
   const tools = el("div", "mtools");
   if (ref.tab === "b0") {
-    tools.appendChild(button("▶ Trích lại B0", "Gọi lại link nguồn để lấy caption + ảnh — chữ bạn sửa tay trong input.txt sẽ không bị đè", b => {
-      b.disabled = true;  // nút trong modal không bị khóa theo grid -> tự khóa tới khi rerun vẽ lại
-      CONTENT.delete(key); IMAGES.delete(key); NOTES.delete(key); DRAFT.delete(key);  // bản nháp cũ không còn nghĩa sau khi trích lại
-      send({ source: "b0_run", id: row.id });
-    }, "play"));
+    const b0flow = flowNote(row, "b0");
+    const b = button(b0flow ? "⏳ " + b0flow : "▶ Trích lại B0",
+      b0flow ? "Việc này đang nằm trong luồng nền — thấy đổi màu ở ô B0 là xong"
+        : "Giao luồng nền gọi lại link nguồn để lấy caption + ảnh — chữ bạn sửa tay trong input.txt sẽ không bị đè",
+      bb => {
+        bb.disabled = true;  // nút trong modal không bị khóa theo grid -> tự khóa tới khi rerun vẽ lại
+        CONTENT.delete(key); IMAGES.delete(key); NOTES.delete(key); DRAFT.delete(key);  // bản nháp cũ không còn nghĩa sau khi trích lại
+        send({ source: "b0_run", id: row.id });
+      }, "play");
+    if (b0flow) b.disabled = true;
+    tools.appendChild(b);
   }
   if (["b1", "b2", "b3"].indexOf(ref.tab) >= 0) {
-    tools.appendChild(button("▶ Chạy bước này", "Chạy lại " + STEP_TITLE[ref.tab] + " cho " + row.id +
-      " — xong thì modal tự hiện kết quả mới", b => {
-        b.disabled = true;  // nút trong modal không bị khóa theo grid -> tự khóa tới khi rerun vẽ lại
+    const stepflow = flowNote(row, ref.tab);
+    const b = button(stepflow ? "⏳ " + stepflow : "▶ Chạy bước này",
+      stepflow ? "Bước này đang ở trong luồng nền — grid sẽ tô lại khi xong"
+        : "Giao luồng nền chạy lại " + STEP_TITLE[ref.tab] + " cho " + row.id + " — xong thì modal tự hiện kết quả mới",
+      bb => {
+        bb.disabled = true;  // nút trong modal không bị khóa theo grid -> tự khóa tới khi rerun vẽ lại
         CONTENT.delete(key); IMAGES.delete(key); NOTES.delete(key);  // bỏ bản cache để lần vẽ sau đọc file mới
         send({ source: "run_step", id: row.id, step: ref.tab });
-      }, "play"));
+      }, "play");
+    if (stepflow) b.disabled = true;
+    tools.appendChild(b);
   }
   if (["b1", "b2", "b3"].indexOf(ref.tab) >= 0) {
     // provider riêng cho bước này của bài này — chọn tay thì ghi vào story.json, ưu tiên trên mặc định đầu grid
@@ -783,19 +805,55 @@ function errorsButton() {
   return b;
 }
 
+const PIN_FLAG = "fbgrid-pinned";
+
+function pinFrame() {
+  // "Mở rộng" ghim thẳng iframe lên trang cha bằng CSS, không dùng requestFullscreen:
+  // mỗi event làm Streamlit dựng lại iframe -> fullscreen bị thoát, grid co về khung thường.
+  let host = null;
+  try { host = window.frameElement; } catch (_) { return; }
+  if (!host || !host.ownerDocument || !host.ownerDocument.body) return;
+  const doc = host.ownerDocument;
+  if (expandedMode()) {
+    if (!doc.getElementById(PIN_FLAG)) {
+      doc.documentElement.dataset.fbgridScroll = String((doc.scrollingElement || doc.body).scrollTop || 0);
+      const flag = el("div", null, null);
+      flag.id = PIN_FLAG;
+      flag.style.display = "none";
+      doc.body.appendChild(flag);
+    }
+    ["position", "inset", "width", "height", "max-height", "min-height", "z-index",
+      "border", "border-radius", "margin"].forEach(p => host.style.removeProperty(p));
+    host.style.setProperty("position", "fixed", "important");
+    host.style.setProperty("inset", "0", "important");
+    host.style.setProperty("width", "100vw", "important");
+    host.style.setProperty("height", "100vh", "important");
+    host.style.setProperty("max-height", "none", "important");
+    host.style.setProperty("z-index", "2147483000", "important");
+    host.style.setProperty("border", "0", "important");
+    host.style.setProperty("border-radius", "0", "important");
+    host.style.setProperty("background", "#fff", "important");
+    doc.body.style.setProperty("overflow", "hidden", "important");
+    return;
+  }
+  const flag = doc.getElementById(PIN_FLAG);
+  if (!flag) return;
+  flag.remove();
+  ["position", "inset", "width", "height", "max-height", "min-height", "z-index",
+    "border", "border-radius", "background"].forEach(p => host.style.removeProperty(p));
+  doc.body.style.removeProperty("overflow");
+  const top = parseInt(String(doc.documentElement.dataset.fbgridScroll || "0"), 10);
+  delete doc.documentElement.dataset.fbgridScroll;
+  (doc.scrollingElement || doc.body).scrollTop = top;
+}
+
 function expandButton() {
   return button(expandedMode() ? "🗗 Thu lại" : "⛢ Mở rộng",
-    expandedMode() ? "Trả grid về khung thường" : "Grid chiếm kín cửa sổ trình duyệt", () => {
-      lsSet(EXPANDED_KEY, expandedMode() ? "0" : "1");
-      try {
-        if (expandedMode() && document.documentElement.requestFullscreen) {
-          document.documentElement.requestFullscreen().catch(() => {});
-        } else if (!expandedMode() && document.fullscreenElement && document.exitFullscreen) {
-          document.exitFullscreen().catch(() => {});
-        }
-      } catch (_) {}  // iframe không được phép full-screen thì chỉ cần khung cao kín trang
-      repaint();
-    });
+    expandedMode() ? "Trả grid về khung thường (Esc cũng thu được)"
+      : "Grid chiếm kín cửa sổ — ghim bằng CSS nên không bị thu lại khi grid vẽ lại", () => {
+        lsSet(EXPANDED_KEY, expandedMode() ? "0" : "1");
+        repaint();
+      });
 }
 
 function statsBar() {
@@ -962,7 +1020,11 @@ function render(args) {
 window.addEventListener("message", event => {
   if (event.data && event.data.type === RENDER) render(event.data.args || {});
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape" && modalRef()) closeModal(); });
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  if (modalRef()) { closeModal(); return; }
+  if (expandedMode()) { lsSet(EXPANDED_KEY, "0"); repaint(); }  // Esc cũng thu được grid đang mở rộng
+});
 sendMessage(COMPONENT_READY, { apiVersion: 1 });
 window.addEventListener("load", () => setTimeout(setFrameHeight, 0));
 </script>

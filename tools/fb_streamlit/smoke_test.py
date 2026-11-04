@@ -2,6 +2,7 @@ import base64
 import json
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -299,6 +300,7 @@ shutil.rmtree(st_box, ignore_errors=True)
 
 # --- P2b: grid_actions.apply_event — một event từ grid -> việc thật trên folder story ---
 import grid_actions as ga
+import grid_runner as gr
 
 ga_box = Path(tempfile.mkdtemp(prefix="fbgrid_"))
 ga_root = stories.validate_root(ga_box / "ws")
@@ -774,6 +776,92 @@ out = ga.apply_event(gctx, {"source": "b0_request", "id": sid_blank, "request_id
 check("lưu caption tay ở modal trống -> mở lại prefill đúng chữ, không còn lời 'chưa trích được gì'",
       out.copy["text"] == "caption dán từ điện thoại" and out.lines == [])
 
+# --- P5b: luồng nền chạy bước — grid trả lời ngay nên ô B1-B3 còn đổi màu giữa chừng ---
+def wait_flow(r, timeout=10.0):
+    """Chờ luồng nền xử lý hết việc đã giao (test không ngủ cứng)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if not r.snapshot()["busy"]:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+box_p5b = Path(tempfile.mkdtemp(prefix="fbsmoke_p5b_"))
+real_recents_p5b = stories._recents_path
+stories._recents_path = lambda: box_p5b / "workspaces.json"
+p5b_root = stories.set_current(stories.validate_root(box_p5b / "ws"))
+started = []
+reached = threading.Event()  # báo executor đã thật sự cầm việc -> snapshot không đọc phải state "chờ"
+hold = threading.Event()     # giữ bài đầu chạy lâu để test kịp thấy bài sau đứng chờ
+
+
+def slow_executor(event, root):
+    sid = str(event.get("id"))
+    started.append(sid)
+    reached.set()
+    if sid == "story_001":
+        hold.wait(10)
+    return [f"{event.get('id')}: luồng nền xong {event.get('source')}"]
+
+
+runner_p5b = gr.Runner(slow_executor)
+job_a, _ = gr.job_for({"source": "run_step", "id": "story_001", "step": "b1"}, p5b_root)
+note_a = runner_p5b.submit(job_a[0])
+got_a = reached.wait(5)
+mid = runner_p5b.snapshot()
+check("giao việc -> có câu trả lời ngay, snapshot báo đang chạy đúng từng bước",
+      got_a and "Luồng nền đang chạy" in note_a and mid["busy"]
+      and mid["flow"] == {"story_001": {"b1": "running"}} and mid["current"] == "story_001 · B1 caption")
+job_a2, _ = gr.job_for({"source": "run_step", "id": "story_001", "step": "b2"}, p5b_root)
+note_a2 = runner_p5b.submit(job_a2[0])
+check("bài đang chờ/chạy trong luồng nền -> từ chối bấm thêm, không xếp trùng việc",
+      "đang chờ/chạy trong luồng nền" in note_a2 and runner_p5b.snapshot()["queued"] == 0)
+job_b, _ = gr.job_for({"source": "b0_run", "id": "story_002"}, p5b_root)
+note_b = runner_p5b.submit(job_b[0])
+check("bài khác vẫn xếp được phía sau và nói rõ đứng thứ mấy",
+      "Đã xếp vào luồng nền" in note_b and runner_p5b.snapshot()["queued"] == 1)
+snap_wait = runner_p5b.snapshot()
+check("việc đang chờ được đánh dấu để JS tô tím, việc đang chạy tô xanh nhấp nháy",
+      snap_wait["flow"].get("story_002") == {"b0": "waiting"}
+      and snap_wait["waiting_ids"] == ["story_002"] and snap_wait["running_ids"] == ["story_001"])
+hold.set()  # thả bài đầu để luồng nền chạy tiếp bài đang chờ
+ok_p5b = wait_flow(runner_p5b)
+lines_p5b, seen_p5b = runner_p5b.new_lines(0)
+end = runner_p5b.snapshot()
+check("luồng nền chạy tuần tự hết việc rồi báo rảnh, đếm tiến trình đúng",
+      ok_p5b and not end["busy"] and (end["done"], end["total"]) == (2, 2) and started == ["story_001", "story_002"]
+      and lines_p5b == ["story_001: luồng nền xong run_step", "story_002: luồng nền xong b0_run"])
+check("đọc log rồi thì lần sau không trả lại dòng cũ", runner_p5b.new_lines(seen_p5b)[0] == [])
+
+
+def boom_executor(event, root):
+    raise RuntimeError("provider chết giữa chừng")
+
+
+runner_boom = gr.Runner(boom_executor)
+job_c, _ = gr.job_for({"source": "run_all", "id": "story_003"}, p5b_root)
+runner_boom.submit(job_c[0])
+check("executor nổ lỗi -> dòng log nói rõ, luồng nền không kẹt 'đang chạy' mãi",
+      wait_flow(runner_boom) and any("luồng nền dừng vì lỗi" in line and "provider chết" in line
+                                     for line in runner_boom.new_lines(0)[0]))
+jobs_12, notes_12 = gr.job_for({"source": "b0_batch", "ids": [f"story_{i:03d}" for i in range(1, 13)]}, p5b_root)
+check("batch 12 bài -> cắt 3 lượt 5/5/2, mỗi event nằm trong giới hạn MAX_BATCH, nói trước số lượt",
+      [len(j.ids) for j in jobs_12] == [5, 5, 2] and all(j.steps == ["b0"] for j in jobs_12)
+      and all(len(j.event["ids"]) <= ga.MAX_BATCH for j in jobs_12)
+      and any("3 lượt" in n for n in notes_12))
+jobs_all, _ = gr.job_for({"source": "run_all", "id": "story_004"}, p5b_root)
+check("run_all đánh dấu cả ba bước nên ô B1/B2/B3 cùng sáng khi chờ tới lượt",
+      jobs_all[0].steps == ["b1", "b2", "b3"] and jobs_all[0].label == "story_004 · ⚡ đủ B1-B3")
+marked = fbgrid.mark_flow([{"id": "story_001", "states": {}}, {"id": "story_002", "states": {}}],
+                          {"flow": {"story_001": {"b1": "running"}}})
+check("mark_flow gắn state luồng nền vào dòng grid, bài khác để trống",
+      marked[0]["flow"] == {"b1": "running"} and marked[1]["flow"] == {})
+runner_p5b.stop()
+runner_boom.stop()
+stories._recents_path = real_recents_p5b
+shutil.rmtree(box_p5b, ignore_errors=True)
+
 fb_import.extract = real_extract
 
 prov.chat, prov.codex_generate_image = real_chat, real_codex
@@ -866,8 +954,11 @@ btn_b1 = next((b for b in at_gn.button if b.label == "▶ B1"), None)
 check("Grid native: ▶ B1 bài chưa input bị chặn trước khi gọi provider", btn_b1 is not None)
 if btn_b1 is not None:
     btn_b1.click().run()
+    ok_native = wait_flow(fbgrid.RUNNER)
+    at_gn.run()
     check("Grid native: ▶ B1 bị chặn có log, không ghi file",
-          not at_gn.exception and any("input.txt" in line for line in at_gn.session_state.get("grid_log", []))
+          not at_gn.exception and ok_native
+          and any("input.txt" in line for line in at_gn.session_state.get("grid_log", []))
           and not (smoke_root / grid_sid / "caption.txt").exists())
 btn_ok = next((b for b in at_gn.button if "Đã đăng" in b.label), None)
 if btn_ok is not None:
@@ -958,15 +1049,19 @@ at_bc.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
 at_bc.session_state[fbgrid.KEY] = {"event_id": "evt-batch-1", "source": "batch_run", "ids": batch_sids}
 at_bc.run()
 logs = at_bc.session_state.get("grid_log", [])
-check("batch 6 bài: chạy 5, nói rõ 1 bài để lượt sau",
-      not at_bc.exception and any("để lượt sau" in line for line in logs)
-      and sum("input.txt" in line for line in logs) == ga.MAX_BATCH
+ok_batch = wait_flow(fbgrid.RUNNER)
+at_bc.run()  # dòng của luồng nền chỉ về được ở lần vẽ sau
+logs_after = at_bc.session_state.get("grid_log", [])
+check("batch 6 bài: giao luồng nền 2 lượt 5+1, grid trả lời ngay chứ không chạy inline",
+      not at_bc.exception and ok_batch and any("2 lượt" in line for line in logs)
+      and any("còn 1 lượt kế tiếp đã xếp" in line for line in logs))
+check("batch có dòng tiến trình 'Luồng nền' thay cho khung st.status inline + cả 6 bài đều được xử",
+      any("Luồng nền" in line for line in logs)
+      and sum("input.txt" in line for line in logs_after) == ga.MAX_BATCH + 1
       and not any((smoke_root / s / "caption.txt").exists() for s in batch_sids))
-check("batch có khung tiến trình inline (st.status + st.progress)",
-      len(at_bc.status) == 1 and len(at_bc.progress) == 1)
 at_bc.run()
 check("event batch cũ không chạy lại ở rerun sau",
-      len(at_bc.session_state.get("grid_log", [])) == len(logs) and not at_bc.exception)
+      len(at_bc.session_state.get("grid_log", [])) == len(logs_after) and not at_bc.exception)
 
 # --- P3b AppTest: hàng đợi trên grid + lọc theo nhóm việc ---
 q_sid = stories.create_story(smoke_root, "Bài chờ hàng đợi", input_text="nội dung chờ")["id"]
@@ -1177,15 +1272,17 @@ check("Grid có nút import nói trước số link nhận được, chưa gọi
       and any("Nhận 6 link FB" in (m.value or "") for m in at_im.markdown))
 if go is not None:
     go.click().run()
+ok_import = wait_flow(fbgrid.RUNNER)  # B0 chạy trong luồng nền, test phải chờ nó cạn việc
+at_im.run()
 made = [s for s in stories.list_story_ids(smoke_root) if s not in ids_before]
 check("bấm import: tạo đủ 6 story, Nguồn = link, caption B0 vào input.txt, ảnh vào refs/",
       not at_im.exception and len(made) == 6 and len(ui_calls) == 6
       and all(stories.load_story(smoke_root, s)["source"].startswith("https://fb.watch/ui-") for s in made)
       and all((smoke_root / s / "input.txt").read_text(encoding="utf-8").startswith("Caption UI") for s in made)
       and all((smoke_root / s / "refs" / "ref_1.jpg").is_file() for s in made))
-check("6 link tự chia lượt 5 bài và chạy tiếp bài còn lại trong cùng một lần bấm",
-      len(at_im.status) == 1 and len(at_im.progress) == 1
-      and any("Đã tạo 6 bài mới" in line for line in at_im.session_state.get("grid_log", []))
+check("6 link tự chia lượt 5 bài và luồng nền tự chạy tiếp bài còn lại trong cùng một lần bấm",
+      ok_import and len(ui_calls) == 6
+      and any("2 lượt" in line for line in at_im.session_state.get("grid_log", []))
       and all(ga.b0_state(smoke_root, s) == stories.DONE for s in made))
 check("dòng component mang state B0 để vẽ ô vuông + tổng kết",
       all("b0" in r for r in captured.get("rows", []))
@@ -1209,14 +1306,20 @@ check("bài mất caption -> Grid hiện nút trích B0 lại và tổng kết �
       and captured.get("summary", {}).get("b0_error") == 1)
 if retry is not None:
     retry.click().run()
-    check("bấm nút trích lại -> B0 chạy đúng bài còn thiếu, không chạy lại bài đã xong",
-          not at_im.exception and len(ui_calls) == 7 and ui_calls[-1] == stories.load_story(smoke_root, broken)["source"]
+    ok_retry = wait_flow(fbgrid.RUNNER)
+    at_im.run()
+    check("bấm nút trích lại -> B0 chạy đúng bài còn thiếu trong luồng nền, không chạy lại bài đã xong",
+          not at_im.exception and ok_retry and len(ui_calls) == 7
+          and ui_calls[-1] == stories.load_story(smoke_root, broken)["source"]
           and ga.b0_state(smoke_root, broken) == stories.DONE)
 captured.clear()
 at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b0-run", "source": "b0_run", "id": made[0]}
 at_im.run()
-check("modal B0 gửi b0_run -> grid chạy lại đúng bài đó và báo kết quả",
-      not at_im.exception and len(ui_calls) == 8 and ui_calls[-1] == stories.load_story(smoke_root, made[0])["source"]
+ok_modal_b0 = wait_flow(fbgrid.RUNNER)
+at_im.run()
+check("modal B0 gửi b0_run -> luồng nền chạy lại đúng bài đó và grid báo kết quả",
+      not at_im.exception and ok_modal_b0 and len(ui_calls) == 8
+      and ui_calls[-1] == stories.load_story(smoke_root, made[0])["source"]
       and any("B0: OK" in line for line in at_im.session_state.get("grid_log", [])))
 captured.clear()
 at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b0-save", "source": "b0_save", "id": made[1], "text": "Caption dán tay từ modal"}

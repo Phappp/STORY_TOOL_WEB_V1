@@ -11,7 +11,9 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
+import db
 import grid_actions as ga
+import grid_runner as gr
 import stories
 
 FRONTEND = Path(__file__).resolve().parent / "grid_frontend"
@@ -22,6 +24,7 @@ MODE_COMPONENT = "Grid (component)"
 MODE_NATIVE = "Bảng nút (native)"
 REFRESH_KEY = "grid_refresh"
 REFRESH_SECONDS = 5
+POLL_SECONDS = 1.5  # khi luồng nền còn việc thì poll nhanh, để ô vuông đổi màu gần lúc bài xong
 PROV_DEFAULT_LABEL = "Theo preset"
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
 CSV_KEY = "grid_import_file"
@@ -139,9 +142,48 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
     return ga.with_positions(ga.queue_sort(out))
 
 
+def _executor(event: dict, root: Path) -> list[str]:
+    """Phần chạy trong thread nền: tự mở kết nối DB riêng (sqlite không dùng xuyên thread được)."""
+    conn = db.connect()
+    try:
+        return ga.apply_event(ga.build_ctx(conn, Path(root)), event).lines
+    finally:
+        conn.close()
+
+
+RUNNER = gr.Runner(_executor)
+
+
+def runner_line(snap: dict) -> str:
+    if not snap["busy"]:
+        return f"Luồng nền đang trống — {snap['done']}/{snap['total']} bài vừa xong."
+    head = f"⏳ Luồng nền: {snap['current']}" if snap["running"] else f"⏳ Luồng nền còn {snap['queued']} việc chờ"
+    return f"{head} · {snap['done']}/{snap['total']} bài xong"
+
+
+def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
+    """Việc dài (gọi AI, trích B0) giao cho thread nền rồi trả lời ngay — grid khỏi bí.
+
+    auto_refresh tắt mà vừa giao việc thì phải dựng lại fragment có polling, nên kết thúc
+    bằng st.rerun(scope='app'): nếu không, trang chỉ vẽ lại khi anh tự bấm gì đó.
+    """
+    jobs, notes = gr.job_for(event, ctx.root)
+    msgs = [RUNNER.submit(job) for job in jobs]
+    refused = [m for m in msgs if "đang chờ/chạy" in m]
+    accepted = [m for m in msgs if m not in refused]
+    notes += refused
+    if accepted:  # batch dài cắt thành nhiều lượt thì chỉ nói lượt đầu, kẻo log đầy dòng "đứng thứ N"
+        notes.append(accepted[0] + (f" · còn {len(accepted) - 1} lượt kế tiếp đã xếp" if len(accepted) > 1 else ""))
+    out = ga.Outcome(lines=notes)
+    _collect(out, event)
+    if not bool(st.session_state.get(REFRESH_KEY)):
+        st.rerun(scope="app")
+    return out
+
+
 def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
-    if str(event.get("source") or "") == "batch_run":  # batch là việc dài -> cần thấy từng bài đang chạy
-        return run_batch(ctx, event)
+    if str(event.get("source") or "") in gr.HEAVY_SOURCES:  # việc dài -> thread nền, grid còn vẽ được
+        return hand_off(ctx, event)
     out = ga.apply_event(ctx, event)
     _collect(out, event)
     return out
@@ -167,41 +209,11 @@ def _collect(out: ga.Outcome, event: dict) -> None:
         st.session_state["pending_nav"] = out.nav
 
 
-def run_batch(ctx: ga.Ctx, event: dict) -> ga.Outcome:
-    """Chạy batch tuần tự, tiến trình hiện ngay trên grid (tối đa ga.MAX_BATCH bài/lần)."""
-    ids, _note = ga.batch_ids(event.get("ids"))
-    total = max(len(ids), 1)
-    with st.status(f"Chạy batch {total} bài (tối đa {ga.MAX_BATCH}/lần)", expanded=True) as status:
-        bar = st.progress(0.0, text=f"0/{total} bài")
-
-        def tick(sid: str, i: int, n: int) -> None:
-            bar.progress(i / n, text=f"{i}/{n} bài · {sid}")
-
-        out = ga.apply_event(ctx, event, on_batch=tick)
-        status.update(label=f"Batch xong: {len(out.touched)}/{total} bài", state="complete", expanded=False)
-    _collect(out, event)
-    return out
-
-
 def run_b0_import(ctx: ga.Ctx, ids: list[str]) -> None:
-    """Trích B0 cho cả danh sách: mỗi lượt tối đa ga.MAX_BATCH bài, tự chạy tiếp tới khi hết."""
-    total = len(ids)
-    if not total:
+    """Trích B0 cho cả danh sách: giao luồng nền, mỗi lượt ga.MAX_BATCH bài, tự chạy tiếp tới khi hết."""
+    if not ids:
         return
-    done, lines = 0, []
-    with st.status(f"Trích B0 cho {total} bài (mỗi lượt {ga.MAX_BATCH} bài, tự chạy tiếp tới khi hết)", expanded=True) as status:
-        bar = st.progress(0.0, text=f"0/{total} bài")
-
-        def tick(sid: str, i: int, n: int) -> None:
-            bar.progress((done + i) / total, text=f"{done + i}/{total} bài · {sid}")
-
-        while done < total:
-            chunk = ids[done:done + ga.MAX_BATCH]
-            out = ga.apply_event(ctx, {"source": "b0_batch", "ids": chunk}, on_batch=tick)
-            lines += out.lines
-            done += len(chunk)
-        status.update(label=f"B0 xong: {done}/{total} bài", state="complete", expanded=False)
-    _push(lines)
+    hand_off(ctx, {"source": "b0_batch", "ids": ids})
 
 
 def import_form(ctx: ga.Ctx) -> None:
@@ -415,13 +427,36 @@ def copy_blocks(ctx: ga.Ctx, sid: str) -> None:
             st.code(str(story.get("link") or "") or "(trống)")
 
 
+def mark_flow(rows: list[dict], snap: dict) -> list[dict]:
+    """Gắn bài nào đang/do luồng nền giữ vào dòng grid — state folder chỉ đổi sau khi gọi AI xong."""
+    flow = snap["flow"]
+    for row in rows:
+        row["flow"] = dict(flow.get(row["id"]) or {})
+    return rows
+
+
 def _body(ctx: ga.Ctx) -> None:
-    """Phần vẽ lại khi tự làm mới — nằm trong fragment, chỉ đọc folder nên không có state riêng."""
+    """Phần vẽ lại khi tự làm mới — chỉ đọc folder nên không có state riêng."""
+    if "grid_flow_seen" not in st.session_state:
+        # bản ghi log của luồng nền là của cả app, còn ô log này thuộc về một trang đang mở:
+        # mốc bắt đầu đặt TRƯỚC khi tiêu thụ event -> dòng do chính mình giao vẫn hiện, log cũ thì bỏ.
+        st.session_state["grid_flow_seen"] = RUNNER.snapshot()["lines"]
     outcome = consume_event(ctx)
+    snap = RUNNER.snapshot()
+    was_busy = bool(st.session_state.get("grid_flow_busy"))
+    if snap["busy"] or was_busy:
+        st.caption(runner_line(snap))
+    lines, seen = RUNNER.new_lines(int(st.session_state.get("grid_flow_seen") or 0))
+    if lines:
+        _push(lines)
+        st.session_state["grid_flow_seen"] = seen
+    st.session_state["grid_flow_busy"] = snap["busy"]
     show_log()
     if outcome is not None and outcome.nav:
         st.rerun(scope="app")  # nút ↗: nhảy sang trang Tạo bài với bài vừa chọn
-    all_rows = rows_for(ctx)
+    if was_busy and not snap["busy"] and not bool(st.session_state.get(REFRESH_KEY)):
+        st.rerun(scope="app")  # luồng nền vừa cạn mà auto tắt -> bỏ fragment polling
+    all_rows = mark_flow(rows_for(ctx), snap)
     choice = str(st.session_state.get("grid_filter") or ga.FILTERS[0])
     rows = ga.filter_rows(all_rows, choice)
     if choice != ga.FILTERS[0]:
@@ -446,7 +481,8 @@ def render(ctx: ga.Ctx) -> None:
                      help="Bài lỗi lên đầu, rồi chờ chạy, đang chạy, xong. Bài đã vào hàng đợi luôn ở trên cùng.")
     provider_bar(ctx)
     import_form(ctx)
-    if auto:
-        st.fragment(_body, run_every=REFRESH_SECONDS)(ctx)
+    busy = RUNNER.snapshot()["busy"]
+    if auto or busy:  # có việc nền thì phải poll nhanh, kể cả khi anh tắt tự làm mới
+        st.fragment(_body, run_every=POLL_SECONDS if busy else REFRESH_SECONDS)(ctx)
     else:
         _body(ctx)
