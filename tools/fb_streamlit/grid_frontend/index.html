@@ -151,6 +151,7 @@ const COLS_KEY = "fbgrid:cols:v1";
 const EXPANDED_KEY = "fbgrid:expanded:v1";
 const MODAL_KEY = "fbgrid:modal:v1";
 const LAST_RESP_KEY = "fbgrid:lastresp:v1";
+const VIEW_KEY = "fbgrid:view:v1";  // chỗ đang cuộn — iframe bị dựng lại sau mỗi event nên phải nhớ qua localStorage
 const SUMMARY_ORDER = [["queued", "hàng đợi"], ["waiting", "chờ"], ["running", "đang chạy"], ["error", "lỗi"], ["done", "xong"]];
 const DUBBLE_MS = 260;
 const MAX_UPLOAD = 4 * 1024 * 1024;  // khớp B0_UPLOAD_MAX trong grid_actions — ảnh tay đi base64 qua event
@@ -167,6 +168,8 @@ const WAITING = new Map();  // request_id -> {key, id, field, mode, flash} — c
 let FLASH = null;           // {sel, label, cls, at} — nút vừa vẽ xong sẽ nhận nhãn "đã copy"
 let COPY_NOW = null;        // {text, flash} — response xin copy vừa về, ghi vào clipboard sau khi DOM vẽ xong
 let SHOW_MD = true;         // tab B3: hiển thị markdown đã render hay để nguyên chữ
+let LAST_ARGS = "";         // chữ ký payload lần vẽ trước — tick nào không có gì đổi thì bỏ qua, khỏi vẽ lại
+let LAST_H = 0;             // chiều cao iframe vừa xin Streamlit lần gần nhất (0 = chưa xin)
 
 function widths() {
   const saved = JSON.parse(lsGet(COLS_KEY) || "{}") || {};
@@ -186,10 +189,14 @@ function outerHeight() {
   try { return window.parent.innerHeight || window.innerHeight; } catch (_) { return window.innerHeight; }
 }
 function setFrameHeight() {
-  pinFrame();  // mỗi lượt vẽ ghim lại, vì Streamlit dựng iframe mới sau mỗi event
-  // Modal overlay cần kín vùng đọc, nên xin iframe cao bằng cửa sổ (như chế độ mở rộng).
-  if (expandedMode() || modalRef()) { sendMessage(SET_FRAME_HEIGHT, { height: Math.min(Math.max(outerHeight(), 360), 4000) }); return; }
-  const h = Math.min(Math.max(document.documentElement.scrollHeight, 120), 640);
+  // Chỉ xin Streamlit đổi chiều cao khi cần thật: mỗi lần xin là iframe bị co/giãn,
+  // grid đang mở rộng bị nhấp nháy theo từng tick làm mới.
+  if (pinFrame()) LAST_H = 0;  // vừa đổi trạng thái ghim -> chiều cao cũ không còn đúng
+  if (expandedMode()) { LAST_H = 0; return; }  // đang ghim: CSS inset:0 quyết định, khỏi xin chiều cao
+  const h = modalRef() ? Math.min(Math.max(outerHeight(), 360), 4000)
+    : Math.min(Math.max(document.documentElement.scrollHeight, 120), 640);
+  if (h === LAST_H) return;
+  LAST_H = h;
   sendMessage(SET_FRAME_HEIGHT, { height: h });
 }
 function eventId() {
@@ -269,6 +276,35 @@ function applyFlash() {
   FLASH = null;
   if (Date.now() - f.at > 1200) return;
   flash(document.querySelector('[data-flash="' + f.sel + '"]'), f.label, f.cls);
+}
+
+// Vẽ lại là gỡ cả cây DOM: phải giữ lại chỗ đang cuộn + con trỏ đang gõ, nếu không mỗi tick
+// làm mới đưa grid về đầu danh sách và cắt mất câu đang sửa.
+function keepView() {
+  const a = document.activeElement;
+  const typing = a && (a.tagName === "TEXTAREA" || a.tagName === "INPUT") && a.dataset.fid ? a.dataset.fid : "";
+  let caret = null;
+  try { if (typing && a.selectionStart != null) caret = [a.selectionStart, a.selectionEnd]; } catch (_) { caret = null; }
+  return {
+    scroll: Array.from(document.querySelectorAll(".scroll,.mbody")).map(n => [n.scrollTop, n.scrollLeft]),
+    fid: typing, caret: caret,
+  };
+}
+function restoreView(view) {
+  const nodes = document.querySelectorAll(".scroll,.mbody");
+  if (!view.scroll.length) {  // iframe vừa bị Streamlit dựng lại sau 1 event: giữ nguyên chỗ đang xem qua localStorage
+    const p = JSON.parse(lsGet(VIEW_KEY) || "[]");
+    const sc = document.querySelector(".scroll");
+    if (sc && Number(p[0])) { sc.scrollTop = Number(p[0]); sc.scrollLeft = Number(p[1] || 0); }
+  }
+  view.scroll.forEach((pos, i) => { if (nodes[i]) { nodes[i].scrollTop = pos[0]; nodes[i].scrollLeft = pos[1]; } });
+  const s = document.querySelector(".scroll");
+  if (s) lsSet(VIEW_KEY, JSON.stringify([s.scrollTop, s.scrollLeft]));
+  if (!view.fid) return;
+  const box = document.querySelector('[data-fid="' + view.fid + '"]');
+  if (!box) return;
+  box.focus();
+  if (view.caret) { try { box.setSelectionRange(view.caret[0], view.caret[1]); } catch (_) {} }
 }
 
 function stampOf(row) { return String((row && (row.stamp != null ? row.stamp : row.updated)) || ""); }
@@ -444,6 +480,7 @@ function captionEditor(row, key, loaded) {
   ta.className = "ta";
   ta.value = DRAFT.has(key) ? String(DRAFT.get(key)) : loaded;
   ta.spellcheck = false;
+  ta.dataset.fid = "cap:" + row.id;  // để vẽ lại vẫn trả đúng con trỏ về ô đang gõ
   const save = button("💾 Lưu caption", "", b => {
     b.disabled = true;
     send({ source: "b0_save", id: row.id, text: ta.value });
@@ -645,9 +682,11 @@ function queueCell(row) {
 function shortUrl(raw) { return String(raw || "").replace(/^https?:\/\//, "").replace(/\/$/, ""); }
 
 function repaint() {
+  // Vẽ lại theo trạng thái cục bộ (mở modal, đổi tab, thu/mở rộng, sửa link): payload giữ nguyên
+  // nên phải ép render, nếu không chữ ký ở trên sẽ bỏ qua.
   render({ rows: MODEL.rows, workspace: MODEL.workspace, copy_response: MODEL.copy_response,
            summary: MODEL.summary, queue_ids: MODEL.queue_ids, error_ids: MODEL.error_ids,
-           providers: MODEL.providers, defaults: MODEL.defaults });
+           providers: MODEL.providers, defaults: MODEL.defaults }, true);
 }
 
 function linkEditor(row, td) {
@@ -810,17 +849,21 @@ const PIN_FLAG = "fbgrid-pinned";
 function pinFrame() {
   // "Mở rộng" ghim thẳng iframe lên trang cha bằng CSS, không dùng requestFullscreen:
   // mỗi event làm Streamlit dựng lại iframe -> fullscreen bị thoát, grid co về khung thường.
+  // Trả True nếu thật sự đổi trạng thái ghim: ghi đè style mỗi lần vẽ cũng làm trang cha vẽ lại.
   let host = null;
-  try { host = window.frameElement; } catch (_) { return; }
-  if (!host || !host.ownerDocument || !host.ownerDocument.body) return;
+  try { host = window.frameElement; } catch (_) { return false; }
+  if (!host || !host.ownerDocument || !host.ownerDocument.body) return false;
   const doc = host.ownerDocument;
+  const flag = doc.getElementById(PIN_FLAG);
+  const pinned = host.style.getPropertyValue("position") === "fixed";
   if (expandedMode()) {
-    if (!doc.getElementById(PIN_FLAG)) {
+    if (flag && pinned) return false;
+    if (!flag) {
       doc.documentElement.dataset.fbgridScroll = String((doc.scrollingElement || doc.body).scrollTop || 0);
-      const flag = el("div", null, null);
-      flag.id = PIN_FLAG;
-      flag.style.display = "none";
-      doc.body.appendChild(flag);
+      const f = el("div", null, null);
+      f.id = PIN_FLAG;
+      f.style.display = "none";
+      doc.body.appendChild(f);
     }
     ["position", "inset", "width", "height", "max-height", "min-height", "z-index",
       "border", "border-radius", "margin"].forEach(p => host.style.removeProperty(p));
@@ -834,17 +877,17 @@ function pinFrame() {
     host.style.setProperty("border-radius", "0", "important");
     host.style.setProperty("background", "#fff", "important");
     doc.body.style.setProperty("overflow", "hidden", "important");
-    return;
+    return true;
   }
-  const flag = doc.getElementById(PIN_FLAG);
-  if (!flag) return;
-  flag.remove();
+  if (!flag && !pinned) return false;
+  if (flag) flag.remove();
   ["position", "inset", "width", "height", "max-height", "min-height", "z-index",
     "border", "border-radius", "background"].forEach(p => host.style.removeProperty(p));
   doc.body.style.removeProperty("overflow");
   const top = parseInt(String(doc.documentElement.dataset.fbgridScroll || "0"), 10);
   delete doc.documentElement.dataset.fbgridScroll;
   (doc.scrollingElement || doc.body).scrollTop = top;
+  return true;
 }
 
 function expandButton() {
@@ -933,7 +976,11 @@ function endDrag() {
   setFrameHeight();
 }
 
-function render(args) {
+function render(args, force) {
+  const sig = JSON.stringify(args);
+  if (sig === LAST_ARGS && !force) return;  // tick làm mới không đổi gì -> giữ nguyên màn hình đang xem
+  LAST_ARGS = sig;
+  const view = keepView();
   MODEL = {
     rows: Array.isArray(args.rows) ? args.rows : [],
     workspace: String(args.workspace || ""),
@@ -1011,6 +1058,7 @@ function render(args) {
   unmarkSent();
   const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này
   if (modal) root.appendChild(modal);
+  restoreView(view);
   updateBar();
   finishCopy();   // response xin copy vừa về -> ghi clipboard, gắn nhãn lên nút vừa vẽ
   applyFlash();
