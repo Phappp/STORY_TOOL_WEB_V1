@@ -5,15 +5,20 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Story grid</title>
 <style>
+  /* P8ii: lưới chuyển sang nền tối theo đúng bảng màu của grid status legacy FX97
+     (bg #101821, header #1b2838, border #2d3b4f, accent #69a8ef). Mỗi trạng thái có ba biến:
+     nền --x, chữ --x-t, viền --x-b — bộ xanh lá/xanh dương/tím/đỏ/cam lấy nguyên từ .stage-* của họ,
+     vì màu pastel sáng trên nền tối bệt hết vào nhau, còn chữ xám trên nền trắng thì mờ. */
   :root {
-    --bg:#fff; --text:#31333f; --muted:#6b7280; --border:rgba(49,51,63,.18);
-    --header:#f7f8fa; --hover:#fafafa;
-    --pending:#eef0f3; --pending-t:#667085;
-    --queued:#f3ecfd; --queued-t:#6b3fa0;
-    --done:#e6f6ec; --done-t:#0a7f3f;
-    --running:#e8f1ff; --running-t:#175fa8;
-    --error:#fdecec; --error-t:#c62828;
-    --missing:#fff4e0; --missing-t:#a8650c;
+    --bg:#101821; --text:#dbe4ef; --muted:#93a3b8; --border:#2d3b4f;
+    --header:#1b2838; --panel:#1b2838; --hover:#152029; --field:#0d1520; --btn:#22303f; --btn-h:#2a3a4b;
+    --pending:#273343; --pending-t:#b8c9dc; --pending-b:#42526a;
+    --queued:#2c2450; --queued-t:#cbbcff; --queued-b:#6b57c8;
+    --done:#123e31; --done-t:#8cf6ba; --done-b:#236d58;
+    --running:#173b64; --running-t:#acd8ff; --running-b:#3679b9;
+    --error:#552a32; --error-t:#ffb8c0; --error-b:#a95560;
+    --missing:#4d3a12; --missing-t:#ffd98a; --missing-b:#7a5a1e;
+    --accent:#69a8ef;
   }
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; background:transparent; color:var(--text);
@@ -21,118 +26,123 @@
   .wrap { border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg); }
   .bar { display:flex; gap:10px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
   .bar .count { color:var(--muted); margin-left:auto; }
-  .stat { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; background:var(--pending); color:var(--pending-t); }
-  .stat.waiting { background:var(--pending); color:var(--pending-t); }
-  .stat.running { background:var(--running); color:var(--running-t); }
-  .stat.error { background:var(--error); color:var(--error-t); }
-  .stat.done { background:var(--done); color:var(--done-t); }
-  .stat.queued { background:var(--queued); color:var(--queued-t); }
-  .stat.b0err { background:var(--error); color:var(--error-t); }
+  .stat { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:650;
+    background:var(--pending); color:var(--pending-t); border:1px solid var(--pending-b); }
+  .stat.waiting { background:var(--pending); color:var(--pending-t); border-color:var(--pending-b); }
+  .stat.running { background:var(--running); color:var(--running-t); border-color:var(--running-b); }
+  .stat.error, .stat.b0err { background:var(--error); color:var(--error-t); border-color:var(--error-b); }
+  .stat.done { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
+  .stat.queued { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); }
   .stats { display:inline-flex; gap:4px; }
-  .scroll { max-height:520px; overflow:auto; }
+  .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
   .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; }
   .wrap.expanded .scroll { max-height:calc(100vh - 118px); }
   table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; }
   thead th { position:sticky; top:0; z-index:3; background:var(--header); text-align:left;
-    font-weight:600; padding:7px 8px; border-bottom:1px solid var(--border); white-space:nowrap; user-select:none; }
+    font-weight:600; padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap; user-select:none; }
   th.resizable { position:relative; }
   th .grip { position:absolute; right:0; top:0; width:7px; height:100%; cursor:col-resize; }
-  th .grip:hover, th .grip.dragging { background:rgba(23,95,168,.35); }
+  th .grip:hover, th .grip.dragging { background:rgba(105,168,239,.4); }
   tbody td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:middle;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:38px; }
   tbody tr:hover td { background:var(--hover); }
-  tbody tr.queued td { background:#fbf7ff; }
+  tbody tr.queued td { background:#241d3a; }  /* tím nhạt bản #2c2450 của legacy, đủ nhận ra hàng đang xếp */
   th.c, td.c { text-align:center; }
   th.steps, td.steps, th.q, td.q, th.pick, td.pick, th.img, td.img, th.status, td.status { text-align:center; }
   th.id, td.id { font-family:ui-monospace,Consolas,monospace; }
-  a.link { color:var(--running-t); text-decoration:none; }
+  a.link { color:var(--accent); text-decoration:none; }
   a.link:hover { text-decoration:underline; }
-  .src { color:var(--running-t); }
+  .src { color:var(--accent); }
   input.lin { width:calc(100% - 62px); height:22px; font:inherit; font-size:12px; padding:1px 5px;
-    border:1px solid var(--running-t); border-radius:5px; }
+    border:1px solid var(--accent); border-radius:5px; background:var(--field); color:var(--text); }
   button.ln { width:22px; padding:0; height:22px; margin-left:2px; }
-  button.ok { background:var(--done); color:var(--done-t); border-color:rgba(10,127,63,.35); }
-  button.bad { background:var(--missing); color:var(--missing-t); }
+  button.ok { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
+  button.bad { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }
   /* modal result của bước — mở bằng click đúp ô B1/B2/B3 */
-  .overlay { position:fixed; inset:0; z-index:40; background:rgba(20,22,30,.45);
+  .overlay { position:fixed; inset:0; z-index:40; background:rgba(4,8,14,.66);
     display:flex; align-items:flex-start; justify-content:center; padding:20px 12px; }
   .modal { background:var(--bg); border:1px solid var(--border); border-radius:10px; width:min(880px,100%);
-    max-height:calc(100vh - 40px); display:flex; flex-direction:column; box-shadow:0 14px 34px rgba(0,0,0,.28); }
+    max-height:calc(100vh - 40px); display:flex; flex-direction:column; box-shadow:0 14px 34px rgba(0,0,0,.5); }
   .mhead { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
   .mhead .mid { font-family:ui-monospace,Consolas,monospace; font-weight:600; }
   .mtabs { display:flex; gap:4px; flex-wrap:wrap; margin-right:auto; }
-  .mtab { border:1px solid var(--border); background:#fff; border-radius:6px; font:inherit; font-size:12px;
-    height:24px; padding:0 9px; cursor:pointer; color:#555; }
-  .mtab.on { background:var(--running); color:var(--running-t); border-color:rgba(23,95,168,.35); font-weight:600; }
+  .mtab { border:1px solid var(--border); background:var(--field); border-radius:6px; font:inherit; font-size:12px;
+    height:24px; padding:0 9px; cursor:pointer; color:var(--muted); }
+  .mtab.on { background:var(--running); color:var(--running-t); border-color:var(--running-b); font-weight:650; }
   .mtools { display:flex; gap:6px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
   select.prov { height:24px; max-width:240px; font:inherit; font-size:12px; border:1px solid var(--border);
-    border-radius:6px; background:#fff; color:#555; }
-  .mbody { padding:10px 12px; overflow:auto; }
+    border-radius:6px; background:var(--field); color:var(--text); }
+  .mbody { padding:10px 12px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   .mbody pre.doc { margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; line-height:1.55; }
   /* ô sửa caption tay ở tab B0 — giữ bản nháp khi grid vẽ lại */
   .mbody textarea.ta { width:100%; min-height:190px; font:inherit; line-height:1.55; padding:8px 9px;
-    border:1px solid var(--border); border-radius:8px; background:#fff; color:var(--text); resize:vertical; }
-  .mbody textarea.ta:focus { outline:2px solid rgba(23,95,168,.35); border-color:var(--running-t); }
+    border:1px solid var(--border); border-radius:8px; background:var(--field); color:var(--text); resize:vertical; }
+  .mbody textarea.ta:focus { outline:2px solid rgba(105,168,239,.45); border-color:var(--accent); }
   .save { display:flex; gap:6px; align-items:center; margin:0 0 8px; flex-wrap:wrap; }
-  .save input[type=file] { font:inherit; font-size:12px; max-width:270px; }
+  .save input[type=file] { font:inherit; font-size:12px; max-width:270px; color:var(--muted); }
   .save .upnote { color:var(--muted); font-size:12px; }
   .mbody img.photo { max-width:100%; border-radius:8px; border:1px solid var(--border); }
   .mbody .loading, .mbody .none { color:var(--muted); }
   .md p { margin:.45em 0; line-height:1.55; }
   .md h1, .md h2, .md h3, .md h4 { margin:.7em 0 .3em; font-size:15px; }
   .md ul, .md ol { margin:.4em 0 .4em 1.3em; padding:0; }
-  .md code { background:#f2f3f5; border-radius:4px; padding:0 4px; }
-  .mfoot { padding:7px 10px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; background:#fbfbfc; }
+  .md code { background:var(--btn); border-radius:4px; padding:0 4px; }
+  .mfoot { padding:7px 10px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; background:var(--panel); }
   .chip { display:inline-block; min-width:52px; text-align:center; padding:2px 6px; border-radius:999px;
-    font-size:11px; font-weight:600; background:var(--pending); color:var(--pending-t); cursor:default; }
-  .chip.done { background:var(--done); color:var(--done-t); }
-  .chip.running { background:var(--running); color:var(--running-t); }
-  .chip.error, .chip.stale { background:var(--error); color:var(--error-t); }
-  .chip.missing { background:var(--missing); color:var(--missing-t); }
-  .chip.queued { background:var(--queued); color:var(--queued-t); }
-  /* 3 ô vuông B1 B2 B3 trong một cột — màu là trạng thái, chữ là tên bước */
-  button.sq { width:26px; height:22px; padding:0; margin-right:2px; border-radius:5px; border:1px solid transparent;
-    font-size:10px; font-weight:700; background:var(--pending); color:var(--pending-t); cursor:pointer; }
-  button.sq:hover { filter:brightness(.97); }
-  button.sq.done { background:var(--done); color:var(--done-t); }
-  button.sq.running { background:var(--running); color:var(--running-t); }
-  button.sq.error { background:var(--error); color:var(--error-t); }
-  button.sq.missing { background:var(--missing); color:var(--missing-t); }
-  button.sq.queued { background:var(--queued); color:var(--queued-t); }
-  button.sq.stale { background:var(--error); color:var(--error-t); border-style:dashed; }
-  /* ô đang/do luồng nền giữ: chờ tới lượt = tím, đang gọi AI = xanh dương TĨNH.
+    font-size:11px; font-weight:650; background:var(--pending); color:var(--pending-t); cursor:default;
+    border:1px solid var(--pending-b); }
+  .chip.done { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
+  .chip.running { background:var(--running); color:var(--running-t); border-color:var(--running-b); }
+  .chip.error, .chip.stale { background:var(--error); color:var(--error-t); border-color:var(--error-b); }
+  .chip.missing { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }
+  .chip.queued { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); }
+  /* 4 pill trạng thái B0 B1 B2 B3 trong một cột — cùng cỡ .stage-pill của legacy (radius 6, cao 24,
+     chữ 11-12, weight 650, viền cùng tông). Vuông 26x22 chữ 10px trước đây quá nhỏ mà không có viền
+     nên trên nền tối bốn ô gần như tan vào nhau. */
+  button.sq { min-width:32px; height:24px; padding:0 5px; margin-right:3px; border-radius:6px;
+    border:1px solid var(--pending-b); font-size:11px; font-weight:650; background:var(--pending);
+    color:var(--pending-t); cursor:pointer; }
+  button.sq:hover { filter:brightness(1.14); }
+  button.sq.done { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
+  button.sq.running { background:var(--running); color:var(--running-t); border-color:var(--running-b); }
+  button.sq.error { background:var(--error); color:var(--error-t); border-color:var(--error-b); }
+  button.sq.missing { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }
+  button.sq.queued { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); }
+  button.sq.stale { background:var(--error); color:var(--error-t); border-color:var(--error-b); border-style:dashed; }
+  /* ô đang/do luồng nền giữ: chờ tới lượt = tím nét đứt, đang gọi AI = xanh dương TĨNH.
      P8i bỏ nhịp nhấp nháy: legacy FX97 cũng chỉ tô màu, không animation cho trạng thái chạy —
-     vuông sáng-tối 1,15 giây một lần trông đúng như lỗi, mà mỗi lần lưới vẽ lại nó còn nhảy về đầu pha. */
-  button.sq.flow-waiting { background:var(--queued); color:var(--queued-t); border-color:rgba(107,63,160,.5); }
-  button.sq.flow-running { background:var(--running); color:var(--running-t); border-color:var(--running-t); font-weight:800; }
+     ô sáng-tối 1,15 giây một lần trông đúng như lỗi, mà mỗi lần lưới vẽ lại nó còn nhảy về đầu pha. */
+  button.sq.flow-waiting { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); border-style:dashed; }
+  button.sq.flow-running { background:var(--running); color:var(--running-t); border-color:var(--running-b); font-weight:750; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none!important; transition:none!important; } }
-  button.q { width:26px; padding:0; }
-  button.q.on { background:var(--queued); color:var(--queued-t); border-color:rgba(107,63,160,.35); font-weight:700; }
-  .badge { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; background:var(--pending); color:var(--pending-t); }
-  .badge.posted { background:var(--done); color:var(--done-t); }
-  button.b { border:1px solid var(--border); background:#fff; border-radius:6px; cursor:pointer;
-    font:inherit; height:24px; line-height:1; color:#555; padding:2px 6px; }
-  button.b:hover { background:#f2f3f5; }
+  button.q { min-width:28px; padding:0; }
+  button.q.on { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); font-weight:700; }
+  .badge { display:inline-block; padding:2px 7px; border-radius:999px; font-size:11px; font-weight:650;
+    background:var(--pending); color:var(--pending-t); border:1px solid var(--pending-b); }
+  .badge.posted { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
+  button.b { border:1px solid var(--border); background:var(--btn); border-radius:6px; cursor:pointer;
+    font:inherit; height:24px; line-height:1; color:#c7d5e5; padding:2px 6px; }
+  button.b:hover { background:var(--btn-h); }
   button.b:disabled { opacity:.5; cursor:default; }
   button.b[data-sent="1"] { opacity:.45; pointer-events:none; }
   button.play { padding:2px 5px; height:22px; margin-left:4px; }
   button.act { margin-right:2px; }
-  .hint { padding:7px 10px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); background:#fbfbfc; }
+  .hint { padding:7px 10px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); background:var(--panel); }
   .empty { padding:20px; color:var(--muted); }
   .muted { color:var(--muted); }
   /* ô tìm kiếm ngay trên grid — lọc client-side, không gửi event mỗi lần gõ */
   .bar input.find { height:24px; width:210px; font:inherit; font-size:12px; padding:1px 6px;
-    border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--text); }
-  .bar input.find:focus { outline:2px solid rgba(23,95,168,.35); border-color:var(--running-t); }
+    border:1px solid var(--border); border-radius:6px; background:var(--field); color:var(--text); }
+  .bar input.find:focus { outline:2px solid rgba(105,168,239,.45); border-color:var(--accent); }
   /* menu ⋮ của hàng: gắn vào body + position:fixed để không bị khung .scroll cắt mất */
-  .menu { position:fixed; z-index:50; background:var(--bg); border:1px solid var(--border); border-radius:8px;
-    box-shadow:0 8px 22px rgba(0,0,0,.18); padding:4px; display:flex; flex-direction:column; min-width:230px; }
+  .menu { position:fixed; z-index:50; background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    box-shadow:0 8px 22px rgba(0,0,0,.5); padding:4px; display:flex; flex-direction:column; min-width:230px; }
   .menu button { border:0; background:none; text-align:left; font:inherit; font-size:12px; padding:5px 8px;
     border-radius:6px; cursor:pointer; color:var(--text); white-space:nowrap; height:auto; }
-  .menu button:hover { background:var(--hover); }
+  .menu button:hover { background:var(--btn-h); }
   .menu button.danger { color:var(--error-t); }
-  tbody tr.cursor td { background:#fff8e6; box-shadow:inset 0 0 0 1px rgba(168,101,12,.45); }
+  tbody tr.cursor td { background:#1d3450; box-shadow:inset 0 0 0 1px var(--accent); }
 </style>
 </head>
 <body>
@@ -154,7 +164,8 @@ const COLS = [
   { key: "pick", label: "", w: 30, min: 26 },
   { key: "id", label: "story", w: 92, min: 64 },
   { key: "src", label: "nguồn", w: 210, min: 80 },
-  { key: "steps", label: "B0 B1 B2 B3", w: 128, min: 122, align: "c" },
+  // 4 viên pill 32px + kẽ 3px + đệm ô 8+8 = 156px; min chặn để prefs cũ (128) không cắt chữ B3
+  { key: "steps", label: "B0 B1 B2 B3", w: 160, min: 156, align: "c" },
   { key: "img", label: "ảnh", w: 48, min: 40, align: "c" },
   { key: "status", label: "status", w: 66, min: 50, align: "c" },
   { key: "link", label: "Link", w: 220, min: 90 },
@@ -1068,20 +1079,22 @@ const PIN_FLAG = "fbgrid-pin-css";
 // iframe tạo stacking context nên các z-index này so trực tiếp được):
 // 1) ghim iframe kín cửa sổ bằng stylesheet trong head -> sống qua mọi lần iframe bị dựng lại;
 // 2) ẩn sidebar (999991) + tiêu đề (999990);
-// 3) body::after = phông trắng z 1000000, chặn nốt các label ở CỘT CHÍNH ("Grid story", "Kiểu hiển
+// 3) body::after = phông tối z 1000000, chặn nốt các label ở CỘT CHÍNH ("Grid story", "Kiểu hiển
 //    thị", "Provider B1"…) — tụi nó vẫn visible ngay dưới lưới nên chỉ cần một thoáng lưới chưa
 //    kịp phủ (lúc mới dựng, lúc đổi kích thước) là chúng nhấp nháy lên. Lưới z 2147483000 vẫn nằm
 //    trên phông; portal (toast/dialog, 1000110) cũng trên phông; phông pointer-events:none nên bấm
 //    vào lưới không bị chặn.
 // visibility chứ không display: layout của Streamlit khỏi nhảy theo khi thu/mở.
+// P8ii: phông và nền iframe dùng đúng #101821 của lưới — nền tối mà lót trắng thì khoảng trống
+// giữa hai lần vẽ lại loé trắng, còn tệ hơn chữ trang cha.
 const PIN_CSS = 'html[data-fbgrid="expanded"] iframe[src*="' + COMPONENT_MARK + '"]{'
   + "position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;"
   + "max-height:none!important;min-height:0!important;z-index:2147483000!important;"
-  + "border:0!important;border-radius:0!important;background:#fff!important;}"
+  + "border:0!important;border-radius:0!important;background:#101821!important;}"
   + 'html[data-fbgrid="expanded"] body{overflow:hidden!important;}'
   + 'html[data-fbgrid="expanded"] [data-testid="stSidebar"],'
   + 'html[data-fbgrid="expanded"] [data-testid="stHeader"]{visibility:hidden!important;}'
-  + 'html[data-fbgrid="expanded"] body::after{content:"";position:fixed;inset:0;background:#fff;'
+  + 'html[data-fbgrid="expanded"] body::after{content:"";position:fixed;inset:0;background:#101821;'
   + 'z-index:1000000;pointer-events:none;}';
 
 function pinFrame() {

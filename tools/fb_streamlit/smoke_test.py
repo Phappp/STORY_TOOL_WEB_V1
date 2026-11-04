@@ -1713,7 +1713,7 @@ pin_p7d = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").rea
 check("P7d stylesheet ghim lưới khi mở rộng có ẩn sidebar + tiêu đề trang",
       'data-testid="stSidebar"' in pin_p7d and 'data-testid="stHeader"' in pin_p7d
       and "visibility:hidden" in pin_p7d and "2147483000" in pin_p7d)
-check("P7e có phông trắng chặn label cột chính khi mở rộng, lưới vẫn cao hơn phông",
+check("P7e có phông tối chặn label cột chính khi mở rộng, lưới vẫn cao hơn phông",
       "body::after" in pin_p7d and "z-index:1000000" in pin_p7d and "pointer-events:none" in pin_p7d
       and "2147483000" in pin_p7d)
 
@@ -1728,6 +1728,21 @@ check("P8i không còn animation cho ô đang chạy + có dead-band 4px cho chi
       and "Math.abs(h - LAST_H) < 4" in js_p8i)
 check("P8i bỏ qua ô đang nhận con trỏ gõ khi vá, nhưng vẫn giữ đường thoát blur cho ô Link",
       "old.contains(document.activeElement)" in js_p8i and "function leave() { if (document.activeElement === input) input.blur(); }" in js_p8i)
+
+# P8ii: lưới mặc theo phong cách grid status legacy FX97 — nền tối, mỗi trạng thái có viền riêng,
+# ô bước là pill 32x24. Cột steps phải đủ rộng cho 4 pill (32*4 + kẽ 3*4 + đệm ô 16 = 156px),
+# min chặn không cho kéo nhỏ hơn vì prefs cũ (128px) sẽ cắt chữ B3.
+check("P8ii :root là bảng tối legacy, không còn token sáng",
+      "--bg:#101821" in js_p8i and "--header:#1b2838" in js_p8i and "--border:#2d3b4f" in js_p8i
+      and "#fff" not in js_p8i and "#fbfbfc" not in js_p8i and "#f2f3f5" not in js_p8i)
+check("P8ii mỗi trạng thái có viền --x-b và ô bước là pill cùng cỡ legacy",
+      "--running-b:#3679b9" in js_p8i and "--done-b:#236d58" in js_p8i
+      and "border:1px solid var(--pending-b)" in js_p8i
+      and "button.sq { min-width:32px; height:24px" in js_p8i and "border-radius:6px" in js_p8i)
+check("P8ii cột steps đủ chỗ cho 4 pill, prefs cũ không cắt chữ",
+      'key: "steps"' in js_p8i and "w: 160, min: 156" in js_p8i)
+check("P8ii phông lót khi mở rộng cũng tối — lưới tối mà lót trắng thì loé trắng giữa hai lần vẽ",
+      js_p8i.count("background:#101821") == 2)
 
 # cleanup test rows
 c = db.connect()
