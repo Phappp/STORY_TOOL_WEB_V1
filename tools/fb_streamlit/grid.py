@@ -5,6 +5,7 @@ nên state hiển thị luôn đọc lại từ folder story (không có bản s
 """
 
 from datetime import datetime
+from hashlib import sha1
 from pathlib import Path
 
 import streamlit as st
@@ -23,8 +24,14 @@ REFRESH_KEY = "grid_refresh"
 REFRESH_SECONDS = 5
 PROV_DEFAULT_LABEL = "Theo preset"
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
+CSV_KEY = "grid_import_file"
+CSV_DONE_KEY = "grid_import_done"  # dấu vân tay file vừa import — chặn bấm đôi tạo nhầm gấp đôi bài
+IMPORT_TYPES = ["csv", "txt", "xlsx", "xls", "xlsm"]
+SKIPPED_SHOWN = 5
 
-STEP_LABELS = {"b1": "▶ B1", "b2": "▶ B2", "b3": "▶ B3"}
+GRID_STEPS = ("b0", "b1", "b2", "b3")
+
+STEP_LABELS = {"b0": "▶ B0", "b1": "▶ B1", "b2": "▶ B2", "b3": "▶ B3"}
 STATE_LABELS = {stories.PENDING: "chưa chạy", ga.QUEUED: "đợi", stories.DONE: "xong", stories.RUNNING: "đang chạy",
                 stories.ERROR: "lỗi", stories.MISSING: "mất file", ga.STALE: "treo"}
 # Bảng nút (native) không tô màu được từng ô như component, nên dùng ký hiệu + chú giải.
@@ -104,6 +111,8 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
         summary = stories.story_summary(ctx.root, sid)
         story = stories.load_story(ctx.root, sid)
         states = ga.display_states(ctx.root, sid)
+        detail = dict(summary["detail"])
+        detail["b0"] = str((story.get("b0") or {}).get("detail") or "")
         out.append({
             "id": sid,
             "topic": summary["topic"],
@@ -112,8 +121,10 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "source": str(story.get("source") or ""),
             "has_input": summary["has_input"],
             "image": summary["image"],
-            "detail": summary["detail"],
+            "detail": detail,
             "states": states,
+            "b0": ga.b0_state(ctx.root, sid),  # B0 có state riêng, không nằm trong states/bucket
+            "b0meta": ga.b0_meta(story),
             "bucket": ga.bucket(states),
             "queued": bool(story.get("queued")),
             "queued_at": float(story.get("queued_at") or 0),
@@ -136,10 +147,14 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     return out
 
 
+def _push(lines: list[str]) -> None:
+    st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + [line for line in lines if line])[-LOG_LIMIT:]
+
+
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
-    st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + lines)[-LOG_LIMIT:]
-    if str(event.get("source") or "") in ("copy_request", "content_request", "image_request"):
+    _push(out.lines)
+    if str(event.get("source") or "") in ("copy_request", "content_request", "image_request", "b0_request"):
         # prop copy_response chỉ đi kèm 1 lần render -> giữ lại để JS làm đúng 1 lần theo request_id
         st.session_state["grid_copy_response"] = out.copy or {
             "id": str(event.get("id") or ""), "field": str(event.get("field") or "Ảnh"),
@@ -166,6 +181,70 @@ def run_batch(ctx: ga.Ctx, event: dict) -> ga.Outcome:
         status.update(label=f"Batch xong: {len(out.touched)}/{total} bài", state="complete", expanded=False)
     _collect(out, event)
     return out
+
+
+def run_b0_import(ctx: ga.Ctx, ids: list[str]) -> None:
+    """Trích B0 cho cả danh sách: mỗi lượt tối đa ga.MAX_BATCH bài, tự chạy tiếp tới khi hết."""
+    total = len(ids)
+    if not total:
+        return
+    done, lines = 0, []
+    with st.status(f"Trích B0 cho {total} bài (mỗi lượt {ga.MAX_BATCH} bài, tự chạy tiếp tới khi hết)", expanded=True) as status:
+        bar = st.progress(0.0, text=f"0/{total} bài")
+
+        def tick(sid: str, i: int, n: int) -> None:
+            bar.progress((done + i) / total, text=f"{done + i}/{total} bài · {sid}")
+
+        while done < total:
+            chunk = ids[done:done + ga.MAX_BATCH]
+            out = ga.apply_event(ctx, {"source": "b0_batch", "ids": chunk}, on_batch=tick)
+            lines += out.lines
+            done += len(chunk)
+        status.update(label=f"B0 xong: {done}/{total} bài", state="complete", expanded=False)
+    _push(lines)
+
+
+def import_form(ctx: ga.Ctx) -> None:
+    """Import link FB từ cột A của file: mỗi link một bài mới (cột Nguồn = link) rồi trích B0 cả loạt."""
+    with st.expander("📥 Import link từ CSV / TXT / XLSX — mỗi dòng cột A thêm một bài", expanded=False):
+        file = st.file_uploader(
+            "File chứa link bài viết/reel Facebook ở cột A", key=CSV_KEY, type=IMPORT_TYPES,
+            help=("Một dòng một link, không cần dòng tiêu đề (có cũng được — dòng 'link/url/nguồn…' tự bỏ). "
+                  f"Một lần import tạo tối đa {ga.MAX_IMPORT} bài; link trùng tự bỏ."))
+        todo = ga.b0_todo_ids(ctx)
+        if todo and st.button(f"▶ Trích B0 cho {len(todo)} bài chưa xong (cả workspace)", key="grid_b0_retry",
+                              help=f"{len(todo)} bài có link nguồn mà B0 chưa ra caption — trích lại cả loạt, {ga.MAX_BATCH} bài/lượt, tự chạy tiếp tới khi hết"):
+            run_b0_import(ctx, todo)
+        if file is None:
+            st.caption("Chưa chọn file. Ảnh và caption chỉ lấy được từ bài công khai — bài trong group riêng tư sẽ báo lỗi ở cột B0.")
+            return
+        raw = file.getvalue()
+        try:
+            values = ga.column_a(raw, file.name)
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        urls, skipped = ga.pick_links(values)
+        kept = urls[:ga.MAX_IMPORT]
+        st.write(f"**Nhận {len(kept)} link FB** · cột A có {len(values)} dòng · bỏ {len(skipped)} dòng"
+                 + (f" · {len(urls) - len(kept)} link cuối chưa import (giới hạn {ga.MAX_IMPORT}/lần)" if len(urls) > len(kept) else ""))
+        for line in skipped[:SKIPPED_SHOWN]:
+            st.caption("· " + line)
+        if len(skipped) > SKIPPED_SHOWN:
+            st.caption(f"· … còn {len(skipped) - SKIPPED_SHOWN} dòng bị bỏ nữa")
+        digest = sha1(raw).hexdigest()
+        again = st.session_state.get(CSV_DONE_KEY) == digest
+        if st.button(("✓ Đã tạo " if again else "➕ Tạo ") + f"{len(kept)} bài mới + trích B0",
+                     key="grid_import_go", disabled=not kept or again,
+                     help=("Tạo folder story cho từng link rồi trích caption + ảnh tham chiếu (B0) ngay, "
+                           f"{ga.MAX_BATCH} bài/lượt và tự chạy tiếp tới khi hết"
+                           if kept and not again else
+                           ("File này vừa import xong — bấm ✕ ở ô chọn file rồi chọn lại để import lần nữa." if again
+                            else "Không có link Facebook hợp lệ nào ở cột A."))):
+            ids, lines = ga.import_links(ctx, urls)
+            st.session_state[CSV_DONE_KEY] = digest
+            _push(lines)
+            run_b0_import(ctx, ids)
 
 
 def consume_event(ctx: ga.Ctx):
@@ -209,7 +288,13 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
 def row_label(row: dict) -> str:
     s = row["states"]
     return (f"{row['id']} · {(row['topic'] or '(chưa đặt chủ đề)')[:40]} · "
+            f"B0 {STATE_LABELS.get(row['b0'], row['b0'])} · "
             f"B1 {STATE_LABELS.get(s['b1'], s['b1'])} · B2 {STATE_LABELS.get(s['b2'], s['b2'])} · B3 {STATE_LABELS.get(s['b3'], s['b3'])}")
+
+
+def state_of(row: dict, step: str) -> str:
+    """B0 có state riêng (row['b0']) vì nó không phải bước AI nên không nằm trong row['states']."""
+    return str(row["b0"] if step == "b0" else row["states"][step])
 
 
 def _short_link(link: str) -> str:
@@ -219,7 +304,8 @@ def _short_link(link: str) -> str:
 def summary_line(all_rows: list[dict]) -> str:
     c = ga.count_buckets(all_rows)
     return (f"Tổng {c['total']} bài · hàng đợi {c['queued']} · chờ {c['waiting']} · "
-            f"đang chạy {c['running']} · lỗi {c['error']} · xong {c['done']}")
+            f"đang chạy {c['running']} · lỗi {c['error']} · xong {c['done']}"
+            + (f" · B0 lỗi {c['b0_error']}" if c["b0_error"] else ""))
 
 
 def link_editor(ctx: ga.Ctx, sid: str, current: str) -> None:
@@ -250,7 +336,7 @@ def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = N
         return
     st.dataframe(
         [{"#": r["queue_pos"] or "", "story": r["id"], "nguồn": _short_link(r["source"]) or "—",
-          "B1 B2 B3": " ".join(f"{step.upper()} {STATE_GLYPH.get(r['states'][step], '?')}" for step in ("b1", "b2", "b3")),
+          "B0 B1 B2 B3": " ".join(f"{step.upper()} {STATE_GLYPH.get(state_of(r, step), '?')}" for step in GRID_STEPS),
           "ảnh": "có" if r["image"] else "—", "status": r["status"],
           "Link": _short_link(r["link"]) or "—"}
          for r in rows],
@@ -261,21 +347,21 @@ def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = N
     labels = {r["id"]: row_label(r) for r in rows}
     by_id = {r["id"]: r for r in rows}
     sid = st.selectbox("Bài để thao tác", ids, format_func=lambda i: labels[i], key="native_pick")
-    cols = st.columns(7)
-    for col, step in zip(cols[:3], ("b1", "b2", "b3"), strict=True):
+    cols = st.columns(8)
+    for col, step in zip(cols[:4], GRID_STEPS, strict=True):
         if col.button(STEP_LABELS[step], key=f"native_run_{step}"):
-            _after(ctx, {"source": "run_step", "id": sid, "step": step})
+            _after(ctx, {"source": "b0_run" if step == "b0" else "run_step", "id": sid, "step": step})
             st.rerun()
-    if cols[3].button("⚡ Chạy đủ", key="native_all"):
+    if cols[4].button("⚡ Chạy đủ", key="native_all"):
         _after(ctx, {"source": "run_all", "id": sid})
         st.rerun()
-    if cols[4].button("✎ Mở ở Tạo bài", key="native_open"):
+    if cols[5].button("✎ Mở ở Tạo bài", key="native_open"):
         _after(ctx, {"source": "open", "id": sid})
         st.rerun()
-    if cols[5].button("✅ Đã đăng", key="native_posted"):
+    if cols[6].button("✅ Đã đăng", key="native_posted"):
         _after(ctx, {"source": "mark_posted", "id": sid})
         st.rerun()
-    if cols[6].button("🗑 Vào .trash", key="native_archive", help="Kéo folder ngược ra ngoài .trash là khôi phục"):
+    if cols[7].button("🗑 Vào .trash", key="native_archive", help="Kéo folder ngược ra ngoài .trash là khôi phục"):
         _after(ctx, {"source": "archive", "id": sid})
         st.rerun()
 
@@ -359,6 +445,7 @@ def render(ctx: ga.Ctx) -> None:
         st.selectbox("Lọc bài", list(ga.FILTERS), key="grid_filter",
                      help="Bài lỗi lên đầu, rồi chờ chạy, đang chạy, xong. Bài đã vào hàng đợi luôn ở trên cùng.")
     provider_bar(ctx)
+    import_form(ctx)
     if auto:
         st.fragment(_body, run_every=REFRESH_SECONDS)(ctx)
     else:

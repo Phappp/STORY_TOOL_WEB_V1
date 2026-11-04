@@ -5,6 +5,8 @@ là thấy đúng những gì đã xảy ra.
 """
 
 import base64
+import csv
+import io
 import json
 import mimetypes
 import time
@@ -12,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import db
+import fb_import
 import formats
 import prompts
 import providers as prov
@@ -19,16 +22,19 @@ import steps
 import stories
 
 MAX_BATCH = 5
+MAX_IMPORT = 200  # một lần import tạo tối đa bấy nhiêu bài — file dài thì chia nhiều lần, tránh tạo nhầm cả nghìn folder
 STALE_SECONDS = 15 * 60
 IMAGE_INLINE_MAX = 2 * 1024 * 1024
 STALE = "stale"
 QUEUED = "queued"
 PREFS_FILE = ".fbtool-grid-prefs.json"
 PROV_NONE = ""  # để trống nghĩa là bài này không chọn riêng, theo workspace/preset
+B0_PREVIEW_FIELD = "B0 preview"
 
 COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link", "Bài SEO (Facebook)")
 STEP_NAMES = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
 ALL_STEPS = ("b1", "b2", "b3")
+HEADER_WORDS = ("link", "url", "source", "nguồn", "fb", "bài")
 
 BUCKET_LABEL = {"error": "Lỗi", "waiting": "Chờ chạy", "running": "Đang chạy", "done": "Xong"}
 BUCKET_ORDER = {"error": 0, "waiting": 1, "running": 2, "done": 3}
@@ -131,6 +137,26 @@ def display_states(root: Path, sid: str, now: float | None = None) -> dict:
     return {step: (QUEUED if state == stories.PENDING else state) for step, state in states.items()}
 
 
+def b0_state(root: Path, sid: str, now: float | None = None) -> str:
+    """B0 có state riêng trong story.json — không đi qua step_states vì nó không phải bước AI."""
+    block = stories.load_story(root, sid).get("b0") or {}
+    state = str(block.get("state") or stories.PENDING)
+    if state == stories.RUNNING and (now if now is not None else time.time()) - float(block.get("updated_at") or 0) > STALE_SECONDS:
+        return STALE
+    if state == stories.DONE and not stories.input_text(root, sid).strip():
+        return stories.MISSING
+    return state
+
+
+def b0_meta(story: dict) -> str:
+    """Tóm tắt lần trích B0 gần nhất cho tooltip + modal — rỗng khi B0 chưa chạy."""
+    block = story.get("b0") or {}
+    parts = [str(block.get("method") or ""), str(block.get("stats") or ""),
+             f"{block['words']} chữ" if block.get("words") else "",
+             f"{block['refs']} ảnh tham chiếu" if block.get("refs") else "", str(block.get("note") or "")]
+    return " · ".join(part for part in parts if part)
+
+
 def bucket(states: dict) -> str:
     """Nhóm việc của cả bài — 'treo' tính luôn vào 'lỗi' vì tiến trình đã chết giữa chừng."""
     values = list(states.values())
@@ -172,12 +198,17 @@ def filter_rows(rows: list[dict], choice: str) -> list[dict]:
 
 
 def count_buckets(rows: list[dict]) -> dict:
-    """Đếm theo nhóm việc cho thanh tổng kết — 'queued' không phải nhóm nên không bị tính hai lần."""
-    counts = {"total": len(rows), "queued": 0, "waiting": 0, "running": 0, "error": 0, "done": 0}
+    """Đếm theo nhóm việc cho thanh tổng kết — 'queued' không phải nhóm nên không bị tính hai lần.
+
+    B0 đếm riêng (b0_error) vì lỗi trích link không phải việc của hàng đợi B1-B3.
+    """
+    counts = {"total": len(rows), "queued": 0, "waiting": 0, "running": 0, "error": 0, "done": 0, "b0_error": 0}
     for row in rows:
         counts[row.get("bucket") or "waiting"] = counts.get(row.get("bucket") or "waiting", 0) + 1
         if row.get("queued"):
             counts["queued"] += 1
+        if str(row.get("b0") or "") in (stories.ERROR, STALE, stories.MISSING):
+            counts["b0_error"] += 1
     return counts
 
 
@@ -201,6 +232,70 @@ def buckets_for(ctx: Ctx) -> list[dict]:
     for sid in stories.list_story_ids(ctx.root):
         story = stories.load_story(ctx.root, sid)
         out.append({"id": sid, "bucket": bucket(display_states(ctx.root, sid)), "queued": bool(story.get("queued"))})
+    return out
+
+
+def column_a(raw: bytes, name: str) -> list[str]:
+    """Cột A của file import: xlsx đọc bằng pandas (chỉ khi cần), csv/txt đọc theo dấu phẩy."""
+    suffix = Path(str(name or "")).suffix.lower()
+    if suffix in (".xlsx", ".xlsm", ".xls"):
+        import pandas as pd  # nặng, chỉ nạp khi thật sự có file Excel
+
+        try:
+            frame = pd.read_excel(io.BytesIO(raw), header=None, dtype=str, usecols=[0])
+        except Exception as exc:
+            raise ValueError(f"Không đọc được sheet của “{name}”: {str(exc)[:160]}") from exc
+        return [str(v) for v in frame.iloc[:, 0].tolist()]
+    text = (raw or b"").decode("utf-8-sig", errors="replace")
+    return [row[0] for row in csv.reader(io.StringIO(text)) if row and row[0].strip()]
+
+
+def pick_links(values) -> tuple[list[str], list[str]]:
+    """Cột A -> link FB (chuẩn hóa + bỏ trùng); phần bị bỏ trả kèm lý do để báo đúng, không âm thầm."""
+    urls, skipped, seen = [], [], set()
+    for raw in values:
+        head = str(raw or "").strip()
+        if head.replace(".", "").lower() in HEADER_WORDS:  # dòng ghi "link"/"url"/"nguồn"… trong Excel
+            skipped.append(f"bỏ dòng tiêu đề “{head[:60]}”")
+            continue
+        value = clean_url(head)
+        if not value:
+            continue
+        if not fb_import.is_fb_url(value):
+            skipped.append(f"bỏ dòng không phải link FB: {value[:60]}")
+            continue
+        if value in seen:
+            skipped.append(f"bỏ link trùng: {value[:60]}")
+            continue
+        seen.add(value)
+        urls.append(value)
+    return urls, skipped
+
+
+def import_links(ctx: Ctx, urls: list[str]) -> tuple[list[str], list[str]]:
+    """Mỗi link -> một story folder mới (Nguồn = link, B0 pending) — chưa gọi mạng ở đây."""
+    ids = []
+    for url in urls[:MAX_IMPORT]:
+        story = stories.create_story(ctx.root, topic="")
+        stories.update_story(ctx.root, story["id"], source=url,
+                             b0={"state": stories.PENDING, "url": url, "refs": 0})
+        ids.append(story["id"])
+    lines = [f"Đã tạo {len(ids)} bài mới (cột Nguồn = link), B0 chưa trích." if ids
+             else "Không có link Facebook hợp lệ nào trong file."]
+    if len(urls) > MAX_IMPORT:
+        lines.append(f"Một lần import nhận tối đa {MAX_IMPORT} link — {len(urls) - MAX_IMPORT} link cuối bị bỏ.")
+    return ids, lines
+
+
+def b0_todo_ids(ctx: Ctx) -> list[str]:
+    """Bài có link nguồn mà B0 chưa xong — để trích lại cả loạt mà không phải import lại file."""
+    out = []
+    for sid in stories.list_story_ids(ctx.root):
+        story = stories.load_story(ctx.root, sid)
+        if not clean_url(story.get("source") or (story.get("b0") or {}).get("url")):
+            continue
+        if b0_state(ctx.root, sid) != stories.DONE:
+            out.append(sid)
     return out
 
 
@@ -260,6 +355,21 @@ def _run_all(ctx: Ctx, sid: str) -> list[str]:
     return res.lines
 
 
+def _run_b0(ctx: Ctx, sid: str) -> list[str]:
+    """B0 cho một bài: cột Nguồn (hoặc b0.url) -> caption vào input.txt + ảnh vào refs/."""
+    try:
+        story = stories.load_story(ctx.root, sid)
+    except stories.WorkspaceError as exc:
+        return [f"{sid}: {exc}"]
+    url = clean_url(story.get("source")) or clean_url((story.get("b0") or {}).get("url"))
+    if not url:
+        return [f"{sid}: B0 chưa chạy — bài này chưa có link nguồn (cột Nguồn trống)."]
+    if not fb_import.is_fb_url(url):
+        return [f"{sid}: nguồn không phải link Facebook ({url[:60]}) — sửa cột Nguồn rồi trích lại."]
+    _data, line = steps.run_b0(ctx.root, sid, url)
+    return [f"{sid} · {line}"]
+
+
 def _copy_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
     text = ""
     if field_name == "Caption":
@@ -291,6 +401,27 @@ def image_payload(ctx: Ctx, sid: str, request_id: str):
             "text": "", "bytes": size}, ""
 
 
+def b0_payload(ctx: Ctx, sid: str, request_id: str):
+    """Modal B0 cần thấy caption lẫn ảnh trong một response — hai request gửi liền sẽ bị latch event nuốt một.
+
+    Trả (payload, note): payload mang text + image + số ảnh; note (nếu có) là lý do không nhúng được ảnh.
+    """
+    text = stories.input_text(ctx.root, sid)
+    refs = stories.refs_of(ctx.root, sid)
+    if not text.strip() and not refs:
+        return None, f"{sid}: B0 chưa trích được gì từ link — mở modal bấm “▶ Trích lại B0”."
+    image, note = "", ""
+    if refs:
+        size = refs[0].stat().st_size
+        if size > IMAGE_INLINE_MAX:
+            note = f"{sid}: ảnh tham chiếu {size // 1024} KB lớn quá ({IMAGE_INLINE_MAX // 1024} KB giới hạn nhúng) — xem ở trang Tạo bài."
+        else:
+            mime = mimetypes.guess_type(refs[0].name)[0] or "image/png"
+            image = f"data:{mime};base64," + base64.b64encode(refs[0].read_bytes()).decode("ascii")
+    return {"id": sid, "field": B0_PREVIEW_FIELD, "request_id": request_id, "text": text,
+            "image": image, "refs": len(refs)}, note
+
+
 def batch_ids(raw) -> tuple[list[str], str]:
     """Chính sách batch dùng chung: tối đa MAX_BATCH bài/lần, phần còn lại nói rõ chứ không âm thầm bỏ."""
     all_ids = [str(i) for i in raw if str(i)] if isinstance(raw, (list, tuple)) else []
@@ -315,12 +446,15 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             out.lines, out.touched = _run_step(ctx, sid, step), [sid]
         elif source == "run_all":
             out.lines, out.touched = _run_all(ctx, sid), [sid]
-        elif source == "batch_run":
+        elif source == "b0_run":
+            out.lines, out.touched = _run_b0(ctx, sid), [sid]
+        elif source in ("batch_run", "b0_batch"):
+            run = _run_all if source == "batch_run" else _run_b0
             ids, note = batch_ids(event.get("ids"))
             if note:
                 out.lines.append(note)
             for i, bid in enumerate(ids, start=1):
-                out.lines += _run_all(ctx, bid)
+                out.lines += run(ctx, bid)
                 out.touched.append(bid)
                 if on_batch is not None:
                     on_batch(bid, i, len(ids))
@@ -329,6 +463,11 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             if payload is not None:
                 payload["mode"] = "show" if source == "content_request" else "copy"
             out.copy, out.lines = payload, ([why] if why else [])
+        elif source == "b0_request":
+            payload, note = b0_payload(ctx, sid, str(event.get("request_id") or ""))
+            if payload is not None:
+                payload["mode"] = "show"  # preview của B0 chỉ để xem, copy thì đi đường copy_request
+            out.copy, out.lines = payload, ([note] if note else [])
         elif source == "image_request":
             payload, why = image_payload(ctx, sid, str(event.get("request_id") or ""))
             if payload is not None:

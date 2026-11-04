@@ -603,6 +603,122 @@ check("set_pref_provider rỗng xóa bỏ mặc định của bước",
       ga.pref_providers(ga_root) == {} and bool(ga.save_prefs(ga_root, {"auto_refresh": True})) is False)
 (ga_root / ga.PREFS_FILE).write_text("không phải json", encoding="utf-8")
 
+# --- P4d: import cột A link FB -> tạo bài + B0 trích caption/ảnh tham chiếu ---
+real_extract = fb_import.extract
+b0_calls = []
+
+
+def fake_extract(url):
+    b0_calls.append(url)
+    if "loai" in url:
+        raise RuntimeError("bài trong group cần đăng nhập")
+    return {"caption": f"Caption của {url}", "images": [{"url": "https://scontent.example/1.jpg", "thumb": "", "alt": "", "source": "og"}],
+            "method": "og-tags", "title": "Tiêu đề og", "stats": "163K lượt xem", "note": ""}
+
+
+fb_import.extract = fake_extract
+csv_bytes = "link\nhttps://fb.watch/reel-one\n\nhttps://www.facebook.com/r/reel-two\nfb.watch/reel-one\nhttps://youtube.com/watch?v=x\n".encode("utf-8")
+col_a = ga.column_a(csv_bytes, "links.csv")
+check("column_a đọc csv: giữ dòng có chữ, bỏ dòng rỗng", len(col_a) == 5)
+urls_p4d, skipped_p4d = ga.pick_links(col_a)
+check("pick_links chuẩn hóa link và báo đủ lý do cho từng dòng bị bỏ",
+      urls_p4d == ["https://fb.watch/reel-one", "https://www.facebook.com/r/reel-two"]
+      and len(skipped_p4d) == 3 and any("dòng tiêu đề" in s for s in skipped_p4d)
+      and any("link trùng" in s for s in skipped_p4d) and any("không phải link FB" in s for s in skipped_p4d))
+ids_p4d, imp_lines = ga.import_links(gctx, urls_p4d)
+check("import_links tạo một story cho mỗi link, cột Nguồn = link, B0 pending",
+      len(ids_p4d) == 2 and all(stories.load_story(ga_root, s)["source"] == u for s, u in zip(ids_p4d, urls_p4d, strict=True))
+      and all(ga.b0_state(ga_root, s) == stories.PENDING for s in ids_p4d)
+      and imp_lines[0].startswith("Đã tạo 2 bài mới"))
+old_limit = ga.MAX_IMPORT
+ga.MAX_IMPORT = 1
+capped_ids, cap_lines = ga.import_links(gctx, urls_p4d)
+ga.MAX_IMPORT = old_limit
+check("vượt MAX_IMPORT -> nói rõ bao nhiêu link bị bỏ, không âm thầm",
+      len(capped_ids) == 1 and any("tối đa 1 link" in line and "1 link cuối bị bỏ" in line for line in cap_lines))
+ga.apply_event(gctx, {"source": "archive", "id": capped_ids[0]})
+
+out = ga.apply_event(gctx, {"source": "b0_run", "id": ids_p4d[0]})
+story_b0 = stories.load_story(ga_root, ids_p4d[0])
+check("b0_run: caption vào input.txt, ảnh vào refs/, state done",
+      "B0: OK" in out.lines[0] and b0_calls[-1] == urls_p4d[0]
+      and (ga_root / ids_p4d[0] / "input.txt").read_text(encoding="utf-8").startswith("Caption của https://fb.watch/reel-one")
+      and story_b0["b0"]["state"] == stories.DONE and story_b0["b0"]["refs"] == 1
+      and (ga_root / ids_p4d[0] / "refs" / "ref_1.jpg").is_file())
+check("B0 không phải bước AI nên không đổi bucket của hàng đợi",
+      ga.bucket(ga.display_states(ga_root, ids_p4d[0])) == "waiting")
+out = ga.apply_event(gctx, {"source": "b0_request", "id": ids_p4d[0], "field": "B0 preview", "request_id": "req-b0"})
+check("modal B0 xin 1 lần là thấy cả caption lẫn ảnh tham chiếu (latch component chỉ nhận 1 event/lượt)",
+      out.copy is not None and out.copy["field"] == "B0 preview" and out.copy["mode"] == "show"
+      and "Caption của" in out.copy["text"] and out.copy["refs"] == 1
+      and out.copy["image"].startswith("data:image/jpeg;base64,"))
+out = ga.apply_event(gctx, {"source": "copy_request", "id": ids_p4d[0], "field": "Input", "request_id": "req-b0cap"})
+check("nút Copy ở tab B0 lấy đúng chữ trong input.txt (đường copy riêng, không dùng payload preview)",
+      out.copy is not None and out.copy["mode"] == "copy" and "Caption của" in out.copy["text"])
+(ga_root / ids_p4d[0] / "input.txt").write_text("chữ tôi sửa tay", encoding="utf-8")
+out = ga.apply_event(gctx, {"source": "b0_run", "id": ids_p4d[0]})
+check("B0 không đè input.txt đã sửa tay", "sửa tay" in out.lines[0]
+      and (ga_root / ids_p4d[0] / "input.txt").read_text(encoding="utf-8") == "chữ tôi sửa tay")
+(ga_root / ids_p4d[0] / "input.txt").write_text("Caption của https://fb.watch/reel-one", encoding="utf-8")
+
+sid_b0err = stories.create_story(ga_root, "Bài lỗi B0")["id"]
+stories.update_story(ga_root, sid_b0err, source="https://fb.watch/loai-1")
+out = ga.apply_event(gctx, {"source": "b0_run", "id": sid_b0err})
+check("B0 lỗi -> state error + detail để grid báo nguyên nhân",
+      "B0 LỖI" in out.lines[0] and ga.b0_state(ga_root, sid_b0err) == stories.ERROR
+      and stories.load_story(ga_root, sid_b0err)["b0"]["detail"].startswith("bài trong group"))
+out = ga.apply_event(gctx, {"source": "b0_request", "id": sid_b0err, "request_id": "req-b0err"})
+check("B0 chưa trích được gì -> modal nhận câu giải thích, không phải payload rỗng",
+      out.copy is None and any("chưa trích được gì" in line for line in out.lines))
+rows_p4d = fbgrid.rows_for(gctx)
+r_err = next(r for r in rows_p4d if r["id"] == sid_b0err)
+r_done = next(r for r in rows_p4d if r["id"] == ids_p4d[0])
+check("rows_for mang state B0 + metadata cho tooltip và thanh tổng kết",
+      r_err["b0"] == "error" and r_done["b0"] == "done"
+      and "og-tags" in r_done["b0meta"] and "1 ảnh tham chiếu" in r_done["b0meta"])
+check("lỗi B0 đếm riêng, bài lỗi B0 không bị tính vào 'lỗi' của hàng đợi B1-B3",
+      r_err["bucket"] == "waiting" and ga.count_buckets(rows_p4d)["b0_error"] >= 1)
+calls_before = len(b0_calls)
+out = ga.apply_event(gctx, {"source": "b0_run", "id": sid_ok})
+check("b0_run bài không có link nguồn -> báo rõ, không gọi extract",
+      "chưa có link nguồn" in out.lines[0] and len(b0_calls) == calls_before)
+sid_b0bad = stories.create_story(ga_root, "Nguồn lạ", input_text="chữ sẵn")["id"]
+stories.update_story(ga_root, sid_b0bad, source="https://youtube.com/watch?v=y")
+out = ga.apply_event(gctx, {"source": "b0_run", "id": sid_b0bad})
+check("nguồn không phải link FB -> từ chối trước khi gọi mạng",
+      "không phải link Facebook" in out.lines[0] and len(b0_calls) == calls_before)
+out = ga.apply_event(gctx, {"source": "b0_run", "id": "story_777"})
+check("b0_run story không tồn tại -> dòng lỗi, không crash", bool(out.lines) and "story_777" in out.lines[0])
+
+out = ga.apply_event(gctx, {"source": "b0_run", "id": ids_p4d[1]})
+check("b0_run bài thứ hai trích OK", "B0: OK" in out.lines[0] and ga.b0_state(ga_root, ids_p4d[1]) == stories.DONE)
+hanging = stories.load_story(ga_root, ids_p4d[1])
+hanging["b0"].update({"state": stories.RUNNING, "updated_at": time.time() - ga.STALE_SECONDS - 5})
+stories.save_story(ga_root, ids_p4d[1], hanging)
+check("B0 running treo > 15 phút hiện stale", ga.b0_state(ga_root, ids_p4d[1]) == ga.STALE)
+sid_b0miss = stories.create_story(ga_root, "B0 mất input")["id"]
+stories.update_story(ga_root, sid_b0miss, source="https://fb.watch/reel-m")
+ga.apply_event(gctx, {"source": "b0_run", "id": sid_b0miss})
+(ga_root / sid_b0miss / "input.txt").unlink()
+check("B0 done mà input.txt bị xóa -> missing", ga.b0_state(ga_root, sid_b0miss) == stories.MISSING)
+
+todo_p4d = ga.b0_todo_ids(gctx)
+check("b0_todo_ids chỉ lấy bài có link nguồn mà B0 chưa xong (lỗi/stale/mất input)",
+      sid_b0err in todo_p4d and sid_b0miss in todo_p4d and ids_p4d[1] in todo_p4d
+      and ids_p4d[0] not in todo_p4d and sid_ok not in todo_p4d)
+many_b0 = [stories.create_story(ga_root, "Batch B0")["id"] for _ in range(ga.MAX_BATCH + 2)]
+for s in many_b0:
+    stories.update_story(ga_root, s, source="https://fb.watch/reel-x")
+seen_b0 = []
+out = ga.apply_event(gctx, {"source": "b0_batch", "ids": many_b0}, on_batch=lambda b, i, n: seen_b0.append((b, i, n)))
+check("b0_batch chốt tối đa 5 bài/lượt và nói rõ phần còn lại",
+      len(out.touched) == ga.MAX_BATCH and "để lượt sau" in out.lines[0]
+      and seen_b0 == [(s, i, ga.MAX_BATCH) for i, s in enumerate(many_b0[:ga.MAX_BATCH], start=1)]
+      and all(ga.b0_state(ga_root, s) == stories.DONE for s in many_b0[:ga.MAX_BATCH])
+      and all(ga.b0_state(ga_root, s) == stories.PENDING for s in many_b0[ga.MAX_BATCH:]))
+
+fb_import.extract = real_extract
+
 prov.chat, prov.codex_generate_image = real_chat, real_codex
 images.download_ref, images.search_images = real_download, real_search
 gconn.close()
@@ -959,6 +1075,95 @@ if pnames and all(w is not None for w in bar):
     check("prefs trỏ provider không còn tồn tại -> grid hiện 'Theo preset' và xóa dấu vết, không crash",
           not at_pb.exception and back.value == fbgrid.PROV_DEFAULT_LABEL
           and ga.pref_providers(smoke_root) == {})
+
+# --- P4d AppTest: import file link -> tạo bài + trích B0 cả loạt ngay trên Grid ---
+class FakeFile:
+    """File uploader giả trong AppTest: không set được file thật nên thế đúng hợp đồng getvalue()/name."""
+
+    name = "links.csv"
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def getvalue(self):
+        return self._raw
+
+
+real_uploader = fbgrid.st.file_uploader
+real_extract_ui = fb_import.extract
+ui_ref = smoke_ws / "ui_ref.jpg"
+ui_ref.write_bytes(b"REF-IMG")
+ui_calls = []
+
+
+def ui_extract(url):
+    ui_calls.append(url)
+    return {"caption": f"Caption UI {url}", "images": [{"url": "https://scontent.example/1.jpg"}],
+            "method": "og-tags", "title": "", "stats": "", "note": ""}
+
+
+csv_ui = ("link\n" + "".join(f"https://fb.watch/ui-{i}\n" for i in range(1, 7))
+          + "https://example.com/bai-viet\n").encode("utf-8")
+fb_import.extract = ui_extract
+images.download_ref = lambda url: ui_ref
+fbgrid.st.file_uploader = lambda *a, **k: FakeFile(csv_ui) if k.get("key") == fbgrid.CSV_KEY else real_uploader(*a, **k)
+captured.clear()
+fbgrid.component = lambda: (lambda **kw: captured.update(kw))
+at_im = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=60)
+at_im.session_state["nav_page"] = "Grid"
+at_im.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+at_im.run()
+ids_before = stories.list_story_ids(smoke_root)
+go = next((b for b in at_im.button if b.key == "grid_import_go"), None)
+check("Grid có nút import nói trước số link nhận được, chưa gọi mạng khi chưa bấm",
+      not at_im.exception and go is not None and go.label == "➕ Tạo 6 bài mới + trích B0" and ui_calls == []
+      and any("Nhận 6 link FB" in (m.value or "") for m in at_im.markdown))
+if go is not None:
+    go.click().run()
+made = [s for s in stories.list_story_ids(smoke_root) if s not in ids_before]
+check("bấm import: tạo đủ 6 story, Nguồn = link, caption B0 vào input.txt, ảnh vào refs/",
+      not at_im.exception and len(made) == 6 and len(ui_calls) == 6
+      and all(stories.load_story(smoke_root, s)["source"].startswith("https://fb.watch/ui-") for s in made)
+      and all((smoke_root / s / "input.txt").read_text(encoding="utf-8").startswith("Caption UI") for s in made)
+      and all((smoke_root / s / "refs" / "ref_1.jpg").is_file() for s in made))
+check("6 link tự chia lượt 5 bài và chạy tiếp bài còn lại trong cùng một lần bấm",
+      len(at_im.status) == 1 and len(at_im.progress) == 1
+      and any("Đã tạo 6 bài mới" in line for line in at_im.session_state.get("grid_log", []))
+      and all(ga.b0_state(smoke_root, s) == stories.DONE for s in made))
+check("dòng component mang state B0 để vẽ ô vuông + tổng kết",
+      all("b0" in r for r in captured.get("rows", []))
+      and captured.get("summary", {}).get("b0_error") == 0
+      and sum(1 for r in captured.get("rows", []) if r["b0"] == "done") == 6)
+again_btn = next((b for b in at_im.button if b.key == "grid_import_go"), None)
+at_im.run()
+made_after_rerun = stories.list_story_ids(smoke_root)
+again_btn = next((b for b in at_im.button if b.key == "grid_import_go"), None)
+check("rerun với nguyên file không tạo thêm bài, nút đổi nhãn 'đã tạo' và bị chặn — bấm đôi không nhân đôi bài",
+      not at_im.exception and made_after_rerun == ids_before + made and len(ui_calls) == 6
+      and again_btn is not None and again_btn.disabled
+      and again_btn.label == "✓ Đã tạo 6 bài mới + trích B0")
+broken = made[-1]
+(smoke_root / broken / "input.txt").unlink()
+at_im.run()
+retry = next((b for b in at_im.button if b.key == "grid_b0_retry"), None)
+check("bài mất caption -> Grid hiện nút trích B0 lại và tổng kết đếm đúng lỗi B0",
+      not at_im.exception and retry is not None and retry.label == "▶ Trích B0 cho 1 bài chưa xong (cả workspace)"
+      and any(r["b0"] == "missing" for r in captured.get("rows", []))
+      and captured.get("summary", {}).get("b0_error") == 1)
+if retry is not None:
+    retry.click().run()
+    check("bấm nút trích lại -> B0 chạy đúng bài còn thiếu, không chạy lại bài đã xong",
+          not at_im.exception and len(ui_calls) == 7 and ui_calls[-1] == stories.load_story(smoke_root, broken)["source"]
+          and ga.b0_state(smoke_root, broken) == stories.DONE)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b0-run", "source": "b0_run", "id": made[0]}
+at_im.run()
+check("modal B0 gửi b0_run -> grid chạy lại đúng bài đó và báo kết quả",
+      not at_im.exception and len(ui_calls) == 8 and ui_calls[-1] == stories.load_story(smoke_root, made[0])["source"]
+      and any("B0: OK" in line for line in at_im.session_state.get("grid_log", [])))
+fbgrid.st.file_uploader = real_uploader
+fb_import.extract = real_extract_ui
+images.download_ref = real_download
 fbgrid.component = real_component
 
 # --- AppTest: B3 format selector + copy block ---

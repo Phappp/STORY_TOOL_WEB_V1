@@ -1,13 +1,16 @@
-"""Chạy B1/B2/B3 cho một story folder — logic thuần, không đụng streamlit.
+"""Chạy B0/B1/B2/B3 cho một story folder — logic thuần, không đụng streamlit.
 
 Mỗi hàm tự ghi trạng thái vào story.json trước/sau khi gọi provider để grid
 (nhìn file) luôn thấy đúng những gì đang diễn ra, kể cả khi tiến trình chết giữa chừng.
 """
 
+import hashlib
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import fb_import
 import images
 import prompts
 import providers as prov
@@ -24,6 +27,59 @@ class Result:
     keywords: list[str] = field(default_factory=list)
     image: Path | None = None
     lines: list[str] = field(default_factory=list)
+
+
+def set_b0(root: Path, sid: str, **fields) -> dict:
+    """state + metadata của B0 nằm trong story.json (block riêng, không lẫn với B1-B3)."""
+    block = dict(stories.load_story(root, sid).get("b0") or {})
+    block.update(fields)
+    block["updated_at"] = time.time()
+    return stories.update_story(root, sid, b0=block)
+
+
+def _text_hash(text: str) -> str:
+    return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
+
+
+def run_b0(root: Path, sid: str, url: str, extract=None, download=None) -> tuple[dict | None, str]:
+    """B0: link FB -> input.txt (caption trích được) + refs/ (ảnh) + story['b0']. Trả (data|None, log).
+
+    B0 chỉ ghi input.txt khi bài chưa có chữ, hoặc khi chữ đó vẫn đúng bản B0 đã ghi lần trước —
+    caption người dùng sửa tay không bao giờ bị đè.
+    """
+    extract = extract or fb_import.extract
+    download = download or images.download_ref
+    current = stories.input_text(root, sid)
+    block = stories.load_story(root, sid).get("b0") or {}
+    if current.strip() and _text_hash(current) != str(block.get("input_hash") or ""):
+        return None, "B0: bỏ qua (input.txt đang có chữ sửa tay — xóa hoặc sửa input.txt rồi trích lại)"
+    set_b0(root, sid, state=stories.RUNNING, url=url, detail="")
+    try:
+        data = extract(url)
+    except Exception as exc:  # yt-dlp/http trả đủ loại lỗi — bài nào trích không được thì ghi rõ lên grid
+        set_b0(root, sid, state=stories.ERROR, url=url, detail=str(exc)[:350])
+        return None, f"B0 LỖI: {str(exc)[:200]}"
+    caption = str(data.get("caption") or "")
+    if not caption.strip():
+        set_b0(root, sid, state=stories.ERROR, url=url, detail="link không trả caption nào")
+        return None, f"B0 LỖI: {sid} không có caption ({data.get('method') or '?'})"
+    stories.save_input(root, sid, caption)
+    saved, failed = 0, 0
+    for img in (data.get("images") or []):
+        try:
+            stories.save_ref(root, sid, download(img["url"]), url=img["url"])
+            saved += 1
+        except Exception:
+            failed += 1
+    note = str(data.get("note") or "")
+    if failed:
+        note = (note + f" · không tải được {failed} ảnh")[:300]
+    text_now = stories.input_text(root, sid)
+    set_b0(root, sid, state=stories.DONE, url=url, detail="", note=note,
+           method=str(data.get("method") or ""), title=str(data.get("title") or ""),
+           stats=str(data.get("stats") or ""), refs=saved, words=len(text_now.split()),
+           input_hash=_text_hash(text_now))
+    return data, f"B0: OK · {data.get('method') or '?'} · {len(text_now.split())} chữ · {saved} ảnh tham chiếu"
 
 
 def resolve_provider_model(rows, story, preset, step, preferred: str = ""):

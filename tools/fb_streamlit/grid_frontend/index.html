@@ -27,6 +27,7 @@
   .stat.error { background:var(--error); color:var(--error-t); }
   .stat.done { background:var(--done); color:var(--done-t); }
   .stat.queued { background:var(--queued); color:var(--queued-t); }
+  .stat.b0err { background:var(--error); color:var(--error-t); }
   .stats { display:inline-flex; gap:4px; }
   .scroll { max-height:520px; overflow:auto; }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
@@ -120,7 +121,8 @@ const SET_FRAME_HEIGHT = "streamlit:setFrameHeight";
 const MAX_BATCH = 5;
 
 const STATE_LABEL = { pending: "chưa chạy", queued: "đợi", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
-const STEP_TITLE = { b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
+const STEP_TITLE = { b0: "B0 trích từ link", b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
+const GRID_STEPS = ["b0", "b1", "b2", "b3"];
 const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy · xanh dương đang chạy · xanh lá xong · đỏ lỗi · đỏ nét đứt treo >15 phút · cam mất file";
 // Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
 const COLS = [
@@ -128,7 +130,7 @@ const COLS = [
   { key: "pick", label: "", w: 30, min: 26 },
   { key: "id", label: "story", w: 92, min: 64 },
   { key: "src", label: "nguồn", w: 210, min: 80 },
-  { key: "steps", label: "B1 B2 B3", w: 92, min: 84, align: "c" },
+  { key: "steps", label: "B0 B1 B2 B3", w: 128, min: 122, align: "c" },
   { key: "img", label: "ảnh", w: 48, min: 40, align: "c" },
   { key: "status", label: "status", w: 66, min: 50, align: "c" },
   { key: "link", label: "Link", w: 220, min: 90 },
@@ -141,8 +143,9 @@ const LAST_RESP_KEY = "fbgrid:lastresp:v1";
 const SUMMARY_ORDER = [["queued", "hàng đợi"], ["waiting", "chờ"], ["running", "đang chạy"], ["error", "lỗi"], ["done", "xong"]];
 const DUBBLE_MS = 260;
 const STEP_FIELD = { b1: "Caption", b3: "Bài SEO" };
-const TABS = [["input", "Input"], ["b1", "B1 caption"], ["b2", "B2 ảnh"], ["b3", "B3 SEO"], ["link", "Link"]];
-const TAB_FIELD = { input: "Input", b1: "Caption", b3: "Bài SEO" };
+const TABS = [["b0", "B0 trích"], ["input", "Input"], ["b1", "B1 caption"], ["b2", "B2 ảnh"], ["b3", "B3 SEO"], ["link", "Link"]];
+const TAB_FIELD = { b0: "B0 preview", input: "Input", b1: "Caption", b3: "Bài SEO" };  // nội dung xin từ Python cho từng tab
+const TAB_COPY = { b0: "Input", input: "Input", b1: "Caption", b3: "Bài SEO" };        // tab B0 copy đúng caption trong input.txt
 const CONTENT = new Map();  // "id|field|dấu_mốc_file" -> chữ, chỉ sống tới khi file đổi
 const IMAGES = new Map();   // "id|Ảnh|dấu_mốc_file" -> data URL
 const NOTES = new Map();    // "id|field|dấu_mốc_file" -> dòng giải thích (trống/chưa có ảnh) — chặn xin lại vòng vô hạn
@@ -264,7 +267,8 @@ function requestContent(row, field, mode, flashId) {
   const key = contentKey(row, field);
   NOTES.delete(key);
   WAITING.set(rid, { key: key, id: String(row.id), field: field, mode: mode, flash: flashId || "" });
-  const source = mode === "copy" ? "copy_request" : (field === "Ảnh" ? "image_request" : "content_request");
+  const source = mode === "copy" ? "copy_request"
+    : (field === "Ảnh" ? "image_request" : (field === TAB_FIELD.b0 ? "b0_request" : "content_request"));
   send({ source: source, id: row.id, field: field, request_id: rid });
 }
 
@@ -282,9 +286,11 @@ function ingestResponse() {
   const field = String((wait && wait.field) || r.field || "Ảnh");
   const mode = (wait && wait.mode) || String(r.mode || "copy");
   const key = row ? contentKey(row, field) : String(r.id || "") + "|" + field + "|";
-  if (r.image) IMAGES.set(key, String(r.image));
-  else if (String(r.text || "").trim()) CONTENT.set(key, String(r.text));
-  else NOTES.set(key, String(r.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
+  if (r.image) IMAGES.set(key, String(r.image));  // response B0 mang cả chữ lẫn ảnh -> nạp đủ hai ô cache
+  if (String(r.text || "").trim()) CONTENT.set(key, String(r.text));
+  if (!r.image && !String(r.text || "").trim()) {
+    NOTES.set(key, String(r.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
+  }
   if (mode !== "copy") return;
   const text = String(r.text || "");
   if (!text.trim()) { flashSel(wait ? wait.flash : "", "trống", "bad"); return; }
@@ -313,10 +319,14 @@ function copyField(row, field, b, flashId) {
   flash(b, "…", "");
 }
 
+function stateOf(row, step) {
+  return String(step === "b0" ? (row.b0 || "pending") : ((row.states || {})[step] || "pending"));
+}
+
 function stepsCell(row) {
   const td = el("td", "steps");
-  ["b1", "b2", "b3"].forEach(step => {
-    const state = String((row.states || {})[step] || "pending");
+  GRID_STEPS.forEach(step => {
+    const state = stateOf(row, step);
     const detail = String((row.detail || {})[step] || "");
     const b = el("button", "b sq " + state);
     b.type = "button";
@@ -324,10 +334,12 @@ function stepsCell(row) {
     b.dataset.id = String(row.id);
     b.dataset.step = step;
     b.dataset.flash = "sq:" + row.id + ":" + step;
-    const how = step === "b2" ? "bấm để xem ảnh, bấm đúp để mở modal"
+    const preview = step === "b0" || step === "b2";  // 2 bước này không có gì để copy — bấm là mở modal xem
+    const how = preview ? "bấm để mở modal xem " + (step === "b0" ? "caption + ảnh trích được" : "ảnh")
       : "bấm 1 lần để copy, bấm đúp để mở modal";
-    b.title = STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state) + (detail ? " · " + detail : "") + " — " + how;
-    const single = step === "b2" ? () => openModal(row.id, "b2")
+    b.title = STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state) + (detail ? " · " + detail : "")
+      + (step === "b0" && row.b0meta ? " · " + row.b0meta : "") + " — " + how;
+    const single = preview ? () => openModal(row.id, step)
       : () => copyField(row, STEP_FIELD[step], b, b.dataset.flash);
     const onClick = splitClick(single, () => openModal(row.id, step));  // 1 closure/ô: bấm đúp mới tính
     b.addEventListener("click", e => {
@@ -364,7 +376,7 @@ function ensureContent(row, tab) {
     requestContent(row, "Ảnh", "show");
     return;
   }
-  if (row.copyable && row.copyable[field] === false) { NOTES.set(key, field + " trống — chạy bước này trước."); return; }
+  if (field !== TAB_FIELD.b0 && row.copyable && row.copyable[field] === false) { NOTES.set(key, field + " trống — chạy bước này trước."); return; }
   requestContent(row, field, "show");
 }
 
@@ -409,6 +421,25 @@ function modalBody(row, tab, key) {
     body.appendChild(el("pre", "doc", raw || "(chưa có link — bấm ✎ ở cột Link để nhập)"));
     return body;
   }
+  if (tab === "b0") {  // một response mang cả caption (input.txt) lẫn ảnh tham chiếu đầu tiên (refs/)
+    if (row.b0meta) body.appendChild(el("div", "muted", row.b0meta));
+    const src = IMAGES.get(key);
+    if (src) {
+      const img = document.createElement("img");
+      img.className = "photo";
+      img.alt = "Ảnh tham chiếu B0 của " + row.id;
+      img.src = src;
+      body.appendChild(img);
+    }
+    const cap = CONTENT.get(key);
+    if (cap == null) {
+      body.appendChild(el("div", src || NOTES.has(key) ? "muted" : "loading",
+        NOTES.get(key) || (src ? "(input.txt trống — B0 chưa ghi được caption)" : "… đang đọc caption + ảnh từ folder story")));
+      return body;
+    }
+    body.appendChild(el("pre", "doc", String(cap)));
+    return body;
+  }
   if (tab === "b2") {
     const src = IMAGES.get(key);
     if (!src) { body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc ảnh từ folder story")); return body; }
@@ -451,6 +482,13 @@ function modalNode() {
   modal.appendChild(head);
 
   const tools = el("div", "mtools");
+  if (ref.tab === "b0") {
+    tools.appendChild(button("▶ Trích lại B0", "Gọi lại link nguồn để lấy caption + ảnh — chữ bạn sửa tay trong input.txt sẽ không bị đè", b => {
+      b.disabled = true;  // nút trong modal không bị khóa theo grid -> tự khóa tới khi rerun vẽ lại
+      CONTENT.delete(key); IMAGES.delete(key); NOTES.delete(key);  // response B0 mang cả chữ lẫn ảnh dưới cùng một key
+      send({ source: "b0_run", id: row.id });
+    }, "play"));
+  }
   if (["b1", "b2", "b3"].indexOf(ref.tab) >= 0) {
     tools.appendChild(button("▶ Chạy bước này", "Chạy lại " + STEP_TITLE[ref.tab] + " cho " + row.id +
       " — xong thì modal tự hiện kết quả mới", b => {
@@ -477,9 +515,10 @@ function modalNode() {
     tools.appendChild(sel);
   }
   if (ref.tab !== "b2") {
-    const field = tabField(ref.tab);
+    const field = TAB_COPY[ref.tab] || "";
     if (field) {
-      const cp = button("📋 Copy " + field, "Copy đúng chữ đang hiện (bấm 1 lần ở ô " + field + " cũng vậy)",
+      const cp = button("📋 Copy " + field, "Copy đúng chữ đang hiện"
+        + (["b1", "b3"].indexOf(ref.tab) >= 0 ? " (bấm 1 lần ở ô " + field + " cũng vậy)" : ""),
         b => copyField(row, field, b, "modal:" + ref.tab), "act");
       cp.dataset.flash = "modal:" + ref.tab;
       tools.appendChild(cp);
@@ -494,11 +533,12 @@ function modalNode() {
     }
   }
   tools.appendChild(el("span", "muted", ref.tab === "b2" ? "ảnh đọc từ image.png trong folder story"
+    : ref.tab === "b0" ? "caption đọc từ input.txt · ảnh tham chiếu đọc từ refs/ của " + row.id
     : "nội dung đọc từ file trong folder story (" + row.id + ")"));
   modal.appendChild(tools);
   modal.appendChild(modalBody(row, ref.tab, key));
   modal.appendChild(el("div", "mfoot",
-    "click 1 lần ở ô B1/B3 = copy · click đúp = mở modal này · Esc hoặc ✕ để đóng · danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · ảnh lớn quá " + (2 * 1024) + " KB thì mở bài ở trang Tạo bài để xem"));
+    "click 1 lần ở ô B1/B3 = copy · click đúp (hoặc bấm ô B0/B2) = mở modal này · Esc hoặc ✕ để đóng · danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · ảnh lớn quá " + (2 * 1024) + " KB thì mở bài ở trang Tạo bài để xem"));
 
   overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
   overlay.appendChild(modal);
@@ -698,6 +738,8 @@ function statsBar() {
   SUMMARY_ORDER.forEach(pair => {
     box.appendChild(el("span", "stat " + pair[0], pair[1] + " " + Number(s[pair[0]] || 0)));
   });
+  const b0err = Number(s.b0_error || 0);
+  if (b0err) box.appendChild(el("span", "stat b0err", "B0 lỗi " + b0err));  // lỗi trích link không tính vào 'lỗi' của hàng đợi
   return box;
 }
 
@@ -840,7 +882,7 @@ function render(args) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "màu ô B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp để mở modal xem kết quả (chạy bước ở trong modal) · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ✎ ở cột Link để sửa link đã đăng · ↗ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục) · kéo mép tiêu đề để đổi độ rộng cột · ⛢ mở rộng kín cửa sổ"));
+    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, đặt trong “📥 Import link…” · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ✎ ở cột Link để sửa link đã đăng · ↗ mở ở trang Tạo bài · ✅ đã đăng · 🗑 dời folder vào .trash (kéo ngược ra ngoài là khôi phục) · kéo mép tiêu đề để đổi độ rộng cột · ⛢ mở rộng kín cửa sổ"));
   root.appendChild(wrap);
   unmarkSent();
   const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này
