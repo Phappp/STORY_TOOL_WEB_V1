@@ -551,12 +551,57 @@ check("rows_for cũng đưa stale vào ô hiển thị",
       next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_ok)["states"]["b1"] == ga.STALE)
 
 # --- P2e: prefs của workspace (nút tự làm mới) ---
-fbgrid.save_prefs(ga_root, {"auto_refresh": True})
+ga.save_prefs(ga_root, {"auto_refresh": True})
 check("prefs grid lưu file ẩn trong workspace, đọc lại đúng",
-      (ga_root / fbgrid.PREFS_FILE).is_file() and fbgrid.load_prefs(ga_root) == {"auto_refresh": True})
-(ga_root / fbgrid.PREFS_FILE).write_text("không phải json", encoding="utf-8")
+      (ga_root / ga.PREFS_FILE).is_file() and ga.load_prefs(ga_root) == {"auto_refresh": True})
+(ga_root / ga.PREFS_FILE).write_text("không phải json", encoding="utf-8")
 check("prefs hỏng -> coi như rỗng, grid vẫn đọc được folder",
-      fbgrid.load_prefs(ga_root) == {} and bool(fbgrid.rows_for(gctx)))
+      ga.load_prefs(ga_root) == {} and bool(fbgrid.rows_for(gctx)))
+
+# --- P4c: provider mặc định theo workspace + chọn riêng từng bài ---
+ga.set_pref_provider(ga_root, "b1", "GridAPI")
+ga.set_pref_provider(ga_root, "b3", "GridCodex")
+check("provider mặc định của grid nằm trong cùng file prefs với auto_refresh",
+      ga.load_prefs(ga_root)["providers"] == {"b1": "GridAPI", "b3": "GridCodex"})
+check("ctx build từ workspace đọc luôn provider mặc định",
+      ga.build_ctx(gconn, ga_root).defaults == {"b1": "GridAPI", "b3": "GridCodex"})
+check("bước chưa chọn riêng thì lấy mặc định của workspace, bước khác trống",
+      ga.provider_choice(ga.build_ctx(gconn, ga_root), {}, "b1") == "GridAPI"
+      and ga.provider_choice(ga.build_ctx(gconn, ga_root), {}, "b2") == "")
+sid_pick = stories.create_story(ga_root, "Bài chọn provider riêng", input_text="nội dung chọn provider")["id"]
+out = ga.apply_event(gctx, {"source": "set_provider", "id": sid_pick, "step": "b1", "provider": "GridCodex"})
+check("set_provider ghi prov_pick vào story.json của riêng bài này + nói rõ",
+      stories.load_story(ga_root, sid_pick)["b1"].get("prov_pick") == "GridCodex"
+      and "GridCodex" in out.lines[0] and out.touched == [sid_pick])
+check("chọn riêng trong modal quyền trên mặc định workspace",
+      ga.provider_choice(ga.build_ctx(gconn, ga_root), stories.load_story(ga_root, sid_pick), "b1") == "GridCodex")
+out = ga.apply_event(gctx, {"source": "set_provider", "id": sid_pick, "step": "b1", "provider": "Không Có Thật"})
+check("provider không tồn tại -> từ chối, story.json giữ nguyên",
+      out.copy is None and "không có provider" in out.lines[0]
+      and stories.load_story(ga_root, sid_pick)["b1"].get("prov_pick") == "GridCodex")
+out = ga.apply_event(gctx, {"source": "set_provider", "id": sid_pick, "step": "b3", "provider": ""})
+check("set_provider rỗng = bỏ chọn riêng, bài theo workspace/preset",
+      "prov_pick" not in stories.load_story(ga_root, sid_pick).get("b3", {})
+      and "theo workspace/preset" in out.lines[0])
+rows_p4c = fbgrid.rows_for(gctx)
+check("dòng grid mang prov_pick để modal hiện đúng ô đang chọn riêng",
+      next(r["prov"]["b1"] for r in rows_p4c if r["id"] == sid_pick) == "GridCodex"
+      and next(r["prov"]["b1"] for r in rows_p4c if r["id"] == sid_ok) == "")
+gdef = ga.build_ctx(gconn, ga_root)  # ctx đọc lại prefs: bước nào có mặc định thì dùng provider đó
+chat_calls.clear()
+ga.apply_event(gdef, {"source": "run_step", "id": sid_pick, "step": "b3"})
+check("bài không chọn riêng -> run_step dùng provider mặc định đặt ở đầu grid",
+      chat_calls[-1] == ("GridCodex", ""))
+ga.apply_event(gdef, {"source": "set_provider", "id": sid_pick, "step": "b3", "provider": "GridAPI"})
+chat_calls.clear()
+ga.apply_event(gdef, {"source": "run_step", "id": sid_pick, "step": "b3"})
+check("chọn riêng trong modal thắng mặc định đầu grid ngay khi chạy bước",
+      chat_calls[-1] == ("GridAPI", "m1"))
+ga.set_pref_provider(ga_root, "b1", "")
+ga.set_pref_provider(ga_root, "b3", "")
+check("set_pref_provider rỗng xóa bỏ mặc định của bước",
+      ga.pref_providers(ga_root) == {} and bool(ga.save_prefs(ga_root, {"auto_refresh": True})) is False)
+(ga_root / ga.PREFS_FILE).write_text("không phải json", encoding="utf-8")
 
 prov.chat, prov.codex_generate_image = real_chat, real_codex
 images.download_ref, images.search_images = real_download, real_search
@@ -726,12 +771,12 @@ check("Grid có nút tự làm mới, mặc định tắt", tg is not None and n
 if tg is not None:
     tg.set_value(True).run()
     check("bật tự làm mới -> lưu prefs của workspace",
-          not at_tg.exception and fbgrid.load_prefs(smoke_root) == {"auto_refresh": True}
+          not at_tg.exception and ga.load_prefs(smoke_root) == {"auto_refresh": True}
           and at_tg.session_state.get(fbgrid.REFRESH_KEY) is True)
     check("grid vẽ trong fragment (run_every 5s) không lỗi",
           any("Grid story" in (h.value or "") for h in at_tg.subheader))
     tg.set_value(False).run()
-    check("tắt tự làm mới ghi lại prefs", fbgrid.load_prefs(smoke_root) == {"auto_refresh": False})
+    check("tắt tự làm mới ghi lại prefs", ga.load_prefs(smoke_root) == {"auto_refresh": False})
 
 batch_sids = [stories.create_story(smoke_root, f"Batch UI {i}")["id"] for i in range(ga.MAX_BATCH + 1)]
 at_bc = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
@@ -881,6 +926,40 @@ check("component được đưa tổng kết + thứ tự hàng đợi của C�
       and captured["summary"]["error"] == 1 and captured["summary"]["total"] == len(expect_rows))
 check("mỗi dòng component nhận có 'nguồn' để vẽ cột nguồn",
       all("source" in r for r in expect_rows) and any(r["id"] == q_sid for r in expect_rows))
+
+# --- P4c AppTest: 3 dropdown provider ở đầu grid, lưu theo workspace ---
+pnames = sorted({str(x["name"]) for x in db.list_providers(db.connect())})
+captured.clear()
+fbgrid.component = lambda: (lambda **kw: captured.update(kw))
+at_pb = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_pb.session_state["nav_page"] = "Grid"
+at_pb.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+at_pb.run()
+bar = [next((w for w in at_pb.selectbox if w.key == fbgrid.PROV_KEYS[s]), None) for s in ga.ALL_STEPS]
+check("grid có đủ 3 dropdown provider B1/B2/B3, mặc định là 'Theo preset'",
+      not at_pb.exception and all(w is not None for w in bar)
+      and all(list(w.options)[0] == fbgrid.PROV_DEFAULT_LABEL for w in bar)
+      and all(w.value == fbgrid.PROV_DEFAULT_LABEL for w in bar))
+if pnames and all(w is not None for w in bar):
+    ga.save_prefs(smoke_root, {"auto_refresh": False})
+    bar[0].set_value(pnames[0]).run()
+    check("chọn provider ở đầu grid -> ghi prefs của workspace, không đè auto_refresh",
+          not at_pb.exception
+          and ga.load_prefs(smoke_root) == {"auto_refresh": False, "providers": {"b1": pnames[0]}})
+    check("component nhận danh sách provider + mặc định đang dùng để modal vẽ ô chọn riêng",
+          captured.get("providers") == pnames and captured.get("defaults") == {"b1": pnames[0]})
+    again = next(w for w in at_pb.selectbox if w.key == fbgrid.PROV_KEYS["b1"])
+    check("provider đã lưu hiện lại đúng ở lần vẽ sau", again.value == pnames[0])
+    again.set_value(fbgrid.PROV_DEFAULT_LABEL).run()
+    check("chọn 'Theo preset' là xóa mặc định của bước khỏi prefs",
+          not at_pb.exception and ga.pref_providers(smoke_root) == {} and captured.get("defaults") == {})
+    ga.save_prefs(smoke_root, {"providers": {"b1": "Provider Đã Bị Xóa"}})
+    at_pb.run()
+    back = next(w for w in at_pb.selectbox if w.key == fbgrid.PROV_KEYS["b1"])
+    check("prefs trỏ provider không còn tồn tại -> grid hiện 'Theo preset' và xóa dấu vết, không crash",
+          not at_pb.exception and back.value == fbgrid.PROV_DEFAULT_LABEL
+          and ga.pref_providers(smoke_root) == {})
+fbgrid.component = real_component
 
 # --- AppTest: B3 format selector + copy block ---
 at_fmt = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)

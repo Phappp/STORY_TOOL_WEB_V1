@@ -4,7 +4,6 @@ Component chỉ gửi event về Python; mọi việc thật do grid_actions.app
 nên state hiển thị luôn đọc lại từ folder story (không có bản sao trong session).
 """
 
-import json
 from datetime import datetime
 from pathlib import Path
 
@@ -20,9 +19,10 @@ KEY = "fb_story_grid"
 LOG_LIMIT = 8
 MODE_COMPONENT = "Grid (component)"
 MODE_NATIVE = "Bảng nút (native)"
-PREFS_FILE = ".fbtool-grid-prefs.json"
 REFRESH_KEY = "grid_refresh"
 REFRESH_SECONDS = 5
+PROV_DEFAULT_LABEL = "Theo preset"
+PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
 
 STEP_LABELS = {"b1": "▶ B1", "b2": "▶ B2", "b3": "▶ B3"}
 STATE_LABELS = {stories.PENDING: "chưa chạy", ga.QUEUED: "đợi", stories.DONE: "xong", stories.RUNNING: "đang chạy",
@@ -42,34 +42,55 @@ def component():
     return _component
 
 
-def load_prefs(root: Path) -> dict:
-    """Prefs của workspace — file ẩn, hỏng hay chưa có thì coi như rỗng (không chặn grid)."""
-    try:
-        data = json.loads((Path(root) / PREFS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def save_prefs(root: Path, prefs: dict) -> None:
-    try:
-        (Path(root) / PREFS_FILE).write_text(json.dumps(prefs, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError as exc:
-        st.caption(f"Không lưu được prefs grid: {exc}")
-
-
 def refresh_toggle(root: Path) -> bool:
     """Nút Bật/Tắt tự làm mới — đọc từ file prefs của workspace, ghi lại khi khác."""
     if st.session_state.get("grid_prefs_root") != str(root):  # đổi workspace -> lấy prefs của workspace mới
         st.session_state["grid_prefs_root"] = str(root)
-        st.session_state[REFRESH_KEY] = bool(load_prefs(root).get("auto_refresh"))
+        st.session_state[REFRESH_KEY] = bool(ga.load_prefs(root).get("auto_refresh"))
     on = st.toggle(f"Tự làm mới grid ({REFRESH_SECONDS}s)", key=REFRESH_KEY,
                    help="Bật: mỗi 5 giây đọc lại folder story. Tắt khi không muốn màn hình nhảy.")
-    prefs = load_prefs(root)
+    prefs = ga.load_prefs(root)
     if bool(prefs.get("auto_refresh")) is not bool(on):
         prefs["auto_refresh"] = bool(on)
-        save_prefs(root, prefs)
+        note = ga.save_prefs(root, prefs)
+        if note:
+            st.caption(note)
     return bool(on)
+
+
+def provider_bar(ctx: ga.Ctx) -> None:
+    """3 dropdown provider cho B1/B2/B3 đặt ở đầu grid — lưu vào prefs của workspace.
+
+    Bài nào được chọn riêng trong modal (prov_pick) thì quyền ưu tiên cao hơn chỗ này.
+    """
+    names = ga.provider_names(ctx)
+    stored = ga.pref_providers(ctx.root)
+    cols = st.columns(3)
+    for col, step in zip(cols, ga.ALL_STEPS, strict=True):
+        current = str(stored.get(step) or "")
+        options = [PROV_DEFAULT_LABEL] + names
+        if current and current not in names:  # provider đã bị xóa ở Cấu hình -> bỏ khỏi prefs, vẽ lại "Theo preset"
+            st.session_state.pop(PROV_KEYS[step], None)
+            note = ga.set_pref_provider(ctx.root, step, "")
+            if note:
+                st.caption(note)
+            ctx.defaults.pop(step, None)
+            current = ""
+        value = col.selectbox(f"Provider {STEP_LABELS[step].replace('▶ ', '')}", options,
+                              key=PROV_KEYS[step],
+                              index=options.index(current) if current in options else 0,
+                              help=("Bài chưa chọn riêng thì bước này chạy bằng provider đặt ở đây; "
+                                    "chọn “Theo preset” để dùng provider của preset như trang Tạo bài.")
+                                   + ("" if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
+        want = "" if value == PROV_DEFAULT_LABEL else str(value)
+        if want != current:
+            note = ga.set_pref_provider(ctx.root, step, want)
+            if note:
+                st.caption(note)
+            if want:
+                ctx.defaults[step] = want
+            else:
+                ctx.defaults.pop(step, None)
 
 
 def _when(ts: float) -> str:
@@ -99,6 +120,8 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "queue_pos": 0,
             "updated": _when(summary["updated_at"]),
             "stamp": round(float(summary["updated_at"] or 0), 3),  # JS cache nội dung theo mốc này (save_story luôn đổi)
+            # provider bài này chọn riêng (modal) — để trống thì theo workspace/preset
+            "prov": {step: str((story.get(step) or {}).get("prov_pick") or "") for step in ga.ALL_STEPS},
             "copyable": {"Caption": summary["b1"] == stories.DONE, "Bài SEO": summary["b3"] == stories.DONE,
                          "Input": summary["has_input"], "Link": bool(summary["link"].strip())},
         })
@@ -173,6 +196,8 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     summary=ga.count_buckets(all_rows),
                     queue_ids=ga.queue_ids(all_rows),
                     error_ids=ga.error_ids(all_rows),
+                    providers=ga.provider_names(ctx),
+                    defaults=dict(ctx.defaults),
                     copy_response=st.session_state.get("grid_copy_response") or {},
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
@@ -198,7 +223,7 @@ def summary_line(all_rows: list[dict]) -> str:
 
 
 def link_editor(ctx: ga.Ctx, sid: str, current: str) -> None:
-    """Cột Link sửa được ở bảng native — ghi straight vào story.json qua event link_save."""
+    """Cột Link sửa được ở bảng native — ghi thẳng vào story.json qua event link_save."""
     if st.session_state.pop("native_link_resync", False) or st.session_state.get("native_link_sid") != sid:
         st.session_state["native_link_sid"] = sid
         st.session_state["native_link_edit"] = current
@@ -333,6 +358,7 @@ def render(ctx: ga.Ctx) -> None:
     with col_filter:
         st.selectbox("Lọc bài", list(ga.FILTERS), key="grid_filter",
                      help="Bài lỗi lên đầu, rồi chờ chạy, đang chạy, xong. Bài đã vào hàng đợi luôn ở trên cùng.")
+    provider_bar(ctx)
     if auto:
         st.fragment(_body, run_every=REFRESH_SECONDS)(ctx)
     else:

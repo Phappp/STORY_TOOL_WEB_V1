@@ -5,6 +5,7 @@ là thấy đúng những gì đã xảy ra.
 """
 
 import base64
+import json
 import mimetypes
 import time
 from dataclasses import dataclass, field
@@ -22,6 +23,8 @@ STALE_SECONDS = 15 * 60
 IMAGE_INLINE_MAX = 2 * 1024 * 1024
 STALE = "stale"
 QUEUED = "queued"
+PREFS_FILE = ".fbtool-grid-prefs.json"
+PROV_NONE = ""  # để trống nghĩa là bài này không chọn riêng, theo workspace/preset
 
 COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link", "Bài SEO (Facebook)")
 STEP_NAMES = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
@@ -40,6 +43,7 @@ class Ctx:
     providers: dict
     presets: dict
     fallback_preset: object = None
+    defaults: dict = field(default_factory=dict)  # step -> provider đặt ở đầu grid (prefs của workspace)
 
 
 @dataclass
@@ -51,11 +55,58 @@ class Outcome:
     touched: list[str] = field(default_factory=list)
 
 
+def load_prefs(root: Path) -> dict:
+    """Prefs của workspace — file ẩn, hỏng hay chưa có thì coi như rỗng (không chặn grid)."""
+    try:
+        data = json.loads((Path(root) / PREFS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_prefs(root: Path, prefs: dict) -> str:
+    """Ghi prefs, trả dòng thông báo lỗi để trang Grid hiển thị thay vì crash."""
+    try:
+        (Path(root) / PREFS_FILE).write_text(json.dumps(prefs, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        return f"Không lưu được prefs grid: {exc}"
+    return ""
+
+
+def pref_providers(root: Path) -> dict:
+    stored = load_prefs(root).get("providers")
+    return {str(k): str(v) for k, v in stored.items()} if isinstance(stored, dict) else {}
+
+
+def set_pref_provider(root: Path, step: str, name: str) -> str:
+    """Ghi provider mặc định của một bước cho cả workspace; name rỗng = bỏ mặc định, theo preset."""
+    prefs = load_prefs(root)
+    stored = dict(prefs.get("providers") or {}) if isinstance(prefs.get("providers"), dict) else {}
+    if name:
+        stored[step] = name
+    else:
+        stored.pop(step, None)
+    prefs["providers"] = stored
+    return save_prefs(root, prefs)
+
+
+def provider_names(ctx: Ctx) -> list[str]:
+    return sorted({str(p["name"]) for p in ctx.providers.values()})
+
+
+def provider_choice(ctx: Ctx, story: dict, step: str) -> str:
+    """Provider sẽ dùng cho bước này: chọn riêng trong modal > mặc định của grid > rỗng (để steps theo preset)."""
+    block = (story or {}).get(step)
+    block = block if isinstance(block, dict) else {}
+    return str(block.get("prov_pick") or "") or str(ctx.defaults.get(step) or "")
+
+
 def build_ctx(conn, root: Path) -> Ctx:
     presets = db.list_presets(conn)
     fallback = presets[0] if presets else None
     return Ctx(root=root, providers={p["id"]: p for p in db.list_providers(conn)},
-               presets={p["id"]: p for p in presets}, fallback_preset=fallback)
+               presets={p["id"]: p for p in presets}, fallback_preset=fallback,
+               defaults=pref_providers(root))
 
 
 def step_states(root: Path, sid: str, now: float | None = None) -> dict:
@@ -181,7 +232,8 @@ def _run_step(ctx: Ctx, sid: str, step: str) -> list[str]:
         return [why]
     story, preset = ready
     post = stories.post_view(ctx.root, sid)
-    provider, model = steps.resolve_provider_model(ctx.providers, story, preset, step)
+    provider, model = steps.resolve_provider_model(ctx.providers, story, preset, step,
+                                                   preferred=provider_choice(ctx, story, step))
     if step == "b1":
         return [steps.run_b1(ctx.root, sid, preset, provider, model, post)[1]]
     if step == "b3":
@@ -202,7 +254,8 @@ def _run_all(ctx: Ctx, sid: str) -> list[str]:
         return [why]
     story, preset = ready
     post = stories.post_view(ctx.root, sid)
-    providers = {step: steps.resolve_provider_model(ctx.providers, story, preset, step) for step in ALL_STEPS}
+    providers = {step: steps.resolve_provider_model(ctx.providers, story, preset, step,
+                                                    preferred=provider_choice(ctx, story, step)) for step in ALL_STEPS}
     res = steps.run_pipeline(ctx.root, sid, preset, post, stories.refs_of(ctx.root, sid), ctx.providers, providers)
     return res.lines
 
@@ -296,6 +349,23 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
                 stories.update_story(ctx.root, qid, queued=False)
             out.lines = [f"Đã bỏ {len(ids)} bài khỏi hàng đợi." if ids else "Hàng đợi đang trống — chưa có bài nào để bỏ."]
             out.touched = ids
+        elif source == "set_provider":
+            if step not in ALL_STEPS:
+                out.lines = [f"Bước không hợp lệ: {step or '(trống)'}"]
+            else:
+                name = str(event.get("provider") or PROV_NONE)
+                if name and not any(str(p["name"]) == name for p in ctx.providers.values()):
+                    out.lines = [f"{sid}: không có provider “{name}” trong Cấu hình ▸ Providers."]
+                else:
+                    story = stories.load_story(ctx.root, sid)
+                    block = dict(story.get(step) or {})
+                    if name:
+                        block["prov_pick"] = name
+                    else:
+                        block.pop("prov_pick", None)
+                    stories.update_story(ctx.root, sid, **{step: block})
+                    out.lines, out.touched = [f"{sid}: {STEP_NAMES[step]} dùng {name} (riêng bài này)." if name
+                                              else f"{sid}: {STEP_NAMES[step]} thôi chọn riêng — theo workspace/preset."], [sid]
         elif source == "mark_posted":
             stories.update_story(ctx.root, sid, status="posted")
             out.lines, out.touched = [f"{sid}: status = posted."], [sid]

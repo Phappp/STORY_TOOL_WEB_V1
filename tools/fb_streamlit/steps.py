@@ -26,14 +26,18 @@ class Result:
     lines: list[str] = field(default_factory=list)
 
 
-def resolve_provider_model(rows, story, preset, step):
-    """(provider, model) cho một bước khi không có widget: story.json -> preset -> provider mặc định."""
+def resolve_provider_model(rows, story, preset, step, preferred: str = ""):
+    """(provider, model) cho một bước khi không có widget.
+
+    preferred (grid đặt: chọn riêng trong modal hoặc mặc định của workspace) đi trước
+    vì 'provider' trong story.json chỉ là dấu vết của lần chạy gần nhất.
+    """
     if not rows:
         return None, ""
     block = (story or {}).get(step) or {}
-    provider = None
+    provider = next((r for r in rows.values() if str(r["name"]) == str(preferred or "")), None) if preferred else None
     name = str(block.get("provider") or "")
-    if name:
+    if provider is None and name:
         provider = next((r for r in rows.values() if str(r["name"]) == name), None)
     if provider is None and preset is not None and preset["provider_id"] in rows:
         provider = rows[preset["provider_id"]]

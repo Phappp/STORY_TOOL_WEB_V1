@@ -65,6 +65,8 @@
     height:24px; padding:0 9px; cursor:pointer; color:#555; }
   .mtab.on { background:var(--running); color:var(--running-t); border-color:rgba(23,95,168,.35); font-weight:600; }
   .mtools { display:flex; gap:6px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  select.prov { height:24px; max-width:240px; font:inherit; font-size:12px; border:1px solid var(--border);
+    border-radius:6px; background:#fff; color:#555; }
   .mbody { padding:10px 12px; overflow:auto; }
   .mbody pre.doc { margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; line-height:1.55; }
   .mbody img.photo { max-width:100%; border-radius:8px; border:1px solid var(--border); }
@@ -203,7 +205,7 @@ function button(label, title, fn, cls) {
   return b;
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {}, summary: {}, queue_ids: [], error_ids: [] };
+let MODEL = { rows: [], workspace: "", copy_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {} };
 const PICKED = new Set();
 let boxes = [];
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
@@ -457,6 +459,23 @@ function modalNode() {
         send({ source: "run_step", id: row.id, step: ref.tab });
       }, "play"));
   }
+  if (["b1", "b2", "b3"].indexOf(ref.tab) >= 0) {
+    // provider riêng cho bước này của bài này — chọn tay thì ghi vào story.json, ưu tiên trên mặc định đầu grid
+    const names = MODEL.providers || [];
+    const pick = String((row.prov || {})[ref.tab] || "");
+    const sel = document.createElement("select");
+    sel.className = "prov";
+    const none = el("option", null, "— theo workspace/preset —");
+    none.value = "";
+    sel.appendChild(none);
+    names.forEach(name => { const o = el("option", null, name); o.value = name; sel.appendChild(o); });
+    sel.value = names.indexOf(pick) >= 0 ? pick : "";
+    sel.title = "Provider riêng cho " + STEP_TITLE[ref.tab] + " của " + row.id +
+      " — mặc định của grid đang là " + String(MODEL.defaults[ref.tab] || "preset") + ", để trống là không chọn riêng";
+    sel.addEventListener("click", e => e.stopPropagation());
+    sel.addEventListener("change", () => send({ source: "set_provider", id: row.id, step: ref.tab, provider: sel.value }));
+    tools.appendChild(sel);
+  }
   if (ref.tab !== "b2") {
     const field = tabField(ref.tab);
     if (field) {
@@ -479,7 +498,7 @@ function modalNode() {
   modal.appendChild(tools);
   modal.appendChild(modalBody(row, ref.tab, key));
   modal.appendChild(el("div", "mfoot",
-    "click 1 lần ở ô B1/B3 = copy · click đúp = mở modal này · Esc hoặc ✕ để đóng · ảnh lớn quá " + (2 * 1024) + " KB thì mở bài ở trang Tạo bài để xem"));
+    "click 1 lần ở ô B1/B3 = copy · click đúp = mở modal này · Esc hoặc ✕ để đóng · danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · ảnh lớn quá " + (2 * 1024) + " KB thì mở bài ở trang Tạo bài để xem"));
 
   overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
   overlay.appendChild(modal);
@@ -499,7 +518,8 @@ function shortUrl(raw) { return String(raw || "").replace(/^https?:\/\//, "").re
 
 function repaint() {
   render({ rows: MODEL.rows, workspace: MODEL.workspace, copy_response: MODEL.copy_response,
-           summary: MODEL.summary, queue_ids: MODEL.queue_ids, error_ids: MODEL.error_ids });
+           summary: MODEL.summary, queue_ids: MODEL.queue_ids, error_ids: MODEL.error_ids,
+           providers: MODEL.providers, defaults: MODEL.defaults });
 }
 
 function linkEditor(row, td) {
@@ -755,6 +775,8 @@ function render(args) {
     summary: args.summary && typeof args.summary === "object" ? args.summary : {},
     queue_ids: Array.isArray(args.queue_ids) ? args.queue_ids : [],
     error_ids: Array.isArray(args.error_ids) ? args.error_ids : [],
+    providers: Array.isArray(args.providers) ? args.providers : [],
+    defaults: args.defaults && typeof args.defaults === "object" ? args.defaults : {},
   };
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
   const alive = new Set(rows().map(r => String(r.id)));
