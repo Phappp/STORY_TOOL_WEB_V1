@@ -45,11 +45,36 @@ class Runner:
         self._current: Job | None = None
         self._thread: threading.Thread | None = None
         self._stopping = False
+        self._paused = False
+        self._inline: set[str] = set()  # bài trang khác (Tạo bài) đang chạy ngay tại chỗ
         self._lines: list[str] = []
         self.done = 0
         self.total = 0
 
     # ---------- grid gọi, luôn ở thread chính ----------
+    def in_flight(self) -> set[str]:
+        """Mọi id đang có việc chờ/chạy — tính cả bài trang Tạo bài đang giữ."""
+        ids = set(self._inline)
+        if self._current:
+            ids |= set(self._current.ids)
+        for job in self._jobs:
+            ids |= set(job.ids)
+        return ids
+
+    def claim_inline(self, ids: list[str]) -> list[str]:
+        """Xin chạy ngay ở trang khác. Trả về id đang bận — khóa file chỉ chống ghi chồng, còn đây là
+        chặn hai nơi cùng gọi AI cho MỘT bài (tốn tiền, kết quả đè nhau)."""
+        with self._cv:
+            wanted = [str(i) for i in ids if str(i)]
+            busy = [sid for sid in wanted if sid in self.in_flight()]
+            if not busy:
+                self._inline.update(wanted)
+            return busy
+
+    def release_inline(self, ids: list[str]) -> None:
+        with self._cv:
+            self._inline.difference_update(str(i) for i in ids)
+
     def submit(self, job: Job) -> str:
         """Nhận một việc; trả dòng nói rõ đã nhận hay từ chối để grid in ra ngay."""
         ids = [str(i) for i in job.ids if str(i)]
@@ -57,18 +82,21 @@ class Runner:
             return "Việc rỗng — không có bài nào để chạy."
         job.ids = ids
         with self._cv:
-            busy = [sid for sid in ids if any(sid in j.ids for j in self._jobs)
-                    or (self._current and sid in self._current.ids)]
+            busy = [sid for sid in ids if sid in self.in_flight()]
             if busy:
-                return (f"{', '.join(busy)}: đang chờ/chạy trong luồng nền — xong bài này hãy bấm lại.")
+                where = "trang Tạo bài" if any(s in self._inline for s in busy) else "luồng nền"
+                return f"{', '.join(busy)}: đang chờ/chạy trong {where} — xong bài này hãy bấm lại."
             if not self._current and not self._jobs:
                 self.done, self.total = 0, len(ids)
             else:
                 self.total += len(ids)
             ahead = len(self._jobs) + (1 if self._current else 0)  # số việc đang chạy trước nó
+            was_paused = self._paused
             self._jobs.append(job)
             self._ensure_thread()
             self._cv.notify_all()
+        if was_paused:
+            return f"Luồng nền đang DỪNG — {job.label} ({len(ids)} bài) xếp chờ, bấm ▶ Chạy tiếp để làm."
         if ahead == 0:
             return f"Luồng nền đang chạy: {job.label} ({len(ids)} bài)."
         return f"Đã xếp vào luồng nền: {job.label} — đứng thứ {ahead + 1} ({len(ids)} bài)."
@@ -92,12 +120,14 @@ class Runner:
             return {
                 "busy": bool(self._current or self._jobs),
                 "running": bool(self._current),
+                "paused": self._paused,
                 "current": self._current.label if self._current else "",
                 "queued": len(self._jobs),
                 "done": self.done,
                 "total": self.total,
                 "running_ids": running_ids,
                 "waiting_ids": waiting_ids,
+                "inline": sorted(self._inline),
                 "flow": flow,
                 "lines": len(self._lines),
             }
@@ -106,6 +136,20 @@ class Runner:
         """Chỉ lấy dòng mới sinh ra kể từ lần đọc trước, để log không in lại kết quả cũ."""
         with self._cv:
             return self._lines[seen:], len(self._lines)
+
+    def pause(self) -> int:
+        """Phanh: bài ĐANG chạy vẫn chạy cho xong (không cắt giữa lượt gọi AI), việc còn lại nằm nguyên trong hàng đợi."""
+        with self._cv:
+            self._paused = True
+            self._cv.notify_all()
+            return len(self._jobs)
+
+    def resume(self) -> int:
+        with self._cv:
+            self._paused = False
+            self._ensure_thread()
+            self._cv.notify_all()
+            return len(self._jobs)
 
     def stop(self, timeout: float = 5.0) -> None:
         """Dừng cho test; thread là daemon nên đóng app không phải chờ nó."""
@@ -125,8 +169,8 @@ class Runner:
     def _loop(self) -> None:
         while True:
             with self._cv:
-                while not self._jobs and not self._stopping:
-                    self._cv.wait()
+                while (not self._jobs or self._paused) and not self._stopping:
+                    self._cv.wait()  # pause() giữ việc lại đây, resume() mới đi tiếp
                 if self._stopping:
                     return
                 job = self._jobs.pop(0)

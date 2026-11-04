@@ -162,11 +162,48 @@ def _executor(event: dict, root: Path) -> list[str]:
 RUNNER = gr.Runner(_executor)
 
 
+def start_inline(sid: str) -> str:
+    """Trang Tạo bài chạy bước AI ngay tại chỗ: xin giữ chỗ bài này để luồng nền không làm trùng.
+
+    Trả '' nếu được giữ (phải gọi end_inline khi xong), ngược lại trả dòng giải thích vì sao đừng chạy.
+    """
+    if not sid or not RUNNER.claim_inline([str(sid)]):
+        return ""
+    return (f"{sid}: đang chờ/chạy trong luồng nền — chờ nó xong rồi bấm ở trang này, "
+            "hoặc bấm ⏸ Dừng trên Grid rồi chạy lại.")
+
+
+def end_inline(sid: str) -> None:
+    RUNNER.release_inline([str(sid)])
+
+
 def runner_line(snap: dict) -> str:
+    if snap.get("paused"):
+        head = f"⏸ Luồng nền đang DỪNG — {snap['queued']} việc chờ"
+        return head + (f" (bài đang chạy vẫn chạy tới khi xong: {snap['current']})" if snap["running"] else "")
     if not snap["busy"]:
         return f"Luồng nền đang trống — {snap['done']}/{snap['total']} bài vừa xong."
     head = f"⏳ Luồng nền: {snap['current']}" if snap["running"] else f"⏳ Luồng nền còn {snap['queued']} việc chờ"
     return f"{head} · {snap['done']}/{snap['total']} bài xong"
+
+
+def flow_bar(snap: dict) -> None:
+    """Phanh luồng nền: dừng là NGĂN VIỆC MỚI BẮT ĐẦU, không phải cắt giữa lượt gọi AI."""
+    if not (snap["busy"] or snap.get("paused")):
+        return
+    st.caption(runner_line(snap))
+    col_btn, _ = st.columns([1, 6])
+    if snap.get("paused"):
+        if col_btn.button(f"▶ Chạy tiếp ({snap['queued']} việc chờ)", key="grid_flow_resume",
+                          help="Bỏ phanh để luồng nền làm tiếp đúng hàng đợi đang xếp."):
+            n = RUNNER.resume()
+            _push([f"Luồng nền chạy tiếp — còn {n} việc trong hàng đợi."])
+            st.rerun()
+    elif col_btn.button("⏸ Dừng", key="grid_flow_pause",
+                        help="Bài ĐANG chạy vẫn chạy cho xong; những việc còn xếp trong hàng đợi sẽ dừng lại."):
+        n = RUNNER.pause()
+        _push([f"Đã phanh luồng nền — {n} việc chờ, bấm ▶ Chạy tiếp để làm tiếp."])
+        st.rerun()
 
 
 def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
@@ -404,9 +441,9 @@ def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = N
                        help="Bài trong hàng đợi nổi lên đầu grid và được ⚡ Chạy hàng đợi làm tuần tự"):
         _after(ctx, {"source": "queue_remove" if in_queue else "queue_add", "id": sid})
         st.rerun()
-    if qcols[1].button(f"▶ Bắt đầu ({min(len(queued_ids), ga.MAX_BATCH)}/{len(queued_ids)})",
+    if qcols[1].button(f"▶ Bắt đầu {len(queued_ids)} bài",
                        disabled=not queued_ids, key="native_queue_run",
-                       help=f"Chạy tuần tự các bài trong hàng đợi, tối đa {ga.MAX_BATCH} bài/lần"):
+                       help=f"Luồng nền chạy tuần tự cả hàng đợi, {ga.MAX_BATCH} bài/lượt và tự chạy tiếp tới khi hết"):
         _after(ctx, {"source": "batch_run", "ids": queued_ids})
         st.rerun()
     if qcols[2].button(f"⚠ Xếp {len(err_ids)} bài lỗi vào hàng đợi", disabled=not err_ids, key="native_queue_errors",
@@ -418,10 +455,8 @@ def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = N
         st.rerun()
 
     picked = st.multiselect("Bài chạy batch", ids, format_func=lambda i: labels[i], key="native_batch")
-    n_run = min(len(picked), ga.MAX_BATCH)
-    skip = len(picked) - n_run
-    if st.button(f"⚡ Chạy {n_run} bài đã chọn" + (f" — {skip} bài để lượt sau" if skip else ""),
-                 disabled=not picked, key="native_batch_run"):
+    if st.button(f"⚡ Chạy {len(picked)} bài đã chọn", disabled=not picked, key="native_batch_run",
+                 help=f"Luồng nền chạy tuần tự, {ga.MAX_BATCH} bài/lượt và tự chạy tiếp tới khi hết"):
         _after(ctx, {"source": "batch_run", "ids": picked})
         st.rerun()
     copy_blocks(ctx, sid)
@@ -461,8 +496,10 @@ def _body(ctx: ga.Ctx) -> None:
     outcome = consume_event(ctx)
     snap = RUNNER.snapshot()
     was_busy = bool(st.session_state.get("grid_flow_busy"))
-    if snap["busy"] or was_busy:
-        st.caption(runner_line(snap))
+    if snap["busy"] or snap.get("paused"):
+        flow_bar(snap)
+    elif was_busy:
+        st.caption(runner_line(snap))  # luồng nền vừa cạn -> nói một câu cho biết đã xong bao nhiêu bài
     lines, seen = RUNNER.new_lines(int(st.session_state.get("grid_flow_seen") or 0))
     if lines:
         _push(lines)

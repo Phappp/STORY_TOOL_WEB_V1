@@ -20,6 +20,11 @@ MAX_KEYWORDS = 4
 PER_KEYWORD = 4
 
 
+def why(exc: Exception) -> str:
+    """ProviderError đã mang dòng người dùng đọc được; lỗi khác thì ghi kèm loại để biết đường sửa."""
+    return str(exc) if isinstance(exc, prov.ProviderError) else f"{type(exc).__name__}: {exc}"
+
+
 @dataclass
 class Result:
     cap: str | None = None
@@ -129,9 +134,9 @@ def run_b1(root: Path, sid: str, preset, provider, model: str, post) -> tuple[st
     stories.set_step_state(root, sid, "b1", "running", provider=provider["name"], model=model)
     try:
         text = prov.chat(provider, model, prompts.gen_prompt(preset["caption_prompt"], prompts.prompt_context(post)))
-    except prov.ProviderError as exc:
-        stories.set_step_state(root, sid, "b1", "error", detail=str(exc))
-        return None, f"B1 caption LỖI: {exc}"
+    except Exception as exc:
+        stories.set_step_state(root, sid, "b1", "error", detail=why(exc))
+        return None, f"B1 caption LỖI: {why(exc)}"
     stories.save_step_text(root, sid, "b1", text, provider=provider["name"], model=model)
     return text, "B1 caption: OK"
 
@@ -149,8 +154,8 @@ def generate_image(root: Path, sid: str, prompt: str, refs: list, codex_row) -> 
     stories.set_step_state(root, sid, "b2", "running", method="codex")
     try:
         src = prov.codex_generate_image(prompt, refs)
-    except prov.ProviderError as exc:
-        return None, str(exc)
+    except Exception as exc:
+        return None, why(exc)
     return save_image(root, sid, src, method="codex"), None
 
 
@@ -160,8 +165,8 @@ def keywords_for_image(root: Path, sid: str, preset, post, provider, model: str,
         return [], None
     try:
         raw = prov.chat(provider, model, prompts.gen_prompt(preset["keyword_prompt"], prompts.prompt_context(post, caption)))
-    except prov.ProviderError as exc:
-        return [], str(exc)
+    except Exception as exc:
+        return [], why(exc)
     kws = images.extract_keywords(raw)
     if kws:
         set_keywords(root, sid, kws)
@@ -211,9 +216,9 @@ def run_b3(root: Path, sid: str, preset, provider, model: str, post, caption: st
     try:
         text = prov.chat(provider, model, prompts.gen_prompt(
             preset["seo_prompt"], ctx, extra_fallback="\nCaption đã duyệt:\n" + (post["caption"] or "—")))
-    except prov.ProviderError as exc:
-        stories.set_step_state(root, sid, "b3", "error", detail=str(exc))
-        return f"B3 SEO LỖI: {exc}", None
+    except Exception as exc:
+        stories.set_step_state(root, sid, "b3", "error", detail=why(exc))
+        return f"B3 SEO LỖI: {why(exc)}", None
     stories.save_step_text(root, sid, "b3", text, provider=provider["name"], model=model)
     return "B3 SEO: OK", text
 

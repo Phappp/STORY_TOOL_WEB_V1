@@ -79,6 +79,23 @@ def require_root() -> Path:
     return root
 
 
+def run_inline(sid: str, label: str, fn):
+    """Chạy một bước AI NGAY tại trang Tạo bài sau khi đã giữ chỗ bài đó trong luồng nền.
+
+    Trả None (kèm dòng lỗi) khi bài đang có việc ở luồng nền — hai nơi cùng gọi AI cho một bài
+    là tốn tiền hai lần và kết quả đè nhau.
+    """
+    why = grid.start_inline(sid)
+    if why:
+        st.error(why)
+        return None
+    try:
+        with st.spinner(label):
+            return fn()
+    finally:
+        grid.end_inline(sid)
+
+
 def sync_staged_refs(root: Path, sid: str) -> None:
     """Ảnh B0 đang stage -> copy vào refs/ của story; session chỉ giữ đường dẫn trong story."""
     staged = [Path(p) for p in st.session_state.get("b0_ref_paths", []) if Path(p).is_file()]
@@ -312,9 +329,11 @@ def page_create(c):
             ref_paths = []
             ref_log.append(f"Ảnh gốc LỖI: {exc}")
 
-        with st.spinner("⚡ B1 · caption → (B2 ảnh ∥ B3 SEO) đang chạy…"):
-            res = steps.run_pipeline(wroot, sid, preset, post, ref_paths, rows, providers,
-                                     caption=st.session_state.get("caption_draft"), extra_lines=ref_log)
+        res = run_inline(sid, "⚡ B1 · caption → (B2 ảnh ∥ B3 SEO) đang chạy…",
+                         lambda: steps.run_pipeline(wroot, sid, preset, post, ref_paths, rows, providers,
+                                                    caption=st.session_state.get("caption_draft"), extra_lines=ref_log))
+        if res is None:
+            st.stop()
 
         if res.cap is not None:
             st.session_state["caption_draft"] = res.cap
@@ -341,13 +360,15 @@ def page_create(c):
             else:
                 post = ensure_story()
                 wroot = require_root()
-                with st.spinner("Đang tạo caption…"):
-                    text, log = steps.run_b1(wroot, story_id, preset, provider, model, post)
-                if text is not None:
-                    st.session_state["caption_draft"] = text
-                    st.success(f"Đã lưu caption vào {story_id}/caption.txt.")
-                else:
-                    st.error(log)
+                got = run_inline(story_id, "Đang tạo caption…",
+                                 lambda: steps.run_b1(wroot, story_id, preset, provider, model, post))
+                if got is not None:  # None = bài đang có việc ở luồng nền, run_inline đã in lý do
+                    text, log = got
+                    if text is not None:
+                        st.session_state["caption_draft"] = text
+                        st.success(f"Đã lưu caption vào {story_id}/caption.txt.")
+                    else:
+                        st.error(log)
     caption = st.text_area("Caption (bạn có thể sửa tay)", key="caption_draft", height=160, label_visibility="collapsed")
     if c2.button("Lưu caption"):
         if not story_id:
@@ -404,14 +425,16 @@ def page_create(c):
                     except Exception as exc:
                         refs = []
                         st.warning(f"Không dùng được ảnh gốc: {exc}")
-                    with st.spinner("Codex đang tạo ảnh (có thể mất vài phút)…"):
-                        image, err = steps.generate_image(wroot, story_id, final_prompt, refs, codex_row)
-                    if err is not None:
-                        stories.set_step_state(wroot, story_id, "b2", "error", detail=err)
-                        st.error(err)
-                    else:
-                        st.session_state["saved_images"] = json.loads(stories.post_view(wroot, story_id)["images"])
-                        st.success(f"Đã tạo ảnh mới, ghi đè ảnh cũ: {image}")
+                    got = run_inline(story_id, "Codex đang tạo ảnh (có thể mất vài phút)…",
+                                     lambda: steps.generate_image(wroot, story_id, final_prompt, refs, codex_row))
+                    if got is not None:  # None = bài đang có việc ở luồng nền, run_inline đã in lý do
+                        image, err = got
+                        if err is not None:
+                            stories.set_step_state(wroot, story_id, "b2", "error", detail=err)
+                            st.error(err)
+                        else:
+                            st.session_state["saved_images"] = json.loads(stories.post_view(wroot, story_id)["images"])
+                            st.success(f"Đã tạo ảnh mới, ghi đè ảnh cũ: {image}")
     else:
         if st.button("AI tạo từ khóa ảnh"):
             if provider_kw is None:
@@ -421,12 +444,15 @@ def page_create(c):
             else:
                 post = stories.post_view(root, story_id) if (root and story_id) else ensure_story()
                 wroot = require_root()
-                with st.spinner("Đang tạo từ khóa…"):
-                    kws, kw_err = steps.keywords_for_image(wroot, story_id, preset, post, provider_kw, model_kw, st.session_state.get("caption_draft") or None)
-                if kw_err:
-                    st.error(kw_err)
-                else:
-                    st.session_state["keywords_text"] = ", ".join(kws)
+                got = run_inline(story_id, "Đang tạo từ khóa…",
+                                 lambda: steps.keywords_for_image(wroot, story_id, preset, post, provider_kw, model_kw,
+                                                                  st.session_state.get("caption_draft") or None))
+                if got is not None:  # None = bài đang có việc ở luồng nền, run_inline đã in lý do
+                    kws, kw_err = got
+                    if kw_err:
+                        st.error(kw_err)
+                    else:
+                        st.session_state["keywords_text"] = ", ".join(kws)
         keywords_text = st.text_input("Từ khóa (cách nhau bởi dấu phẩy — sửa tay được)", key="keywords_text")
         kw_list = [k.strip() for k in keywords_text.split(",") if k.strip()]
         chosen_kw = None
@@ -485,13 +511,16 @@ def page_create(c):
             else:
                 post = stories.post_view(root, story_id) if (root and story_id) else ensure_story()
                 wroot = require_root()
-                with st.spinner("Đang viết bài SEO…"):
-                    seo_log, seo_text = steps.run_b3(wroot, story_id, preset, provider_seo, model_seo, post, st.session_state.get("caption_draft") or None)
-                if seo_text is not None:
-                    st.session_state["seo_draft"] = seo_text
-                    st.success(f"Đã lưu bài SEO vào {story_id}/seo.md.")
-                else:
-                    st.error(seo_log)
+                got = run_inline(story_id, "Đang viết bài SEO…",
+                                 lambda: steps.run_b3(wroot, story_id, preset, provider_seo, model_seo, post,
+                                                      st.session_state.get("caption_draft") or None))
+                if got is not None:  # None = bài đang có việc ở luồng nền, run_inline đã in lý do
+                    seo_log, seo_text = got
+                    if seo_text is not None:
+                        st.session_state["seo_draft"] = seo_text
+                        st.success(f"Đã lưu bài SEO vào {story_id}/seo.md.")
+                    else:
+                        st.error(seo_log)
     seo = st.text_area("Bài SEO (sửa tay thoải mái)", key="seo_draft", height=260, label_visibility="collapsed")
     if s2.button("Lưu bài SEO"):
         if not story_id:

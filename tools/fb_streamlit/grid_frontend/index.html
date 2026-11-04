@@ -915,17 +915,17 @@ function updateBar() {
   if (!b) return;
   const n = PICKED.size;
   b.disabled = n === 0;
-  b.textContent = "⚡ Chạy đã chọn (" + Math.min(n, MAX_BATCH) + (n > MAX_BATCH ? "/" + n : "") + ")";
+  b.textContent = "⚡ Chạy " + n + " bài đã chọn";
   b.title = n > MAX_BATCH
-    ? "Tối đa " + MAX_BATCH + " bài/lần — " + (n - MAX_BATCH) + " bài để lượt sau"
-    : "Chạy pipeline cho các bài đã chọn, tuần tự";
+    ? "Luồng nền chạy tuần tự " + n + " bài, chia " + Math.ceil(n / MAX_BATCH) + " lượt (" + MAX_BATCH + " bài/lượt), tự chạy tiếp tới khi hết"
+    : "Chạy pipeline cho các bài đã chọn, tuần tự trong luồng nền";
   const q = document.getElementById("queuerun");
   if (q) {
     const ids = queueIds();
     q.disabled = ids.length === 0;
-    q.textContent = "▶ Bắt đầu (" + Math.min(ids.length, MAX_BATCH) + (ids.length > MAX_BATCH ? "/" + ids.length : "") + ")";
+    q.textContent = "▶ Bắt đầu " + ids.length + " bài";
     q.title = ids.length > MAX_BATCH
-      ? "Tối đa " + MAX_BATCH + " bài/lần — " + (ids.length - MAX_BATCH) + " bài để lượt sau"
+      ? "Luồng nền chạy cả " + ids.length + " bài theo thứ tự # — chia " + Math.ceil(ids.length / MAX_BATCH) + " lượt, tự chạy tiếp"
       : "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #";
   }
   const e = document.getElementById("queueerr");

@@ -173,9 +173,9 @@ def b0_meta(story: dict) -> str:
 
 
 def bucket(states: dict) -> str:
-    """Nhóm việc của cả bài — 'treo' tính luôn vào 'lỗi' vì tiến trình đã chết giữa chừng."""
+    """Nhóm việc của cả bài — 'treo' và 'mất file' tính vào 'lỗi' vì đều là bài phải xử lý lại."""
     values = list(states.values())
-    if any(state in (stories.ERROR, STALE) for state in values):
+    if any(state in (stories.ERROR, STALE, stories.MISSING) for state in values):
         return "error"
     if any(state == stories.RUNNING for state in values):
         return "running"
@@ -489,6 +489,22 @@ def batch_ids(raw) -> tuple[list[str], str]:
     return all_ids[:MAX_BATCH], f"Batch chỉ chạy tối đa {MAX_BATCH} bài/lần — {len(all_ids) - MAX_BATCH} bài để lượt sau."
 
 
+def mark_crash(root: Path, sid: str, detail: str) -> None:
+    """Event chết giữa chừng: bước nào còn 'running' phải đóng lại thành 'error' ngay.
+
+    Nếu không, grid báo 'treo' và phải đợi hết STALE_SECONDS (15 phút) bài mới hiện lại là lỗi.
+    """
+    try:
+        story = stories.load_story(root, sid)
+    except stories.WorkspaceError:
+        return
+    for step in ALL_STEPS:
+        if str((story.get(step) or {}).get("state") or "") == stories.RUNNING:
+            stories.set_step_state(root, sid, step, stories.ERROR, detail=detail)
+    if str((story.get("b0") or {}).get("state") or "") == stories.RUNNING:
+        steps.set_b0(root, sid, state=stories.ERROR, detail=detail)
+
+
 def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
     """Một event grid -> Outcome (dòng log, story cần chọn, trang cần nhảy tới, nội dung copy).
 
@@ -517,7 +533,11 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             if note:
                 out.lines.append(note)
             for i, bid in enumerate(ids, start=1):
-                out.lines += run(ctx, bid)
+                try:
+                    out.lines += run(ctx, bid)
+                except Exception as exc:  # một bài hỏng giữa batch không được kéo 4 bài còn lại dừng theo
+                    mark_crash(ctx.root, bid, steps.why(exc))
+                    out.lines.append(f"{bid}: {type(exc).__name__}: {exc}")
                 out.touched.append(bid)
                 if on_batch is not None:
                     on_batch(bid, i, len(ids))
@@ -591,4 +611,9 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             out.lines = [f"Event không hợp lệ: {source or '(trống)'}"]
     except (stories.WorkspaceError, prov.ProviderError) as exc:
         out.lines = out.lines + [f"{sid or '?'}: {exc}"]
+    except Exception as exc:  # lỗi bất ngờ cũng phải đóng bước lại: để state 'running' thì grid báo 'treo' 15 phút
+        detail = steps.why(exc)
+        if sid:
+            mark_crash(ctx.root, sid, detail)
+        out.lines = out.lines + [f"{sid or '?'}: việc dở giữa chừng — {detail}"]
     return out
