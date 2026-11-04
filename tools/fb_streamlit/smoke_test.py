@@ -1729,7 +1729,7 @@ check("P8i không còn animation cho ô đang chạy + có dead-band 4px cho chi
       "flowpulse" not in js_p8i and "prefers-reduced-motion" in js_p8i
       and "Math.abs(h - LAST_H) < 4" in js_p8i)
 check("P8i bỏ qua ô đang nhận con trỏ gõ khi vá, nhưng vẫn giữ đường thoát blur cho ô Link",
-      "old.contains(document.activeElement)" in js_p8i and "function leave() { if (document.activeElement === input) input.blur(); }" in js_p8i)
+      "isTypingIn(a, old)" in js_p8i and "function leave() { if (document.activeElement === input) input.blur(); }" in js_p8i)
 
 # P8ii: lưới mặc theo phong cách grid status legacy FX97 — nền tối, mỗi trạng thái có viền riêng,
 # ô bước là pill 32x24. Cột steps phải đủ rộng cho 4 pill (32*4 + kẽ 3*4 + đệm ô 16 = 156px),
@@ -1941,6 +1941,92 @@ if len(p9_plist) >= 2:
     check("P9b nút 'Gán … cho bài này' ghi đúng preset đang hiện lên story.json",
           not at_p9c.exception and stories.load_story(p8_root, p8_show_sid).get("preset_id")
           == next(w for w in at_p9c.selectbox if w.key == "create_preset").value)
+
+# --- P10a: nhãn ô hàng đợi phải nói thật (＋ xếp CUỐI, không phải trên cùng) ---
+check("P10a tooltip ＋ nói 'xếp CUỐI', hết câu hứa sai 'xếp trên cùng' ở mọi chỗ trong JS",
+      "Thêm bài vào hàng đợi — xếp CUỐI" in js_p8i and "xếp trên cùng" not in js_p8i
+      and "Bỏ khỏi hàng đợi" in js_p8i and "không cắt giữa lượt AI" in js_p8i)
+check("P10a tiêu đề cột # giải thích số đó là thứ tự làm, JS gắn tip từ COLS",
+      'key: "q"' in js_p8i and "th.title = c.tip" in js_p8i and "# = thứ tự hàng đợi" in js_p8i)
+check("P10a tick vá chỉ hoãn Ô ĐANG NHẬN CHỮ (input/textarea/contenteditable), không hoãn mọi ô có focus",
+      "function isTypingIn(node, cell)" in js_p8i and "node.isContentEditable" in js_p8i
+      and "if (!old || isTypingIn(a, old)) return;" in js_p8i
+      and "old.contains(document.activeElement)" not in js_p8i)
+p10_sid = stories.create_story(p8_root, "Bài log hàng đợi")["id"]
+_q_line = ga.apply_event(_p8ctx, {"source": "queue_add", "id": p10_sid}).lines[0]
+ga.apply_event(_p8ctx, {"source": "queue_remove", "id": p10_sid})
+check("P10a log 'vào hàng đợi' cũng nói đúng chỗ nó đứng trong hàng đợi",
+      "xếp CUỐI" in _q_line and "xếp trên cùng" not in _q_line)
+check("P10b bỏ khỏi hàng đợi xóa luôn mốc queued_at, không để dữ liệu chết trong story.json",
+      stories.load_story(p8_root, p10_sid).get("queued_at") is None
+      and "queued_at=None" in inspect.getsource(ga.apply_event))
+
+# --- P10b: 'bỏ khỏi hàng đợi' phải RÚT THẬT việc chưa bắt đầu trong luồng nền ---
+started_p10: list[str] = []
+hold_p10 = threading.Event()
+entered_p10 = threading.Event()
+
+
+def slow_p10(event, root):
+    sid = str(event.get("id") or (event.get("ids") or ["?"])[0])
+    started_p10.append(sid)
+    entered_p10.set()
+    hold_p10.wait(10)
+    return [f"{sid}: xong"]
+
+
+runner_p10 = gr.Runner(slow_p10)
+# ids giả (không trùng story nào của p8_root) để đo riêng phần rút việc; bài của app thật dùng p8_q_sid
+j_p10a, _ = gr.job_for({"source": "run_step", "id": "busy_001", "step": "b1"}, p8_root)
+runner_p10.submit(j_p10a[0])
+entered_p10.wait(5)
+j_p10b, _ = gr.job_for({"source": "batch_run", "ids": ["wait_1", "wait_2", "wait_3"]}, p8_root)
+runner_p10.submit(j_p10b[0])
+check("P10b setup: một bài đang chạy + một batch 3 bài đang chờ",
+      runner_p10.snapshot()["running_ids"] == ["busy_001"]
+      and runner_p10.snapshot()["waiting_ids"] == ["wait_1", "wait_2", "wait_3"]
+      and runner_p10.snapshot()["total"] == 4)
+line_busy = runner_p10.cancel(["busy_001"])
+check("P10b bài ĐANG chạy thì không cắt giữa lượt AI — nói rõ, không giả vờ đã hủy",
+      any("không cắt giữa lượt AI" in l for l in line_busy) and "busy_001" in runner_p10.snapshot()["running_ids"])
+check("P10b bài chưa có việc trong luồng nền -> cancel im lặng, không bịa dòng 'đã rút'",
+      runner_p10.cancel(["ghost_9"]) == [])
+line_cut = runner_p10.cancel(["wait_2"])
+job_wait = runner_p10._jobs[0]
+s_cut = runner_p10.snapshot()
+check("P10b rút 1 bài khỏi batch chưa bắt đầu: ids, event gửi cho executor và bộ đếm cùng gọn đi",
+      any("đã rút khỏi 1 việc" in l for l in line_cut) and job_wait.ids == ["wait_1", "wait_3"]
+      and job_wait.event["ids"] == ["wait_1", "wait_3"] and s_cut["total"] == 3
+      and s_cut["waiting_ids"] == ["wait_1", "wait_3"])
+check("P10b nhãn việc batch tính theo ids hiện tại — hết cảnh rút bài rồi còn khoe '3 bài'",
+      job_wait.label == "⚡ đủ B1-B3 · 2 bài")
+runner_p10.cancel(["wait_1", "wait_3"])
+check("P10b rút hết bài thì việc bị bỏ hẳn, luồng nền không chạy một lượt rỗng",
+      runner_p10._jobs == [] and not runner_p10.snapshot()["waiting_ids"])
+# hàng đợi của app thật: bài đã ⚡ giao vào luồng nền, bấm bỏ khỏi hàng đợi phải rút được việc chờ
+j_p10q, _ = gr.job_for({"source": "run_step", "id": p8_q_sid, "step": "b1"}, p8_root)
+note_q = runner_p10.submit(j_p10q[0])
+fbgrid.RUNNER = runner_p10
+at_p8.session_state[fbgrid.KEY] = {"event_id": "evt-p10-1", "source": "queue_remove", "id": p8_q_sid}
+at_p8.run()
+log_p10 = at_p8.session_state.get("grid_log") or []
+check("P10b qua app thật: bỏ khỏi hàng đợi rút luôn việc chưa bắt đầu của bài đó trong luồng nền",
+      not at_p8.exception and "đang chờ/chạy" not in note_q and p8_q_sid not in runner_p10.in_flight()
+      and any("đã rút khỏi" in l and p8_q_sid in l for l in log_p10))
+check("P10b bài bị rút khỏi hàng đợi không còn mang mốc queued_at cũ",
+      stories.load_story(p8_root, p8_q_sid).get("queued_at") is None)
+hold_p10.set()
+check("P10b bài đang chạy vẫn được làm tới khi xong, sau đó luồng nền báo rảnh với số bài thật",
+      wait_flow(runner_p10) and started_p10 == ["busy_001"]
+      and runner_p10.snapshot()["total"] == runner_p10.snapshot()["done"] == 1)
+held_p10 = runner_p10.claim_inline(["busy_tai_cho"])
+line_inline = runner_p10.cancel(["busy_tai_cho"])
+check("P10b bài trang Tạo bài đang chạy tại chỗ: bỏ hàng đợi KHÔNG nhả khóa chạy của trang đó",
+      held_p10 == [] and any("khóa chạy vẫn còn nguyên" in l for l in line_inline)
+      and runner_p10.snapshot()["inline"] == ["busy_tai_cho"])
+runner_p10.release_inline(["busy_tai_cho"])
+runner_p10.stop()
+fbgrid.RUNNER = _real_runner
 
 fbgrid.rows_for = _real_rows_for
 fbgrid.component = _real_component_p8

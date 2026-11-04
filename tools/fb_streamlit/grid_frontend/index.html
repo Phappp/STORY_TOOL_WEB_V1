@@ -160,7 +160,7 @@ const GRID_STEPS = ["b0", "b1", "b2", "b3"];
 const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy · xanh dương đang chạy · xanh lá xong · đỏ lỗi · đỏ nét đứt treo >15 phút · cam mất file";
 // Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
 const COLS = [
-  { key: "q", label: "#", w: 40, min: 34, align: "c" },
+  { key: "q", label: "#", w: 40, min: 34, align: "c", tip: "# = thứ tự hàng đợi: bài bấm ＋ trước làm trước, bài mới xếp cuối. Bấm số đó để bỏ khỏi hàng đợi." },
   { key: "pick", label: "", w: 30, min: 26 },
   { key: "id", label: "story", w: 92, min: 64 },
   { key: "src", label: "nguồn", w: 210, min: 80 },
@@ -765,7 +765,9 @@ function queueCell(row) {
   const td = el("td", "q");
   const queued = !!row.queued;
   td.appendChild(button(queued ? String(row.queue_pos || "·") : "＋",
-    queued ? "Bỏ bài khỏi hàng đợi" : "Thêm bài vào hàng đợi (xếp trên cùng, chạy bằng ⚡ Chạy hàng đợi)",
+    queued ? "Bỏ khỏi hàng đợi — số này là thứ tự làm (bài bấm trước làm trước). Nếu bài đã được ⚡ giao vào"
+      + " luồng nền mà chưa bắt đầu thì rút luôn; bài ĐANG chạy thì không cắt giữa lượt AI."
+           : "Thêm bài vào hàng đợi — xếp CUỐI, luồng nền làm hết bài trước rồi tới nó (chạy bằng ⚡ Chạy hàng đợi)",
     () => send({ source: queued ? "queue_remove" : "queue_add", id: row.id }), "q" + (queued ? " on" : "")));
   return td;
 }
@@ -994,6 +996,11 @@ function listSigOf(list) {
   return list.length ? list.map(r => String(r.id)).join(",") : "#empty:" + SEARCH.trim().toLowerCase();
 }
 
+function isTypingIn(node, cell) {
+  return !!node && !!cell && cell.contains(node) &&
+    (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable);
+}
+
 function patchCells(list) {
   let touched = 0;
   list.forEach((row, i) => {
@@ -1002,13 +1009,15 @@ function patchCells(list) {
     if (!tr || !sigs) return;
     const cls = rowClasses(row);
     if (tr.className !== cls) tr.className = cls;  // queued/cursor đổi là đổi cả màu hàng
+    const a = document.activeElement;
     COLS.forEach((c, k) => {
       const sig = cellSig(row, c.key);
       if (sigs[k] === sig) return;
       const old = tr.children[k];
-      // ô đang nhận con trỏ gõ (Link sửa tay, checkbox đang focus) thì để yên — tick sau vá tiếp,
-      // kẻo anh gõ dở bị xóa giữa chữ (legacy cũng bỏ qua ô có activeElement)
-      if (!old || old.contains(document.activeElement)) return;
+      // chỉ ô đang NHẬN CHỮ (Link sửa tay, checkbox vừa tick) mới để yên cho tick sau vá — kẻo anh
+      // gõ dở bị xóa giữa chữ. Bỏ qua mọi ô có focus thì sai: Chrome cho <button> nhận focus khi bấm
+      // nên ô ＋/# bị hoãn vô hạn, badge đứng yên dù server đã đổi.
+      if (!old || isTypingIn(a, old)) return;
       const td = cellNode(row, c.key);
       if (c.key === "pick") boxes[i] = td.querySelector("input");
       tr.replaceChild(td, old);
@@ -1347,6 +1356,7 @@ function render(args, force) {
     const head = el("tr");
     COLS.forEach(c => {
       const th = el("th", c.key + (c.align === "c" ? " c" : ""), c.label);
+      if (c.tip) th.title = c.tip;
       const grip = el("span", "grip");
       grip.title = "Kéo để đổi độ rộng cột — nhớ theo workspace này";
       grip.addEventListener("mousedown", ev => startDrag(ev, c, W, table, grip));

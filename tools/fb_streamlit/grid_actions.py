@@ -620,14 +620,15 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
                 out.lines = [f"{sid}: đã ở trong hàng đợi — vị trí giữ nguyên."]
             else:
                 stories.update_story(ctx.root, sid, queued=True, queued_at=time.time())
-                out.lines, out.touched = [f"{sid}: vào hàng đợi (bấm ⚡ Chạy hàng đợi để làm tuần tự)."], [sid]
+                out.lines, out.touched = [f"{sid}: vào hàng đợi — xếp CUỐI, làm tới bài trước rồi tới nó "
+                                          f"(bấm ⚡ Chạy hàng đợi)."], [sid]
         elif source == "queue_remove":
-            stories.update_story(ctx.root, sid, queued=False)
+            stories.update_story(ctx.root, sid, queued=False, queued_at=None)
             out.lines, out.touched = [f"{sid}: bỏ khỏi hàng đợi."], [sid]
         elif source == "queue_clear":
             ids = [s for s in stories.list_story_ids(ctx.root) if stories.load_story(ctx.root, s).get("queued")]
             for qid in ids:
-                stories.update_story(ctx.root, qid, queued=False)
+                stories.update_story(ctx.root, qid, queued=False, queued_at=None)
             out.lines = [f"Đã bỏ {len(ids)} bài khỏi hàng đợi." if ids else "Hàng đợi đang trống — chưa có bài nào để bỏ."]
             out.touched = ids
         elif source == "set_provider":

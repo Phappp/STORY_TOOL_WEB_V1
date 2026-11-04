@@ -256,10 +256,24 @@ def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     return out
 
 
+def _cancel_targets(event: dict) -> list[str]:
+    """Bài mà cú bấm này vừa rút khỏi hàng đợi — luồng nền phải bỏ luôn việc chưa bắt đầu của nó.
+
+    ⚡ Chạy hàng đợi giao việc theo snapshot ids, nên xóa cờ queued trong story.json một mình
+    không chặn được gì: việc đã xếp vẫn chạy.
+    """
+    if str(event.get("source") or "") == "queue_remove":
+        return [str(event.get("id") or "")]
+    return []
+
+
 def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     if str(event.get("source") or "") in gr.HEAVY_SOURCES:  # việc dài -> thread nền, grid còn vẽ được
         return hand_off(ctx, event)
+    victims = _cancel_targets(event)
     out = ga.apply_event(ctx, event)
+    if victims:
+        out.lines += RUNNER.cancel(victims)
     _collect(out, event)
     return out
 
@@ -586,7 +600,8 @@ def render(ctx: ga.Ctx) -> None:
                       "khi component không hiện được.")
     with col_filter:
         st.selectbox("Lọc bài", list(ga.FILTERS), key="grid_filter",
-                     help="Bài lỗi lên đầu, rồi chờ chạy, đang chạy, xong. Bài đã vào hàng đợi luôn ở trên cùng.")
+                     help="Bài đã vào hàng đợi nổi lên đầu danh sách lưới; thứ tự LÀM theo cột # — "
+                          "bấm ＋ trước thì làm trước, bài mới xếp cuối.")
     provider_bar(ctx)
     import_form(ctx)
     # Fragment luôn chạy đều: event từ lưới chỉ vẽ lại đúng nó, nên giao việc cho luồng nền

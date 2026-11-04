@@ -29,7 +29,12 @@ class Job:
     root: Path
     ids: list[str] = field(default_factory=list)
     steps: list[str] = field(default_factory=list)
-    label: str = ""
+    name: str = ""
+    counted: bool = False  # batch: nhãn kèm số bài, rút bài là số phải đổi theo
+
+    @property
+    def label(self) -> str:
+        return f"{self.name} · {len(self.ids)} bài" if self.counted else self.name
 
 
 class Runner:
@@ -152,6 +157,44 @@ class Runner:
             self._cv.notify_all()
             return len(self._jobs)
 
+    def cancel(self, ids: list[str]) -> list[str]:
+        """Rút bài khỏi những việc CHƯA bắt đầu trong luồng nền.
+
+        Việc đang chạy thì không cắt: bước AI giữa chừng bỏ dở sẽ để lại story.json dở dang
+        và vẫn tốn tiền. Trả về dòng log thật cho từng id, id nào chưa có việc thì im.
+        """
+        lines: list[str] = []
+        with self._cv:
+            for sid in {str(i) for i in ids if str(i)}:
+                if self._current and sid in self._current.ids:
+                    lines.append(f"{sid}: đang chạy dở trong luồng nền — không cắt giữa lượt AI; "
+                                 f"muốn dừng cả loạt bấm ⏸ Dừng.")
+                    continue
+                if sid in self._inline:
+                    # trang Tạo bài đang chạy bài này NGAY TẠI CHỖ: khóa là của nó, ở đây không có
+                    # quyền nhả (nhả là hai nơi cùng ghi một folder story).
+                    lines.append(f"{sid}: bỏ khỏi hàng đợi, nhưng trang Tạo bài đang chạy bài này "
+                                 f"ngay tại chỗ — khóa chạy vẫn còn nguyên tới khi trang đó xong.")
+                    continue
+                touched, kept = 0, []
+                for job in self._jobs:
+                    if sid not in job.ids:
+                        kept.append(job)
+                        continue
+                    touched += 1
+                    self.total = max(self.total - 1, self.done)
+                    job.ids = [i for i in job.ids if i != sid]
+                    raw = job.event.get("ids")
+                    if isinstance(raw, list):  # event batch mang ids cắt khúc — phải sửa cả hai nơi
+                        job.event["ids"] = [i for i in raw if i != sid]
+                    if job.ids:
+                        kept.append(job)
+                self._jobs = kept
+                if touched:
+                    lines.append(f"{sid}: đã rút khỏi {touched} việc chưa bắt đầu trong luồng nền.")
+            self._cv.notify_all()
+        return lines
+
     def stop(self, timeout: float = 5.0) -> None:
         """Dừng cho test; thread là daemon nên đóng app không phải chờ nó."""
         with self._cv:
@@ -196,12 +239,12 @@ def job_for(event: dict, root: Path) -> tuple[list[Job], list[str]]:
     step = str(event.get("step") or "")
     if source == "run_step":
         return [Job(event=event, root=root, ids=[sid], steps=[step],
-                    label=f"{sid} · {ga.STEP_NAMES.get(step, step)}")], []
+                    name=f"{sid} · {ga.STEP_NAMES.get(step, step)}")], []
     if source == "run_all":
         return [Job(event=event, root=root, ids=[sid], steps=list(ALL_STEPS),
-                    label=f"{sid} · ⚡ đủ B1-B3")], []
+                    name=f"{sid} · ⚡ đủ B1-B3")], []
     if source == "b0_run":
-        return [Job(event=event, root=root, ids=[sid], steps=["b0"], label=f"{sid} · B0 trích link")], []
+        return [Job(event=event, root=root, ids=[sid], steps=["b0"], name=f"{sid} · B0 trích link")], []
     if source in ("batch_run", "b0_batch"):
         raw = event.get("ids")
         ids = [str(i) for i in raw if str(i)] if isinstance(raw, (list, tuple)) else []
@@ -211,7 +254,7 @@ def job_for(event: dict, root: Path) -> tuple[list[Job], list[str]]:
         name = "B0 trích link" if source == "b0_batch" else "⚡ đủ B1-B3"
         chunks = [ids[i:i + ga.MAX_BATCH] for i in range(0, len(ids), ga.MAX_BATCH)]
         jobs = [Job(event={"source": source, "ids": chunk}, root=root, ids=chunk, steps=steps,
-                    label=f"{name} · {len(chunk)} bài") for chunk in chunks]
+                    name=name, counted=True) for chunk in chunks]
         note = (f"{len(ids)} bài → luồng nền chạy tuần tự {len(chunks)} lượt (tối đa {ga.MAX_BATCH} bài/lượt)."
                 if len(chunks) > 1 else "")
         return jobs, ([note] if note else [])
