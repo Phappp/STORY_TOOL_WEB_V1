@@ -556,18 +556,26 @@ check("bản dán Facebook là unicode đậm, không còn ký hiệu markdown",
       and "**" not in out.copy["text"] and "##" not in out.copy["text"] and "━━━" in out.copy["text"])
 out = ga.apply_event(gctx, {"source": "image_request", "id": sid_ok, "request_id": "req-img"})
 data = (out.copy or {}).get("image") or ""
-check("image_request trả data URL base64 của image.png trong folder, mode show",
-      data.startswith("data:image/png;base64,") and out.copy["field"] == "Ảnh" and out.copy["mode"] == "show"
+check("image_request trả ĐƯỜNG DẪN file chứ không nhét base64 vào message (modal tải qua /media/)",
+      out.copy is not None and data == ""
+      and out.copy["image_path"] == str(ga_root / sid_ok / "image.png")
+      and out.copy["field"] == "Ảnh" and out.copy["mode"] == "show"
       and out.copy["bytes"] == (ga_root / sid_ok / "image.png").stat().st_size)
+check("chạy ngoài app (không có runtime) thì media_url trả '' chứ không nổ",
+      fbgrid.media_url(str(ga_root / sid_ok / "image.png"), sid_ok) == "")
 out = ga.apply_event(gctx, {"source": "image_request", "id": sid_empty, "request_id": "req-noimg"})
 check("chưa có ảnh -> modal nhận dòng giải thích, không payload rỗng",
       out.copy is None and "chưa có ảnh" in out.lines[0])
 big = ga_box / "big.png"
-big.write_bytes(b"\0" * (ga.IMAGE_INLINE_MAX + 1))
+big.write_bytes(b"\0" * (4096 + 1))
 stories.save_image(ga_root, sid_ok, big, method="test")
+_cap = ga.B2_IMAGE_MAX
+ga.B2_IMAGE_MAX = 4096  # hạ trần tạm để test đường từ chối khỏi phải ghi file 100 MB
 out = ga.apply_event(gctx, {"source": "image_request", "id": sid_ok, "request_id": "req-big"})
-check("ảnh quá cỡ không bị nhúng cả megabyte qua message, modal chỉ đường tới trang Tạo bài",
+check("ảnh vượt trần B2 của modal -> từ chối kèm lý do, không gửi payload khổng lồ",
       out.copy is None and "lớn quá" in out.lines[0] and "Tạo bài" in out.lines[0])
+ga.B2_IMAGE_MAX = _cap
+check("trần ảnh B2 mặc định là 100 MB (đủ cho ảnh AI cỡ lớn)", _cap == 100 * 1024 * 1024)
 stories.save_image(ga_root, sid_ok, ga_gen_file, method="test")
 row_p4b = next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_ok)
 check("mỗi dòng có dấu mốc nội dung để modal cache đúng bản đang có trên file",

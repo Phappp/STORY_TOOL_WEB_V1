@@ -1,9 +1,10 @@
-"""Grid story — custom component hand-written (grid_frontend/index.html) + bảng nút native làm đường lùi.
+"""Grid story — custom component hand-written (grid_frontend/index.html) + bảng chẩn đoán native chỉ đọc.
 
 Component chỉ gửi event về Python; mọi việc thật do grid_actions.apply_event làm,
 nên state hiển thị luôn đọc lại từ folder story (không có bản sao trong session).
 """
 
+import mimetypes
 from datetime import datetime
 from hashlib import sha1
 from pathlib import Path
@@ -238,6 +239,20 @@ def _push(lines: list[str]) -> None:
     st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + [line for line in lines if line])[-LOG_KEEP:]
 
 
+def media_url(path: str, sid: str) -> str:
+    """Đăng ký ảnh với media manager của Streamlit -> URL /media/… cho modal tải bằng HTTP.
+
+    Đặt ở lớp grid chứ không ở grid_actions: dispatcher cố ý không biết gì về Streamlit.
+    Chạy ngoài app (smoke test không có runtime) thì trả '' để modal tự nói rõ, không treo.
+    """
+    try:
+        from streamlit import runtime
+        mgr = runtime.get_instance().media_file_mgr
+    except Exception:  # chưa có runtime (test) -> không có URL
+        return ""
+    return str(mgr.add(path, mimetypes.guess_type(path)[0] or "image/png", f"fbgrid:{sid}:b2"))
+
+
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     _push(out.lines)
@@ -248,6 +263,11 @@ def _collect(out: ga.Outcome, event: dict) -> None:
             "request_id": str(event.get("request_id") or ""),
             "mode": "show" if str(event.get("source") or "") != "copy_request" else "copy",
             "text": "", "error": (lines[0] if lines else "")}
+        resp = st.session_state["grid_copy_response"]
+        if resp.get("image_path"):  # ảnh B2: file -> URL, modal không nhận base64 qua delta
+            resp["image"] = media_url(str(resp["image_path"]), str(resp.get("id") or ""))
+            if not resp["image"]:
+                resp["error"] = f"{resp.get('id')}: server không cấp được đường dẫn ảnh — mở bài ở trang Tạo bài để xem."
     if out.select:
         st.session_state["select_story"] = out.select
     if out.nav:
@@ -338,6 +358,7 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
         # nếu không ảnh base64 vài MB bị gửi lại mọi tick và modal tự xin lại khi cần.
         resp = st.session_state.pop("grid_copy_response", None) or {}
         component()(rows=rows, workspace=str(ctx.root),
+                    image_max=ga.B2_IMAGE_MAX,
                     summary=ga.count_buckets(all_rows),
                     queue_ids=ga.queue_ids(all_rows),
                     error_ids=ga.error_ids(all_rows),

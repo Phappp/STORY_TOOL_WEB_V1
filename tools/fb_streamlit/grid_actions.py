@@ -26,7 +26,8 @@ import stories
 MAX_BATCH = 5
 MAX_IMPORT = 200  # một lần import tạo tối đa bấy nhiêu bài — file dài thì chia nhiều lần, tránh tạo nhầm cả nghìn folder
 STALE_SECONDS = 15 * 60
-IMAGE_INLINE_MAX = 2 * 1024 * 1024
+IMAGE_INLINE_MAX = 2 * 1024 * 1024  # chỉ còn cho ảnh refs/ của modal B0 (đi base64 trong một response)
+B2_IMAGE_MAX = 100 * 1024 * 1024  # trần ảnh B2 mở được trong modal — tải qua URL /media/, không qua delta
 STALE = "stale"
 QUEUED = "queued"
 PREFS_FILE = ".fbtool-grid-prefs.json"
@@ -444,16 +445,20 @@ def _copy_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
 
 
 def image_payload(ctx: Ctx, sid: str, request_id: str):
-    """Ảnh B2 cho modal: nhúng base64, nhưng chỉ khi file đủ nhỏ để không làm nghẹt message."""
+    """Ảnh B2 cho modal: trả ĐƯỜNG DẪN FILE, lớp Streamlit sẽ đổi thành URL /media/ khi vẽ.
+
+    Không nhúng base64 nữa: ảnh 100 MB thành chuỗi ~133 MB nằm trong delta gửi qua WebSocket,
+    mỗi lần mở modal là một lần gửi — nghẹt cả tiến trình lẫn trình duyệt. Ảnh refs/ của B0 vẫn
+    đi base64 vì modal B0 cần caption và ảnh trong cùng một response.
+    """
     image = stories.image_of(ctx.root, sid)
     if image is None:
         return None, f"{sid}: chưa có ảnh (B2 chưa chạy hoặc ảnh bị xóa)."
     size = image.stat().st_size
-    if size > IMAGE_INLINE_MAX:
-        return None, f"{sid}: ảnh {size // 1024} KB lớn quá ({IMAGE_INLINE_MAX // 1024} KB giới hạn nhúng) — mở bài ở trang Tạo bài để xem."
-    mime = mimetypes.guess_type(image.name)[0] or "image/png"
-    data = base64.b64encode(image.read_bytes()).decode("ascii")
-    return {"id": sid, "field": "Ảnh", "request_id": request_id, "image": f"data:{mime};base64,{data}",
+    if size > B2_IMAGE_MAX:
+        return None, (f"{sid}: ảnh {round(size / 1048576, 1)} MB lớn quá trần {B2_IMAGE_MAX // 1048576} MB "
+                      "của modal — mở bài ở trang Tạo bài để xem.")
+    return {"id": sid, "field": "Ảnh", "request_id": request_id, "image": "", "image_path": str(image),
             "text": "", "bytes": size}, ""
 
 

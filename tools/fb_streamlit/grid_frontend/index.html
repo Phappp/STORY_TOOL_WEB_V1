@@ -726,7 +726,9 @@ function modalNode() {
   modal.appendChild(tools);
   modal.appendChild(modalBody(row, ref.tab, key));
   modal.appendChild(el("div", "mfoot",
-    "click 1 lần ở ô B1/B3 = copy · click đúp (hoặc bấm ô B0/B2) = mở modal này · Esc hoặc ✕ để đóng · danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · ảnh lớn quá " + (2 * 1024) + " KB thì mở bài ở trang Tạo bài để xem"));
+    "click 1 lần ở ô B1/B3 = copy · click đúp (hoặc bấm ô B0/B2) = mở modal này · Esc hoặc ✕ để đóng · "
+    + "danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · sửa chữ trong modal là ghi thẳng vào file "
+    + "· ảnh B2 mở trong modal tới " + (Math.round(Number(MODEL.image_max || 0) / 1048576) || 2) + " MB"));
 
   overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
   overlay.appendChild(modal);
