@@ -978,11 +978,17 @@ function errorsButton() {
 }
 
 const PIN_FLAG = "fbgrid-pin-css";
+// Kèm dòng ẩn sidebar + tiêu đề: khi lưới đã chiếm kín cửa sổ thì hai thanh đó chỉ còn là thứ
+// có thể đè lên lưới (z-index 999991/999990) — ẩn đi là hết đường đè, kể cả lúc Streamlit vừa chèn
+// iframe mà chưa kịp gắn src (selector theo src khi đó chưa khớp, node mới chỉ static).
+// visibility chứ không display: layout của Streamlit khỏi nhảy theo khi thu/mở.
 const PIN_CSS = 'html[data-fbgrid="expanded"] iframe[src*="' + COMPONENT_MARK + '"]{'
   + "position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;"
   + "max-height:none!important;min-height:0!important;z-index:2147483000!important;"
   + "border:0!important;border-radius:0!important;background:#fff!important;}"
-  + 'html[data-fbgrid="expanded"] body{overflow:hidden!important;}';
+  + 'html[data-fbgrid="expanded"] body{overflow:hidden!important;}'
+  + 'html[data-fbgrid="expanded"] [data-testid="stSidebar"],'
+  + 'html[data-fbgrid="expanded"] [data-testid="stHeader"]{visibility:hidden!important;}';
 
 function pinFrame() {
   // "Mở rộng" ghim lưới kín cửa sổ bằng <style> trong trang cha, KHÔNG bằng inline style trên iframe:
@@ -1015,8 +1021,8 @@ function pinFrame() {
 
 function expandButton() {
   return button(expandedMode() ? "🗗 Thu lại" : "⛢ Mở rộng",
-    expandedMode() ? "Trả grid về khung thường (Esc cũng thu được)"
-      : "Grid chiếm kín cửa sổ — ghim bằng CSS nên không bị thu lại khi grid vẽ lại", () => {
+    expandedMode() ? "Trả grid về khung thường, sidebar + tiêu đề trang hiện lại (Esc cũng thu được)"
+      : "Grid chiếm kín cửa sổ, sidebar + tiêu đề trang bị ẩn để không gì đè lên lưới — muốn đổi trang thì Esc hoặc bấm 🗗 Thu lại ở thanh trên", () => {
         lsSet(EXPANDED_KEY, expandedMode() ? "0" : "1");
         repaint();
       });
