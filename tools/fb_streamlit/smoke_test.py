@@ -1,9 +1,9 @@
+import base64
 import json
 import shutil
 import sys
 import time
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from streamlit.testing.v1 import AppTest
@@ -668,8 +668,11 @@ check("B0 lỗi -> state error + detail để grid báo nguyên nhân",
       "B0 LỖI" in out.lines[0] and ga.b0_state(ga_root, sid_b0err) == stories.ERROR
       and stories.load_story(ga_root, sid_b0err)["b0"]["detail"].startswith("bài trong group"))
 out = ga.apply_event(gctx, {"source": "b0_request", "id": sid_b0err, "request_id": "req-b0err"})
-check("B0 chưa trích được gì -> modal nhận câu giải thích, không phải payload rỗng",
-      out.copy is None and any("chưa trích được gì" in line for line in out.lines))
+check("B0 chưa trích được gì -> modal vẫn nhận payload (text trống) để vẽ ô gõ tay, kèm câu giải thích",
+      out.copy is not None and out.copy["text"] == "" and out.copy["refs"] == 0
+      and out.copy["field"] == "B0 preview" and out.copy["mode"] == "show"
+      and out.copy["request_id"] == "req-b0err"
+      and any("chưa trích được gì" in line for line in out.lines))
 rows_p4d = fbgrid.rows_for(gctx)
 r_err = next(r for r in rows_p4d if r["id"] == sid_b0err)
 r_done = next(r for r in rows_p4d if r["id"] == ids_p4d[0])
@@ -716,6 +719,60 @@ check("b0_batch chốt tối đa 5 bài/lượt và nói rõ phần còn lại",
       and seen_b0 == [(s, i, ga.MAX_BATCH) for i, s in enumerate(many_b0[:ga.MAX_BATCH], start=1)]
       and all(ga.b0_state(ga_root, s) == stories.DONE for s in many_b0[:ga.MAX_BATCH])
       and all(ga.b0_state(ga_root, s) == stories.PENDING for s in many_b0[ga.MAX_BATCH:]))
+
+# --- P5a: B0 nhập tay — caption sửa trong modal + ảnh tham chiếu gửi từ grid ---
+sid_manual = stories.create_story(ga_root, "B0 nhập tay")["id"]
+stories.update_story(ga_root, sid_manual, source="https://fb.watch/khong-mang")
+calls_before = len(b0_calls)
+out = ga.apply_event(gctx, {"source": "b0_save", "id": sid_manual, "text": "Caption tôi gõ tay\ndòng hai"})
+block_m = stories.load_story(ga_root, sid_manual)["b0"]
+check("b0_save: chữ vào input.txt, state done + method 'thủ công', đếm chữ hộ anh",
+      (ga_root / sid_manual / "input.txt").read_text(encoding="utf-8").startswith("Caption tôi gõ tay")
+      and block_m["state"] == stories.DONE and block_m["method"] == ga.B0_MANUAL
+      and block_m["words"] == 6 and any("đã lưu caption tay" in line for line in out.lines))
+out = ga.apply_event(gctx, {"source": "b0_run", "id": sid_manual})
+check("B0 không đè caption tay: run_b0 bỏ qua, không gọi extract, chữ vẫn nguyên",
+      "sửa tay" in out.lines[0] and len(b0_calls) == calls_before
+      and (ga_root / sid_manual / "input.txt").read_text(encoding="utf-8").startswith("Caption tôi gõ tay"))
+row_m = next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_manual)
+check("ô B0 bài nhập tay hiện 'thủ công' và không bị gom vào danh sách trích lại",
+      row_m["b0"] == stories.DONE and ga.B0_MANUAL in row_m["b0meta"]
+      and sid_manual not in ga.b0_todo_ids(gctx))
+ga.apply_event(gctx, {"source": "b0_save", "id": sid_manual, "text": "   "})
+check("xóa hết chữ -> ô B0 về 'chưa chạy' chứ không báo 'mất file'",
+      ga.b0_state(ga_root, sid_manual) == stories.PENDING)
+ga.apply_event(gctx, {"source": "b0_save", "id": sid_manual, "text": "Caption tôi gõ tay"})
+png_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"p5a" * 20).decode("ascii")
+out = ga.apply_event(gctx, {"source": "b0_ref_add", "id": sid_manual, "data": png_b64, "name": "anh-cua-toi.PNG"})
+refs_m = stories.refs_of(ga_root, sid_manual)
+check("b0_ref_add: ảnh base64 từ grid thành refs/ref_N.png, đếm lại số ảnh trong block b0",
+      len(refs_m) == 1 and refs_m[0].name == "ref_1.png"
+      and refs_m[0].read_bytes().startswith(b"\x89PNG") and stories.load_story(ga_root, sid_manual)["b0"]["refs"] == 1
+      and any("ref_1.png" in line and "1 ảnh tham chiếu" in line for line in out.lines))
+before_ref = len(stories.refs_of(ga_root, sid_manual))
+out = ga.apply_event(gctx, {"source": "b0_ref_add", "id": sid_manual, "data": png_b64, "name": "thuyet-minh.docx"})
+check("file không phải ảnh -> từ chối kèm danh sách kiểu được nhận, không ghi refs/",
+      len(stories.refs_of(ga_root, sid_manual)) == before_ref and any("không phải ảnh" in line for line in out.lines))
+out = ga.apply_event(gctx, {"source": "b0_ref_add", "id": sid_manual, "data": "khong-phai-base64!!!", "name": "a.png"})
+check("base64 hỏng -> dòng giải thích, không crash",
+      len(stories.refs_of(ga_root, sid_manual)) == before_ref and any("không giải mã được" in line for line in out.lines))
+old_upload = ga.B0_UPLOAD_MAX
+ga.B0_UPLOAD_MAX = 16
+out = ga.apply_event(gctx, {"source": "b0_ref_add", "id": sid_manual, "data": png_b64, "name": "to.png"})
+ga.B0_UPLOAD_MAX = old_upload
+check("ảnh quá cỡ -> nói rõ giới hạn và đường chép tay vào refs/, không ghi nửa file",
+      len(stories.refs_of(ga_root, sid_manual)) == before_ref and any("KB lớn quá" in line and "refs" in line for line in out.lines))
+out = ga.apply_event(gctx, {"source": "b0_save", "id": "story_919", "text": "chữ cho bài không tồn tại"})
+check("b0_save bài không tồn tại -> dòng lỗi, không crash", bool(out.lines) and "story_919" in out.lines[0])
+sid_blank = stories.create_story(ga_root, "B0 chưa chạy")["id"]
+out = ga.apply_event(gctx, {"source": "b0_request", "id": sid_blank, "request_id": "req-blank"})
+check("bài trắng tinh -> payload text='' + refs=0 để modal vẽ ô gõ tay thay vì chỉ một dòng chữ",
+      out.copy is not None and out.copy["text"] == "" and out.copy["refs"] == 0
+      and out.copy["mode"] == "show" and out.copy["request_id"] == "req-blank")
+out = ga.apply_event(gctx, {"source": "b0_save", "id": sid_blank, "text": "caption dán từ điện thoại"})
+out = ga.apply_event(gctx, {"source": "b0_request", "id": sid_blank, "request_id": "req-blank2"})
+check("lưu caption tay ở modal trống -> mở lại prefill đúng chữ, không còn lời 'chưa trích được gì'",
+      out.copy["text"] == "caption dán từ điện thoại" and out.lines == [])
 
 fb_import.extract = real_extract
 
@@ -1161,6 +1218,23 @@ at_im.run()
 check("modal B0 gửi b0_run -> grid chạy lại đúng bài đó và báo kết quả",
       not at_im.exception and len(ui_calls) == 8 and ui_calls[-1] == stories.load_story(smoke_root, made[0])["source"]
       and any("B0: OK" in line for line in at_im.session_state.get("grid_log", [])))
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b0-save", "source": "b0_save", "id": made[1], "text": "Caption dán tay từ modal"}
+at_im.run()
+check("event b0_save từ modal -> grid ghi input.txt, đánh dấu 'thủ công', báo log và vẽ lại ô B0",
+      not at_im.exception
+      and (smoke_root / made[1] / "input.txt").read_text(encoding="utf-8") == "Caption dán tay từ modal"
+      and stories.load_story(smoke_root, made[1])["b0"]["method"] == ga.B0_MANUAL
+      and any("đã lưu caption tay" in line for line in at_im.session_state.get("grid_log", []))
+      and any(r["id"] == made[1] and r["b0"] == "done" for r in captured.get("rows", []))
+      and len(ui_calls) == 8)  # lưu tay không được gọi mạng
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b0-ref", "source": "b0_ref_add", "id": made[1], "data": png_b64, "name": "tu-modal.png"}
+at_im.run()
+refs_im = stories.refs_of(smoke_root, made[1])
+check("event b0_ref_add -> ảnh vào refs/ của story (ref_2.png) và grid báo đúng tên file",
+      not at_im.exception and [p.name for p in refs_im] == ["ref_1.jpg", "ref_2.png"]
+      and stories.load_story(smoke_root, made[1])["b0"]["refs"] == 2
+      and any("ref_2.png" in line for line in at_im.session_state.get("grid_log", [])))
 fbgrid.st.file_uploader = real_uploader
 fb_import.extract = real_extract_ui
 images.download_ref = real_download

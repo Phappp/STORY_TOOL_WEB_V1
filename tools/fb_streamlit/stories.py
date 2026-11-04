@@ -356,8 +356,13 @@ def save_ref(root: Path, sid: str, src, url: str = "") -> dict:
     refs_dir = folder / REFS_DIR
     refs_dir.mkdir(parents=True, exist_ok=True)
     existing = sorted(p.name for p in refs_dir.iterdir() if p.is_file() and p.name.startswith("ref_"))
+    used = set()
+    for name in existing:  # đánh số theo prefix, không theo cả tên file — ref_1.jpg và ref_1.png không được cùng là số 1
+        head = name[len("ref_"):].split(".", 1)[0]
+        if head.isdigit():
+            used.add(int(head))
     number = 1
-    while f"ref_{number}{src.suffix.lower()}" in existing:
+    while number in used:
         number += 1
     dest = refs_dir / f"ref_{number}{src.suffix.lower()}"
     shutil.copy2(src, dest)

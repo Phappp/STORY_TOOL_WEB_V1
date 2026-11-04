@@ -9,6 +9,8 @@ import csv
 import io
 import json
 import mimetypes
+import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +32,9 @@ QUEUED = "queued"
 PREFS_FILE = ".fbtool-grid-prefs.json"
 PROV_NONE = ""  # để trống nghĩa là bài này không chọn riêng, theo workspace/preset
 B0_PREVIEW_FIELD = "B0 preview"
+B0_MANUAL = "thủ công"  # method trong block b0 khi anh dán caption tay — phân biệt với og-tags/yt-dlp
+B0_UPLOAD_MAX = 4 * 1024 * 1024  # ảnh tay gửi base64 qua event, để message từ component không phình vô hạn
+REF_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
 COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link", "Bài SEO (Facebook)")
 STEP_NAMES = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
@@ -409,7 +414,9 @@ def b0_payload(ctx: Ctx, sid: str, request_id: str):
     text = stories.input_text(ctx.root, sid)
     refs = stories.refs_of(ctx.root, sid)
     if not text.strip() and not refs:
-        return None, f"{sid}: B0 chưa trích được gì từ link — mở modal bấm “▶ Trích lại B0”."
+        # payload rỗng vẫn có nghĩa là "B0 chưa có gì" -> modal hiện ô gõ caption tay thay vì chỉ một dòng chữ
+        return {"id": sid, "field": B0_PREVIEW_FIELD, "request_id": request_id, "text": "", "image": "", "refs": 0}, \
+               f"{sid}: B0 chưa trích được gì từ link — gõ caption tay trong modal hoặc bấm “▶ Trích lại B0”."
     image, note = "", ""
     if refs:
         size = refs[0].stat().st_size
@@ -420,6 +427,44 @@ def b0_payload(ctx: Ctx, sid: str, request_id: str):
             image = f"data:{mime};base64," + base64.b64encode(refs[0].read_bytes()).decode("ascii")
     return {"id": sid, "field": B0_PREVIEW_FIELD, "request_id": request_id, "text": text,
             "image": image, "refs": len(refs)}, note
+
+
+def save_b0_caption(ctx: Ctx, sid: str, text: str) -> list[str]:
+    """Anh dán caption tay vào modal B0 -> input.txt; KHÔNG đụng b0.input_hash để run_b0 vẫn coi đây là chữ sửa tay."""
+    stories.save_input(ctx.root, sid, text)
+    words = len(text.split())
+    steps.set_b0(ctx.root, sid, state=stories.DONE if text.strip() else stories.PENDING,
+                 method=B0_MANUAL, words=words, detail="")
+    if not text.strip():
+        return [f"{sid}: input.txt đã trống — ô B0 về 'chưa chạy', còn ảnh tham chiếu trong refs/ vẫn giữ."]
+    return [f"{sid}: đã lưu caption tay ({words} chữ) — B0 không đè chữ này; muốn trích lại từ link thì xóa input.txt rồi bấm “▶ Trích lại B0”."]
+
+
+def add_b0_ref(ctx: Ctx, sid: str, data: str, name: str) -> list[str]:
+    """Component không upload file thẳng được -> ảnh đi base64 qua event; ghi vào refs/ của story."""
+    suffix = Path(str(name or "")).suffix.lower()
+    if suffix not in REF_SUFFIXES:
+        return [f"{sid}: “{name or '(không tên)'}” không phải ảnh — chỉ nhận {'/'.join(REF_SUFFIXES)}."]
+    try:
+        raw = base64.b64decode(str(data or "").split(",", 1)[-1], validate=True)
+    except ValueError:
+        return [f"{sid}: ảnh gửi từ grid không giải mã được — thử lại, hoặc chép file thẳng vào {sid}\\refs\\ (tên bắt đầu 'ref_')."]
+    if not raw:
+        return [f"{sid}: ảnh rỗng, không ghi."]
+    if len(raw) > B0_UPLOAD_MAX:
+        return [f"{sid}: ảnh {len(raw) // 1024} KB lớn quá ({B0_UPLOAD_MAX // 1024} KB gửi qua grid) — chép thẳng vào {sid}\\refs\\ (tên bắt đầu 'ref_')."]
+    fd, tmp = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    before = {p.name for p in stories.refs_of(ctx.root, sid)}
+    try:
+        Path(tmp).write_bytes(raw)
+        stories.save_ref(ctx.root, sid, tmp)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    refs = stories.refs_of(ctx.root, sid)
+    added = next((p for p in refs if p.name not in before), refs[-1])
+    steps.set_b0(ctx.root, sid, refs=len(refs))
+    return [f"{sid}: đã thêm {added.name} vào refs/ ({len(refs)} ảnh tham chiếu)."]
 
 
 def batch_ids(raw) -> tuple[list[str], str]:
@@ -448,6 +493,10 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             out.lines, out.touched = _run_all(ctx, sid), [sid]
         elif source == "b0_run":
             out.lines, out.touched = _run_b0(ctx, sid), [sid]
+        elif source == "b0_save":
+            out.lines, out.touched = save_b0_caption(ctx, sid, str(event.get("text") or "")), [sid]
+        elif source == "b0_ref_add":
+            out.lines, out.touched = add_b0_ref(ctx, sid, str(event.get("data") or ""), str(event.get("name") or "")), [sid]
         elif source in ("batch_run", "b0_batch"):
             run = _run_all if source == "batch_run" else _run_b0
             ids, note = batch_ids(event.get("ids"))
