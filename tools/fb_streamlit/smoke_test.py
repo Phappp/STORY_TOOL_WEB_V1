@@ -495,8 +495,8 @@ check("rows_for xếp bài đã đánh dấu lên đầu theo thứ tự bấm v
       [r["id"] for r in rows_q[:2]] == [sid_ok, sid_q] and [r["queue_pos"] for r in rows_q[:2]] == [1, 2]
       and all(r["queue_pos"] == 0 for r in rows_q[2:]))
 check("mỗi dòng mang theo nhóm việc để lọc", all(r["bucket"] in ga.BUCKET_LABEL for r in rows_q))
-check("lọc chia hết bài theo nhóm, không sót không trùng",
-      sum(len(ga.filter_rows(rows_q, label)) for label in ga.FILTERS[1:]) == len(rows_q)
+check("lọc chia hết bài theo nhóm, không sót không trùng (B0 lỗi là lọc chồng nên không tính ở đây)",
+      sum(len(ga.filter_rows(rows_q, label)) for label in ga.FILTERS[1:] if label != ga.FILTER_B0) == len(rows_q)
       and sid_ok in [r["id"] for r in ga.filter_rows(rows_q, "Xong")]
       and sid_empty in [r["id"] for r in ga.filter_rows(rows_q, "Chờ chạy")]
       and ga.filter_rows(rows_q, "Tất cả") == rows_q)
@@ -939,6 +939,39 @@ runner_p5b.stop()
 runner_boom.stop()
 stories._recents_path = real_recents_p5b
 shutil.rmtree(box_p5b, ignore_errors=True)
+
+# --- P6d: lọc riêng bài B0 lỗi + độ rộng cột lưu theo workspace ---
+sid_b0err = stories.create_story(ga_root, "Bài B0 hỏng grid", input_text="nội dung b0 hỏng")["id"]
+stories.update_story(ga_root, sid_b0err, b0={"state": stories.DONE, "url": "https://fb.watch/mat-file"})
+(ga_root / sid_b0err / "input.txt").unlink()  # B0 báo xong mà caption rỗng -> 'mất file', bài vẫn chưa chạy B1-B3
+rows_p6d = fbgrid.rows_for(gctx)
+r_b0 = next(r for r in rows_p6d if r["id"] == sid_b0err)
+b0_rows = ga.filter_rows(rows_p6d, ga.FILTER_B0)
+bucket_filters = [f for f in ga.FILTERS[1:] if f != ga.FILTER_B0]  # bỏ 'Tất cả' — nó trả mọi dòng, không phải một nhóm
+check("lọc 'B0 lỗi' bắt đúng bài trích link hỏng và chỉ bài đó",
+      ga.FILTER_B0 in ga.FILTERS and sid_b0err in [r["id"] for r in b0_rows]
+      and all(str(r["b0"]) in (stories.ERROR, ga.STALE, stories.MISSING) for r in b0_rows))
+check("bài B0 lỗi không bị tính vào 'Lỗi' của hàng đợi B1-B3 (nó còn chờ chạy, chỉ việc trích là hỏng)",
+      r_b0["b0"] == stories.MISSING and r_b0["bucket"] == "waiting")
+check("các lọc theo nhóm việc vẫn chia hết bài, không sót không trùng (B0 lỗi đếm chồng nên nằm ngoài)",
+      sum(len(ga.filter_rows(rows_p6d, f)) for f in bucket_filters) == len(rows_p6d)
+      and ga.count_buckets(rows_p6d)["b0_error"] == len(b0_rows))
+ga.save_prefs(ga_root, {"auto_refresh": True})
+out = ga.apply_event(gctx, {"source": "save_cols", "cols": {"id": 140, "src": 300, "link": 5000, "ky": None}})
+check("save_cols ghi độ rộng cột vào prefs của workspace, kẹp trong khoảng hợp lý, không nói dòng gì",
+      ga.pref_cols(ga_root) == {"id": 140, "src": 300, "link": 1200} and not out.lines)
+check("prefs cũ vẫn còn — lưu cột không xoá mất auto_refresh hay provider",
+      ga.load_prefs(ga_root).get("auto_refresh") is True)
+before = (ga_root / ga.PREFS_FILE).read_text(encoding="utf-8")
+note_bad = ga.set_pref_cols(ga_root, {"id": "abc"})
+note_empty = ga.set_pref_cols(ga_root, {})
+check("cols toàn giá trị không ra số / danh sách rỗng -> từ chối, file prefs giữ nguyên",
+      "không hợp lệ" in note_bad and "không hợp lệ" in note_empty
+      and (ga_root / ga.PREFS_FILE).read_text(encoding="utf-8") == before
+      and ga.pref_cols(ga_root) == {"id": 140, "src": 300, "link": 1200})
+check("pref_cols với workspace chưa chỉnh gì -> rỗng để JS dùng rộng mặc định",
+      ga.pref_cols(Path(tempfile.mkdtemp(prefix="fbp6d_"))) == {})
+(ga_root / ga.PREFS_FILE).write_text("{}", encoding="utf-8")
 
 fb_import.extract = real_extract
 

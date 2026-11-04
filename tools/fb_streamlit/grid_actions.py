@@ -43,9 +43,12 @@ HEADER_WORDS = ("link", "url", "source", "nguồn", "fb", "bài")
 
 BUCKET_LABEL = {"error": "Lỗi", "waiting": "Chờ chạy", "running": "Đang chạy", "done": "Xong"}
 BUCKET_ORDER = {"error": 0, "waiting": 1, "running": 2, "done": 3}
-FILTERS = ("Tất cả", BUCKET_LABEL["waiting"], BUCKET_LABEL["running"], BUCKET_LABEL["error"], BUCKET_LABEL["done"])
+FILTER_B0 = "B0 lỗi"  # lỗi trích link KHÔNG phải việc của hàng đợi B1-B3 nên cần lọc riêng
+FILTERS = ("Tất cả", BUCKET_LABEL["waiting"], BUCKET_LABEL["running"], BUCKET_LABEL["error"],
+           BUCKET_LABEL["done"], FILTER_B0)
 FILTER_BUCKET = {label: key for key, label in BUCKET_LABEL.items()}
 FILTER_BUCKET[FILTERS[0]] = ""
+FILTER_BUCKET[FILTER_B0] = "b0_error"
 
 
 @dataclass
@@ -82,6 +85,38 @@ def save_prefs(root: Path, prefs: dict) -> str:
     except OSError as exc:
         return f"Không lưu được prefs grid: {exc}"
     return ""
+
+
+COL_MIN = 30
+COL_MAX = 1200
+COL_KEEP = 24  # số cột nhiều hơn mức này là payload lạ, không tin
+
+
+def pref_cols(root: Path) -> dict:
+    """Độ rộng cột đã lưu cho workspace này — {} nếu chưa chỉnh gì (JS dùng rộng mặc định)."""
+    stored = load_prefs(root).get("cols")
+    return {str(k): int(v) for k, v in stored.items() if str(v).isdigit()} if isinstance(stored, dict) else {}
+
+
+def set_pref_cols(root: Path, cols) -> str:
+    """Chỉ giữ số nguyên trong khoảng hợp lý: component gửi về bao nhiêu chữ số cũng không làm hỏng prefs."""
+    if not isinstance(cols, dict) or not cols or len(cols) > COL_KEEP:
+        return "Độ rộng cột không hợp lệ — không lưu."
+    stored = {}
+    for key, value in cols.items():
+        key = str(key)[:24]
+        try:
+            width = int(round(float(value)))
+        except (TypeError, ValueError):
+            continue
+        if not key:
+            continue
+        stored[key] = min(COL_MAX, max(COL_MIN, width))
+    if not stored:
+        return "Độ rộng cột không hợp lệ — không lưu."
+    prefs = load_prefs(root)
+    prefs["cols"] = stored
+    return save_prefs(root, prefs)
 
 
 def pref_providers(root: Path) -> dict:
@@ -209,6 +244,8 @@ def queue_ids(rows: list[dict]) -> list[str]:
 
 def filter_rows(rows: list[dict], choice: str) -> list[dict]:
     key = FILTER_BUCKET.get(str(choice or FILTERS[0]), "")
+    if key == "b0_error":  # bài này B1-B3 có thể vẫn ổn, chỉ việc trích link là hỏng
+        return [r for r in rows if str(r.get("b0") or "") in (stories.ERROR, STALE, stories.MISSING)]
     return [r for r in rows if not key or r.get("bucket") == key]
 
 
@@ -605,6 +642,9 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "archive":
             dest = stories.archive_story(ctx.root, sid)
             out.lines = [f"{sid}: đã dời folder vào {dest.name} trong .trash — kéo ngược ra ngoài là khôi phục."]
+        elif source == "save_cols":  # độ rộng cột là prefs của workspace, không phải của bài nào
+            note = set_pref_cols(ctx.root, event.get("cols"))
+            out.lines = [note] if note else []
         elif source == "open":
             out.select, out.nav = sid, "Tạo bài"
         else:

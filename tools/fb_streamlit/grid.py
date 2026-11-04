@@ -343,6 +343,7 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     error_ids=ga.error_ids(all_rows),
                     providers=ga.provider_names(ctx),
                     defaults=dict(ctx.defaults),
+                    cols=ga.pref_cols(ctx.root),
                     copy_response=resp,
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
