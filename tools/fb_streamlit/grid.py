@@ -21,8 +21,8 @@ import stories
 FRONTEND = Path(__file__).resolve().parent / "grid_frontend"
 COMPONENT_NAME = "fb_story_grid_v1"
 KEY = "fb_story_grid"
-LOG_LIMIT = 8  # số dòng log hiện ngay dưới lưới
-LOG_KEEP = 60  # số dòng giữ trong session_state — phần hơn nằm trong expander "Log cũ"
+LOG_KEY = "grid_log_last"  # thẻ log ĐANG hiện: chỉ request gần nhất, thu gọn/mở rộng được
+LOG_KEEP = 60  # số dòng giữ trong lịch sử session (bảng chẩn đoán + test) — phần hiện ra lấy từ LOG_KEY
 MODE_COMPONENT = "Grid (component)"
 MODE_NATIVE = "Bảng chẩn đoán (native)"
 REFRESH_KEY = "grid_refresh"
@@ -318,8 +318,23 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     return out
 
 
-def _push(lines: list[str]) -> None:
-    st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + [line for line in lines if line])[-LOG_KEEP:]
+def _push(lines: list[str], kind: str = "event") -> None:
+    """Ghi log: lịch sử dòng cho bảng chẩn đoán + MỘT thẻ "request gần nhất" để lưới hiện.
+
+    kind="flow" là dòng do luồng nền báo về theo từng tick — dồn vào thẻ đang mở thay vì
+    mỗi tick một thẻ, vì một batch là MỘT request chứ không phải mười lăm.
+    """
+    lines = [line for line in lines if line]
+    if not lines:
+        return
+    now = time.strftime("%H:%M:%S")
+    last = st.session_state.get(LOG_KEY)
+    if last and kind == "flow" and last["kind"] == "flow":
+        last["lines"] = (last["lines"] + lines)[-LOG_KEEP:]
+        last["at"] = now
+    else:
+        st.session_state[LOG_KEY] = {"at": now, "kind": kind, "lines": lines}
+    st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + lines)[-LOG_KEEP:]
 
 
 def media_url(path: str, sid: str) -> str:
@@ -424,14 +439,22 @@ def consume_event(ctx: ga.Ctx) -> tuple:
 
 
 def show_log() -> None:
-    """8 dòng gần nhất hiện ngay; dòng cũ hơn gom vào expander để kết quả batch/import không bị đẩy mất."""
-    lines = st.session_state.get("grid_log", [])
-    for line in lines[-LOG_LIMIT:]:
-        st.caption("· " + line)
-    if len(lines) > LOG_LIMIT:
-        with st.expander(f"Log cũ ({len(lines) - LOG_LIMIT} dòng)", expanded=False):
-            for line in lines[:-LOG_LIMIT]:
-                st.caption("· " + line)
+    """Chỉ log của request gần nhất, trong một thẻ thu gọn/mở rộng được (key nên thao tác của anh trụ qua các tick).
+
+    ĐÚNG MỘT phần tử vô điều kiện: thêm/bớt phần tử đứng trước lưới là Streamlit thay node
+    component -> iframe bị gỡ và dựng lại (cú loé trắng P8iv).
+    """
+    last = st.session_state.get(LOG_KEY)
+    if not last:
+        st.caption("Chưa có request nào trong phiên này — bấm ▶/⚡ hay copy là dòng mới hiện ở đây.")
+        return
+    head = last["lines"][0]
+    n = len(last["lines"])
+    with st.expander(f"{last['at']} · {head[:90]}{'…' if len(head) > 90 else ''}"
+                     + (f" (+{n - 1} dòng)" if n > 1 else ""),
+                     key="grid_log_box", expanded=True):
+        for line in last["lines"]:
+            st.caption("· " + line)
 
 
 def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> bool:
@@ -591,7 +614,7 @@ def _body(ctx: ga.Ctx) -> None:
     was_busy = bool(st.session_state.get("grid_flow_busy"))
     lines, seen = RUNNER.new_lines(int(st.session_state.get("grid_flow_seen") or 0))
     if lines:
-        _push(lines)
+        _push(lines, "flow")
         st.session_state["grid_flow_seen"] = seen
     st.session_state["grid_flow_busy"] = snap["busy"]
     if outcome is not None and outcome.nav:

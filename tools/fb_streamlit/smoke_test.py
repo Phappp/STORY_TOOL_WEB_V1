@@ -1644,6 +1644,88 @@ finally:
     httpx_mod.post = _p12_post
     os.environ.pop("P12_TTLS_KEY", None)
 
+# --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
+grid_src_p13 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
+check("P13a hết chế độ '8 dòng gần nhất + Log cũ' — không còn danh sách dài lẫn lộn mấy cú bấm",
+      "LOG_LIMIT" not in grid_src_p13 and "Log cũ" not in grid_src_p13)
+
+
+class _StubEl:
+    """st.expander giả: chỉ cần vào/ra để biết caption nào đứng NGÒAI thẻ (số phần tử trước lưới)."""
+
+    def __init__(self, st):
+        self.st = st
+
+    def __enter__(self):
+        self.st.inside += 1
+        return self
+
+    def __exit__(self, *a):
+        self.st.inside -= 1
+        return False
+
+
+class _StubSt:
+    def __init__(self):
+        self.session_state = {}
+        self.top = []     # phần tử vẽ trực tiếp (thứ quyết định Streamlit có thay node component không)
+        self.inner = []   # phần tử bên trong thẻ log
+        self.inside = 0
+        self.exp_kw = {}
+
+    def caption(self, text, *a, **k):
+        (self.inner if self.inside else self.top).append(text)
+
+    def expander(self, label, **k):
+        self.exp_kw = k
+        self.top.append(("expander", label))
+        return _StubEl(self)
+
+
+stub13 = _StubSt()
+_real_st13 = fbgrid.st
+fbgrid.st = stub13
+try:
+    fbgrid.show_log()
+    check("P13a phiên chưa có request nào: hiện ĐÚNG MỘT phần tử (câu nói rõ, không vẽ khung rỗng)",
+          len(stub13.top) == 1 and isinstance(stub13.top[0], str) and "Chưa có request" in stub13.top[0])
+
+    fbgrid._push(["A: vào hàng đợi", "A: đã lưu"])          # request 1
+    fbgrid._push(["B: bỏ khỏi hàng đợi"])                    # request 2 -> thẻ mới hẳn
+    stub13.top.clear()
+    stub13.inner.clear()
+    fbgrid.show_log()
+    newest = stub13.session_state[fbgrid.LOG_KEY]
+    check("P13a request mới thay hẳn thẻ cũ — log của cú bấm trước không còn nằm dưới lưới",
+          newest["lines"] == ["B: bỏ khỏi hàng đợi"]
+          and stub13.session_state["grid_log"] == ["A: vào hàng đợi", "A: đã lưu", "B: bỏ khỏi hàng đợi"])
+    check("P13a thẻ log hiện ĐÚNG MỘT phần tử trực tiếp (thu gọn/mở rộng được) và nhãn là dòng mới nhất",
+          len(stub13.top) == 1 and stub13.top[0][0] == "expander"
+          and "B: bỏ khỏi hàng đợi" in stub13.top[0][1] and stub13.inner == ["· B: bỏ khỏi hàng đợi"])
+    check("P13a thẻ có key nên thao tác thu/mở của anh trụ qua mọi tick của fragment",
+          stub13.exp_kw.get("key") == "grid_log_box")
+
+    fbgrid._push(["f1: B1 xong"], "flow")
+    fbgrid._push(["f2: B3 xong"], "flow")                   # mỗi tick luồng nền báo thêm dòng
+    check("P13a dòng của luồng nền dồn vào MỘT thẻ — một batch là một request, không phải mười lăm",
+          stub13.session_state[fbgrid.LOG_KEY]["lines"] == ["f1: B1 xong", "f2: B3 xong"]
+          and stub13.session_state[fbgrid.LOG_KEY]["kind"] == "flow")
+    stub13.top.clear()
+    stub13.inner.clear()
+    fbgrid.show_log()
+    check("P13a nhiều dòng cùng request thì nhãn ghi rõ còn bao nhiêu dòng nữa (+N)",
+          len(stub13.top) == 1 and "(+1 dòng)" in stub13.top[0][1] and len(stub13.inner) == 2)
+
+    fbgrid._push(["C: copy caption"])                       # anh bấm copy giữa lúc batch chạy
+    check("P13a request của anh thắng: thẻ đổi sang việc mới ngay, không hòa hai loại vào một thẻ",
+          stub13.session_state[fbgrid.LOG_KEY]["lines"] == ["C: copy caption"]
+          and stub13.session_state[fbgrid.LOG_KEY]["kind"] == "event")
+    fbgrid._push([])                                        # dòng rỗng không được xóa thẻ đang có
+    check("P13a push rỗng không làm mất thẻ log đang hiện",
+          stub13.session_state[fbgrid.LOG_KEY]["lines"] == ["C: copy caption"])
+finally:
+    fbgrid.st = _real_st13
+
 # --- unit: stories.py — story folder là nguồn sự thật ---
 import stories
 
@@ -2133,6 +2215,24 @@ check("P10b bài trang Tạo bài đang chạy tại chỗ: bỏ hàng đợi KH
       and runner_p10.snapshot()["inline"] == ["busy_tai_cho"])
 runner_p10.release_inline(["busy_tai_cho"])
 runner_p10.stop()
+
+# P13a qua app thật: thẻ log của lưới chỉ nói request gần nhất (dùng luôn workspace scratch của P8/P10)
+at_p8.session_state[fbgrid.KEY] = {"event_id": "evt-p13-1", "source": "queue_add", "id": p8_q_sid}
+at_p8.run()
+check("P13a qua app thật: thẻ log bật ra được, nhãn là dòng của request vừa bấm",
+      not at_p8.exception and any(p8_q_sid in (e.label or "") and "hàng đợi" in (e.label or "")
+                                 for e in at_p8.expander))
+at_p8.session_state[fbgrid.KEY] = {"event_id": "evt-p13-2", "source": "queue_remove", "id": p8_q_sid}
+at_p8.run()
+new13 = (at_p8.session_state.get(fbgrid.LOG_KEY) or {}).get("lines", [])
+hist13 = at_p8.session_state.get("grid_log") or []
+shown13 = [c.value for c in at_p8.caption if (c.value or "").startswith("· ")]
+check("P13a qua app thật: dưới lưới chỉ có dòng của request gần nhất — log cú ＋ trước không còn treo ở đó",
+      not at_p8.exception and any("bỏ khỏi hàng đợi" in l for l in new13)
+      and not any("xếp CUỐI" in l for l in new13) and shown13 == ["· " + l for l in new13])
+check("P13a lịch sử dòng của phiên vẫn nguyên cho bảng chẩn đoán + test (chỉ phần HIỆN là co lại)",
+      len(hist13) > len(new13) and any("xếp CUỐI" in l for l in hist13))
+
 fbgrid.RUNNER = _real_runner
 
 fbgrid.rows_for = _real_rows_for
