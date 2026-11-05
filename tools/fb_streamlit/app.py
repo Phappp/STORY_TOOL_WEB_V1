@@ -249,13 +249,6 @@ def page_create(c):
         st.session_state["saved_images"] = json.loads(post["images"]) if post else []
         st.session_state["keywords_text"] = ", ".join(json.loads(post["keywords"])) if post and post["keywords"] != "[]" else ""
         st.session_state["b0_ref_paths"] = [str(p) for p in stories.refs_of(root, story_id)] if (root and story_id) else []
-        # bài đang mở dùng preset nào thì ô preset phải hiện đúng cái đó — trước đây nó luôn nhảy về
-        # preset đầu danh sách mỗi lần tải lại trang nên "gán preset" trông như không bao giờ trụ
-        own = stories.load_story(root, story_id).get("preset_id") if (root and story_id) else None
-        if own in {p["id"] for p in presets}:
-            st.session_state["create_preset"] = own
-        else:
-            st.session_state.pop("create_preset", None)  # bài chưa gán -> để widget bắt đầu từ preset đầu
 
     if not presets:
         st.info("Chưa có preset nào. Vào **Cấu hình ▸ Presets** tạo bộ prompt cho chủ đề trước.")
@@ -263,29 +256,42 @@ def page_create(c):
 
     preset_map = {p["id"]: p for p in presets}
 
-    def assign_preset(sid, pid_val) -> None:
-        """Gán thẳng vào story.json: chọn preset là bài mang preset đó, tải lại trang vẫn còn."""
-        if root and sid:
-            stories.update_story(root, sid, preset_id=pid_val)
+    def save_ws_preset() -> None:
+        """on_change: đổi preset là đổi cho CẢ workspace (ghi prefs), không còn 'gán riêng một bài'."""
+        if root:
+            chosen = int(str(st.session_state[grid.PRESET_KEY]))  # giá trị MỚI — biến ở ngoài là giá trị trước khi bấm
+            note = ga.set_pref_preset(root, chosen)
+            st.session_state["grid_pref_note"] = note or (
+                f"Preset chung: {preset_map[chosen]['name']} — MỌI bài trong workspace này chạy theo bộ đó.")
 
-    pid = st.selectbox(
-        "Preset (bộ prompt theo chủ đề)",
-        list(preset_map.keys()),
-        format_func=lambda i: preset_map[i]["name"],
-        key="create_preset",
-        on_change=lambda: assign_preset(story_id, st.session_state["create_preset"]),
-        help="Đổi là gán luôn cho bài đang mở (ghi preset_id vào story.json); đang ở “— Story mới —” "
-             "thì preset này dùng cho bài tạo ra. Grid chạy bài nào cũng lấy preset của bài đó.",
-    )
-    preset = preset_map[pid]
+    # Preset LÀ CỦA WORKSPACE: ô này và ô "Preset chung" ở đầu Grid cùng ghi một prefs key, bài nào
+    # cũng chạy theo đó. preset_id trong story.json chỉ còn là dấu vết, dùng khi workspace chưa chọn.
+    shared = ga.pref_preset(root) if root else None
+    if shared not in preset_map:
+        shared = None
     own = stories.load_story(root, story_id).get("preset_id") if (root and story_id) else None
-    if own not in preset_map:
-        st.caption(f"{story_id or 'Bài mới'} chưa gán preset — các bước đang lấy bừa bộ đầu danh sách. "
-                   f"Chọn lại ô trên là gán luôn, hoặc bấm nút này để gán đúng “{preset['name']}” đang hiện:")
-        if st.button(f"📌 Gán “{preset['name']}” cho bài này", key="assign_preset_now", disabled=not story_id,
-                     help="Ghi preset_id vào story.json của bài đang mở — không chạy AI, không sửa nội dung nào khác."):
-            assign_preset(story_id, pid)
-            st.rerun()
+    seed = str(shared) if shared is not None else (
+        str(own) if own in preset_map else str(next(iter(preset_map))))
+    st.session_state[grid.PRESET_KEY] = seed  # prefs/story.json là sự thật: seed TRƯỚC khi widget sinh ra
+    preset_id = int(st.selectbox(
+        "Preset chung (cả workspace)",
+        [str(i) for i in preset_map],
+        format_func=lambda s: preset_map[int(s)]["name"],
+        key=grid.PRESET_KEY,
+        on_change=save_ws_preset,
+        help="Bộ prompt dùng cho MỌI bài trong workspace này — chọn ở đây hay ở đầu Grid là một, "
+             f"lưu trong `{ga.PREFS_FILE}` của workspace và không sửa story.json của từng bài. "
+             "Bài nào ghi preset_id riêng cũng bị preset chung đè lên; bỏ chọn ở đầu Grid "
+             "(“— Chưa chọn —”) thì mỗi bài mới theo preset_id của nó.",
+    ))
+    preset = preset_map[preset_id]
+    note = st.session_state.pop("grid_pref_note", None)
+    if note:
+        st.caption(note)
+    if shared is None:
+        st.caption(f"Workspace chưa chọn preset chung — bài này lấy preset_id của nó "
+                   f"({own if own in preset_map else 'chưa có → lấy bừa bộ đầu danh sách'}). "
+                   f"Đổi ô trên là chọn luôn cho CẢ workspace.")
 
     b0_import_block()
 
@@ -328,10 +334,9 @@ def page_create(c):
             st.stop()
         wroot = require_root()
         if not story_id:
-            story_id = stories.create_story(wroot, topic=input_text.strip().splitlines()[0][:60], preset_id=pid, input_text=input_text)["id"]
+            story_id = stories.create_story(wroot, topic=input_text.strip().splitlines()[0][:60], preset_id=preset_id, input_text=input_text)["id"]
         else:
-            stories.save_input(wroot, story_id, input_text)
-            stories.update_story(wroot, story_id, preset_id=pid)
+            stories.save_input(wroot, story_id, input_text)  # preset chung KHÔNG ghi lại vào story.json
         sync_staged_refs(wroot, story_id)
         st.session_state["select_story"] = story_option(story_id, stories.post_view(wroot, story_id)["topic"])
         return stories.post_view(wroot, story_id)

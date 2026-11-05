@@ -1909,38 +1909,93 @@ if p9_names:
           and next(w for w in at_p8.selectbox if w.key == fbgrid.PROV_KEYS["b1"]).value == fbgrid.PROV_DEFAULT_LABEL)
     stories.set_current(p8_root)
 
-# --- P9b: gán preset cho bài phải xuống story.json, mở lại bài vẫn còn ---
+# --- P11: preset LÀ CỦA WORKSPACE (một ô, mọi bài theo, chỉ sống trong prefs) ---
 p9_plist = [int(p["id"]) for p in db.list_presets(p8_conn)]
+_p11presets = {int(p["id"]): p for p in db.list_presets(p8_conn)}
 if len(p9_plist) >= 2:
+    p11_a, p11_b = p9_plist[0], p9_plist[1]
+    # tiền điều kiện: bài test mang preset_id RIÊNG (p11_a) trong khi prefs giữ p11_b -> phân biệt được
+    # "workspace đè lên bài" với "bài tự có preset", và phát hiện mọi lượt ghi ngược vào story.json
+    stories.update_story(p8_root, p8_show_sid, preset_id=p11_a)
+    check("P11 prefs round-trip: set_pref_preset ghi id nguyên vẹn, truyền None là XÓA key (không để 0 treo)",
+          ga.set_pref_preset(p8_root, p11_b) == "" and ga.pref_preset(p8_root) == p11_b
+          and ga.set_pref_preset(p8_root, None) == "" and "preset" not in ga.load_prefs(p8_root)
+          and ga.pref_preset(p8_root) is None)
+    ga.set_pref_preset(p8_root, p11_b)
+    _c_shared = ga.build_ctx(p8_conn, p8_root)
+    check("P11 workspace đã chọn preset chung thì preset_id của bài bị đè lên tuyệt đối",
+          _c_shared.shared_preset == _p11presets[p11_b]
+          and ga.preset_for(_c_shared, {"preset_id": p11_a}) == _p11presets[p11_b])
+    ga.set_pref_preset(p8_root, None)
+    _c_none = ga.build_ctx(p8_conn, p8_root)
+    check("P11 bỏ preset chung: mỗi bài lại theo preset_id của nó, bài chưa có thì lấy bộ đầu danh sách",
+          ga.preset_for(_c_none, {"preset_id": p11_a}) == _p11presets[p11_a]
+          and ga.preset_for(_c_none, {"preset_id": None}) == _c_none.fallback_preset)
+    check("P11 đổi preset chung KHÔNG ghi lại preset_id vào story.json của bài đang mở",
+          "update_story" not in inspect.getsource(fbgrid.save_preset_pref)
+          and "update_story(wroot, story_id, preset_id" not in inspect.getsource(fbapp.page_create))
+
+    # ô preset ở đầu Grid: prefs là sự thật — giá trị lạc vào không được xoá preset đã chọn.
+    # story.json đang giữ p11_a, prefs đang giữ p11_b -> mọi thao tác ở ô này chỉ được động tới prefs.
+    ga.set_pref_preset(p8_root, p11_b)
+    at_p8.session_state[fbgrid.PRESET_KEY] = fbgrid.PRESET_NONE_LABEL
+    _seed_cache(at_p8)
+    at_p8.run()
+    check("P11 ô preset đầu Grid seed từ prefs TRƯỚC khi widget sinh ra — giá trị lạ không xoá được preset chung",
+          not at_p8.exception and ga.pref_preset(p8_root) == p11_b
+          and next(w for w in at_p8.selectbox if w.key == fbgrid.PRESET_KEY).value == str(p11_b))
+    next(w for w in at_p8.selectbox if w.key == fbgrid.PRESET_KEY).set_value(fbgrid.PRESET_NONE_LABEL).run()
+    check("P11 chọn “— Chưa chọn —” là xóa preset chung, không ghi id rỗng vào prefs, không đụng story.json",
+          not at_p8.exception and "preset" not in ga.load_prefs(p8_root)
+          and stories.load_story(p8_root, p8_show_sid).get("preset_id") == p11_a)
+    next(w for w in at_p8.selectbox if w.key == fbgrid.PRESET_KEY).set_value(str(p11_b)).run()
+    check("P11 chọn preset ở đầu Grid ghi xuống prefs của workspace ngay — preset_id của bài vẫn là dấu vết cũ",
+          not at_p8.exception and ga.pref_preset(p8_root) == p11_b
+          and stories.load_story(p8_root, p8_show_sid).get("preset_id") == p11_a)
+    ga.set_pref_preset(p8_root, 999999)  # preset đã bị xóa ở Cấu hình
+    _seed_cache(at_p8)
+    at_p8.run()
+    check("P11 prefs trỏ preset đã bị xóa: tự dọn khỏi file, ô vẽ lại “— Chưa chọn —” thay vì id ma",
+          not at_p8.exception and "preset" not in ga.load_prefs(p8_root)
+          and next(w for w in at_p8.selectbox if w.key == fbgrid.PRESET_KEY).value == fbgrid.PRESET_NONE_LABEL)
+    ga.set_pref_preset(p8_root, p11_b)
+
+    # trang Tạo bài DÙNG CHUNG một key: một ô, một ý nghĩa, một sự thật
     at_p9 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
     at_p9.session_state["nav_page"] = "Tạo bài"
     at_p9.session_state["story_selector"] = f"{p8_show_sid} · Bài tick rẻ"
     at_p9.run()
-    p9_box = next(w for w in at_p9.selectbox if w.key == "create_preset")
-    p9_pick = next(i for i in p9_plist if i != p9_box.value)
-    p9_box.set_value(p9_pick).run()
-    check("P9b đổi ô Preset là ghi preset_id vào story.json ngay — không phải chờ bấm chạy bước",
-          not at_p9.exception and stories.load_story(p8_root, p8_show_sid).get("preset_id") == p9_pick)
-    at_p9b = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
-    at_p9b.session_state["nav_page"] = "Tạo bài"
-    at_p9b.session_state["story_selector"] = f"{p8_show_sid} · Bài tick rẻ"
-    at_p9b.run()
-    check("P9b mở lại bài ở phiên mới: ô Preset hiện đúng preset của bài, hết cảnh load trang là về bộ đầu",
-          not at_p9b.exception
-          and next(w for w in at_p9b.selectbox if w.key == "create_preset").value == p9_pick
-          and not any("chưa gán preset" in c.value for c in at_p9b.caption))
+    check("P11 trang Tạo bài không còn ô 'preset của bài' + nút gán riêng — chỉ còn preset chung của workspace",
+          not at_p9.exception and not any(w.key == "create_preset" for w in at_p9.selectbox)
+          and not any(w.key == "assign_preset_now" for w in at_p9.button)
+          and any(w.key == fbgrid.PRESET_KEY for w in at_p9.selectbox))
+    check("P11 mở bài ở phiên mới: ô preset chung hiện đúng preset workspace đang chọn (hết cảnh về bộ đầu)",
+          not at_p9.exception
+          and next(w for w in at_p9.selectbox if w.key == fbgrid.PRESET_KEY).value == str(p11_b))
+    next(w for w in at_p9.selectbox if w.key == fbgrid.PRESET_KEY).set_value(str(p11_a)).run()
+    check("P11 đổi preset ngay trên trang Tạo bài = đổi cho cả workspace (cùng prefs key với đầu Grid)",
+          not at_p9.exception and ga.pref_preset(p8_root) == p11_a
+          and ga.preset_for(ga.build_ctx(p8_conn, p8_root), {"preset_id": p11_b}) == _p11presets[p11_a])
+    at_p9d = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+    at_p9d.session_state["nav_page"] = "Tạo bài"
+    at_p9d.session_state["story_selector"] = f"{p8_show_sid} · Bài tick rẻ"
+    at_p9d.run()
+    check("P11 tải lại trang: preset chung vẫn trụ, không còn caption 'chưa gán preset'",
+          not at_p9d.exception
+          and next(w for w in at_p9d.selectbox if w.key == fbgrid.PRESET_KEY).value == str(p11_a)
+          and not any("chưa gán preset" in c.value for c in at_p9d.caption))
+    # workspace khác chưa chọn gì: không chép preset của nơi khác, trang nói rõ bài này theo preset_id của nó
+    ga.set_pref_preset(p8_root, None)
+    p11_root_b = stories.set_current(stories.validate_root(p8_ws / "ws_b"))
+    at_p9e = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+    at_p9e.session_state["nav_page"] = "Tạo bài"
+    at_p9e.run()
+    check("P11 sang workspace khác chưa chọn preset chung: prefs nơi cũ nguyên vẹn, trang nói rõ bài này theo preset_id",
+          not at_p9e.exception and ga.pref_preset(p11_root_b) is None
+          and ga.pref_preset(p8_root) is None
+          and any("Workspace chưa chọn preset chung" in c.value for c in at_p9e.caption))
+    stories.set_current(p8_root)
     stories.update_story(p8_root, p8_show_sid, preset_id=None)
-    at_p9c = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
-    at_p9c.session_state["nav_page"] = "Tạo bài"
-    at_p9c.session_state["story_selector"] = f"{p8_show_sid} · Bài tick rẻ"
-    at_p9c.run()
-    check("P9b bài chưa gán preset thì trang nói thẳng + có nút gán, không giả vờ đang dùng bộ đầu",
-          not at_p9c.exception and any("chưa gán preset" in c.value for c in at_p9c.caption)
-          and any(w.key == "assign_preset_now" for w in at_p9c.button))
-    next(w for w in at_p9c.button if w.key == "assign_preset_now").click().run()
-    check("P9b nút 'Gán … cho bài này' ghi đúng preset đang hiện lên story.json",
-          not at_p9c.exception and stories.load_story(p8_root, p8_show_sid).get("preset_id")
-          == next(w for w in at_p9c.selectbox if w.key == "create_preset").value)
 
 # --- P10a: nhãn ô hàng đợi phải nói thật (＋ xếp CUỐI, không phải trên cùng) ---
 check("P10a tooltip ＋ nói 'xếp CUỐI', hết câu hứa sai 'xếp trên cùng' ở mọi chỗ trong JS",

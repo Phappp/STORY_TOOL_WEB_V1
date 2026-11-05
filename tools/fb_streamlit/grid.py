@@ -34,6 +34,8 @@ APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt m�
 READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"}
 PROV_DEFAULT_LABEL = "Theo preset"
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
+PRESET_KEY = "ws_preset"  # cùng key cho Grid và trang Tạo bài: một widget, một ý nghĩa, một sự thật
+PRESET_NONE_LABEL = "— Chưa chọn (mỗi bài theo preset_id của nó) —"
 # Khi fragment vẽ lại, Streamlit đánh dấu phần tử của nó bằng data-stale và gắn class có `opacity: .33`
 # kèm `transition: opacity 1s ease-in .5s` -> lưới mờ rồi hiện lại MỖI NHỊP (2s), chính là cái nhấp nháy
 # thấy được dù không chạy gì. Lưới không cần tín hiệu "đang tải" đó nên tắt đúng phần tử của nó.
@@ -92,10 +94,26 @@ def save_provider_pref(ctx: ga.Ctx, step: str) -> None:
         st.session_state["grid_pref_note"] = note
 
 
-def provider_bar(ctx: ga.Ctx) -> None:
-    """3 dropdown provider cho B1/B2/B3 đặt ở đầu grid — prefs của workspace là sự thật duy nhất.
+def save_preset_pref(ctx: ga.Ctx) -> None:
+    """on_change của ô preset: chọn preset chung cho CẢ workspace, chỉ ghi vào prefs (không sửa story.json)."""
+    label = str(st.session_state.get(PRESET_KEY) or PRESET_NONE_LABEL)
+    try:
+        pid = None if label == PRESET_NONE_LABEL else int(label)
+    except ValueError:
+        pid = None
+    if pid is not None and pid not in ctx.presets:  # preset vừa bị xóa ở Cấu hình -> đừng ghi id ma
+        pid = None
+    note = ga.set_pref_preset(ctx.root, pid)
+    st.session_state["grid_pref_note"] = note or (
+        f"Preset chung: {ctx.presets[pid]['name']} — MỌI bài trong workspace này chạy theo bộ đó."
+        if pid else "Bỏ preset chung — mỗi bài lại theo preset_id của nó.")
 
-    Bài nào được chọn riêng trong modal (prov_pick) thì quyền ưu tiên cao hơn chỗ này.
+
+def workspace_bar(ctx: ga.Ctx) -> None:
+    """3 dropdown provider + 1 dropdown preset đặt ở đầu grid — prefs của workspace là sự thật duy nhất.
+
+    Bài nào được chọn riêng trong modal (prov_pick) thì quyền ưu tiên cao hơn chỗ này; riêng preset
+    thì KHÔNG có ngoại lệ: preset chung thắng mọi preset_id trong story.json.
     Trước đây mỗi lượt vẽ lại so giá trị widget với file rồi ghi chênh lệch xuống file — nhưng widget
     có thể mang giá trị của workspace khác hoặc giá trị trình duyệt khôi phục, nên prefs bị xoá âm
     thầm ngay sau khi chọn ("vừa gán provider đã reset"). Nay file chỉ đổi khi anh bấm đổi.
@@ -105,8 +123,8 @@ def provider_bar(ctx: ga.Ctx) -> None:
     note = st.session_state.pop("grid_pref_note", None)
     if note:
         st.caption(note)
-    cols = st.columns(3)
-    for col, step in zip(cols, ga.ALL_STEPS, strict=True):
+    cols = st.columns([1, 1, 1, 1.4])
+    for col, step in zip(cols[:3], ga.ALL_STEPS, strict=True):
         current = str(stored.get(step) or "")
         options = [PROV_DEFAULT_LABEL] + names
         if current and current not in names:  # provider đã bị xóa ở Cấu hình -> bỏ khỏi prefs, vẽ lại "Theo preset"
@@ -123,6 +141,28 @@ def provider_bar(ctx: ga.Ctx) -> None:
                             "chọn “Theo preset” để dùng provider của preset như trang Tạo bài. "
                             f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
                             if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
+
+    pid = ga.pref_preset(ctx.root)
+    if pid is not None and pid not in ctx.presets:  # preset đã bị xóa ở Cấu hình -> bỏ khỏi prefs
+        note = ga.set_pref_preset(ctx.root, None)
+        if note:
+            st.caption(note)
+        ctx.shared_preset = None
+        pid = None
+    # option là CHUỖI id (không phải int) để giá trị ghi vào session_state ở trên nằm trong danh sách
+    options = [PRESET_NONE_LABEL] + sorted({str(i) for i in ctx.presets},
+                                           key=lambda s: str(ctx.presets[int(s)]["name"]).lower())
+    st.session_state[PRESET_KEY] = str(pid) if pid in ctx.presets else PRESET_NONE_LABEL
+    cols[3].selectbox("Preset chung (cả workspace)", options,
+                      format_func=lambda v: PRESET_NONE_LABEL if v == PRESET_NONE_LABEL
+                      else str(ctx.presets[int(v)]["name"]),
+                      key=PRESET_KEY,
+                      on_change=lambda: save_preset_pref(ctx),
+                      help=("Bài nào cũng bị bộ prompt của ô này đè lên: MỌI bài trong workspace "
+                            "chạy theo preset chọn ở đây, kể cả bài đã ghi preset_id riêng trong "
+                            "story.json (chỉ còn là dấu vết). Bỏ chọn thì mỗi bài lại theo preset_id "
+                            f"của nó. Lưu trong `{ga.PREFS_FILE}` của workspace này."
+                            if ctx.presets else " (chưa có preset nào — tạo ở Cấu hình ▸ Presets)"))
 
 
 def _when(ts: float) -> str:
@@ -602,7 +642,7 @@ def render(ctx: ga.Ctx) -> None:
         st.selectbox("Lọc bài", list(ga.FILTERS), key="grid_filter",
                      help="Bài đã vào hàng đợi nổi lên đầu danh sách lưới; thứ tự LÀM theo cột # — "
                           "bấm ＋ trước thì làm trước, bài mới xếp cuối.")
-    provider_bar(ctx)
+    workspace_bar(ctx)
     import_form(ctx)
     # Fragment luôn chạy đều: event từ lưới chỉ vẽ lại đúng nó, nên giao việc cho luồng nền
     # không cần vẽ lại cả trang nữa (đó chính là cú loé trắng sau khi bấm ⚡/▶).

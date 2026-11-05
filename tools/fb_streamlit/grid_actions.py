@@ -59,6 +59,7 @@ class Ctx:
     presets: dict
     fallback_preset: object = None
     defaults: dict = field(default_factory=dict)  # step -> provider đặt ở đầu grid (prefs của workspace)
+    shared_preset: object = None  # preset chọn ở đầu grid: MỌI bài trong workspace chạy theo nó
 
 
 @dataclass
@@ -141,6 +142,29 @@ def provider_names(ctx: Ctx) -> list[str]:
     return sorted({str(p["name"]) for p in ctx.providers.values()})
 
 
+def pref_preset(root: Path):
+    """id preset cả workspace dùng chung (prefs của workspace đang mở) — None nếu chưa chọn."""
+    raw = load_prefs(root).get("preset")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def set_pref_preset(root: Path, pid) -> str:
+    """Chọn preset chung cho workspace; pid rỗng/None = bỏ, mỗi bài lại theo preset_id của nó.
+
+    Chỉ ghi vào `.fbtool-grid-prefs.json`, không sửa story.json của từng bài — đổi preset chung là
+    cả workspace theo ngay, kể cả 150 bài đã làm dở.
+    """
+    prefs = load_prefs(root)
+    if pid:
+        prefs["preset"] = int(pid)
+    else:
+        prefs.pop("preset", None)
+    return save_prefs(root, prefs)
+
+
 def provider_choice(ctx: Ctx, story: dict, step: str) -> str:
     """Provider sẽ dùng cho bước này: chọn riêng trong modal > mặc định của grid > rỗng (để steps theo preset)."""
     block = (story or {}).get(step)
@@ -151,9 +175,23 @@ def provider_choice(ctx: Ctx, story: dict, step: str) -> str:
 def build_ctx(conn, root: Path) -> Ctx:
     presets = db.list_presets(conn)
     fallback = presets[0] if presets else None
+    by_id = {p["id"]: p for p in presets}
     return Ctx(root=root, providers={p["id"]: p for p in db.list_providers(conn)},
-               presets={p["id"]: p for p in presets}, fallback_preset=fallback,
-               defaults=pref_providers(root))
+               presets=by_id, fallback_preset=fallback,
+               defaults=pref_providers(root), shared_preset=by_id.get(pref_preset(root)))
+
+
+def preset_for(ctx: Ctx, story: dict):
+    """Preset sẽ dùng: preset CHUNG của workspace là tuyệt đối, preset_id của bài chỉ là dấu vết
+    (dùng khi workspace chưa chọn gì), cuối cùng là bộ đầu danh sách.
+
+    `story["preset_id"]` không còn quyết định khi workspace đã chọn — giống hệt cách `provider`
+    trong story.json chỉ là dấu vết của lượt chạy trước (P4c).
+    """
+    if ctx.shared_preset is not None:
+        return ctx.shared_preset
+    preset = ctx.presets.get(story.get("preset_id"))
+    return preset if preset is not None else ctx.fallback_preset
 
 
 def _folder(story: dict, root: Path, sid: str) -> Path:
@@ -354,11 +392,6 @@ def b0_todo_ids(ctx: Ctx) -> list[str]:
         if b0_state(ctx.root, sid, story=story) != stories.DONE:
             out.append(sid)
     return out
-
-
-def preset_for(ctx: Ctx, story: dict):
-    preset = ctx.presets.get(story.get("preset_id"))
-    return preset if preset is not None else ctx.fallback_preset
 
 
 def _guard(ctx: Ctx, sid: str):
