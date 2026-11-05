@@ -18,6 +18,8 @@ import stories
 
 MAX_KEYWORDS = 4
 PER_KEYWORD = 4
+# steps.py không được import grid_actions (layering nằm ngược chiều), nên tên bước tự giữ ở đây
+STEP_LABEL = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
 
 
 def why(exc: Exception) -> str:
@@ -223,12 +225,37 @@ def run_b3(root: Path, sid: str, preset, provider, model: str, post, caption: st
     return "B3 SEO: OK", text
 
 
+def skipped_done(root: Path, sid: str) -> set[str]:
+    """Những bước ĐÃ XONG của bài — ⚡ không được đụng vào (P15a).
+
+    'Xong' ở đây là màu xanh lá mà anh thấy, tức `stories.step_state`: file có chữ/ảnh. Đọc lại
+    từ folder chứ không tin `story.json` một mình, vì anh có thể xóa file tay — mất file thì phải chạy.
+    """
+    try:
+        return {step for step, state in stories.states(root, sid).items() if state == stories.DONE}
+    except stories.WorkspaceError:  # bài bị xóa/xè giữa chừng: để runner báo lỗi thật, ở đây không đoán
+        return set()
+
+
+def skip_line(step: str) -> str:
+    return f"{STEP_LABEL.get(step, step.upper())} đã xong (xanh lá) — ⚡ bỏ qua, muốn chạy lại thì bấm ▶ riêng bước đó."
+
+
 def run_pipeline(root: Path, sid: str, preset, post, refs: list, rows, providers: dict, caption: str | None = None, extra_lines=()) -> Result:
-    """Nút ⚡: B1 trước, rồi B2 ∥ B3; ghi file + state từng bước. providers = {'b1': (row, model), ...}."""
+    """Nút ⚡: B1 trước, rồi B2 ∥ B3; ghi file + state từng bước. providers = {'b1': (row, model), ...}.
+
+    P15a: bước nào đã xanh lá thì ⚡ bỏ qua — chạy lại là ghi đè kết quả anh đang dùng và tốn thêm
+    một lượt gọi AI. Trang Tạo bài không có ô ▶ từng bước, nên bước bỏ qua phải tự nói ra.
+    """
     lines = list(extra_lines)
+    skip = skipped_done(root, sid)
     p1, m1 = providers["b1"]
-    cap, log1 = run_b1(root, sid, preset, p1, m1, post)
-    lines.append(log1)
+    if "b1" in skip:
+        lines.append(skip_line("b1"))
+        cap = None
+    else:
+        cap, log1 = run_b1(root, sid, preset, p1, m1, post)
+        lines.append(log1)
     if cap is not None:
         post = stories.post_view(root, sid)
     caption_now = cap or caption or post["caption"]
@@ -237,14 +264,23 @@ def run_pipeline(root: Path, sid: str, preset, post, refs: list, rows, providers
     p3, m3 = providers["b3"]
     img_prompt = prompts.b2_image_prompt(preset, post, caption_now)
 
+    kws, image, seo = [], None, None
+    todo = [step for step in ("b2", "b3") if step not in skip]
+    for step in ("b2", "b3"):
+        if step in skip:
+            lines.append(skip_line(step))
     with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_b2 = pool.submit(run_b2, root, sid, preset, post, img_prompt, refs, p2, m2, rows, caption_now)
-        fut_b3 = pool.submit(run_b3, root, sid, preset, p3, m3, post, caption_now)
-        log_b2, kws, image = fut_b2.result()
-        log_b3, seo = fut_b3.result()
+        fut_b2 = pool.submit(run_b2, root, sid, preset, post, img_prompt, refs, p2, m2, rows, caption_now) if "b2" in todo else None
+        fut_b3 = pool.submit(run_b3, root, sid, preset, p3, m3, post, caption_now) if "b3" in todo else None
+        if fut_b2 is not None:
+            log_b2, kws, image = fut_b2.result()
+            lines += log_b2
+        if fut_b3 is not None:
+            log_b3, seo = fut_b3.result()
+            lines.append(log_b3)
 
-    if image is None:
+    if fut_b2 is not None and image is None:
         stories.set_step_state(root, sid, "b2", "pending", detail="chưa có ảnh cho bước này")
-    else:
+    elif image is not None:
         lines.append(f"B2: đã lưu 1 ảnh vào {sid}/image.png (ghi đè ảnh cũ)")
-    return Result(cap=cap, seo=seo, keywords=kws, image=image, lines=lines + log_b2 + [log_b3])
+    return Result(cap=cap, seo=seo, keywords=kws, image=image, lines=lines)

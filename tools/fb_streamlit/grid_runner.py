@@ -89,15 +89,25 @@ def tasks_for(job: Job) -> list[Task]:
     ⚡/hàng đợi là một DÂY CHUYỀN cho mỗi bài: B1 chạy trước, B2/B3 xếp chờ ngay sau nó (hai
     bước này không cần nhau nên được nhả cùng lúc, mỗi bước chiếm một bộ). Việc lẻ (bấm một ô)
     chỉ có đúng một bước — không ai được nhân ba việc lên chỉ vì anh bấm một cái.
+
+    P15a: ⚡/hàng đợi BỎ QUA bước đã xanh lá của chính bài đó (file đã có kết quả) — chạy lại là
+    ghi đè anh đang dùng và tốn thêm một lượt AI. B1 đã xong thì B2/B3 không còn gì để chờ,
+    xuống thẳng hàng đợi ready thay vì khóa trong `_hold` mãi mãi.
     """
+    import steps  # đọc state thật từ folder; steps không import gì ngược lại nên không vòng
+
     chained = list(job.steps) == list(ALL_STEPS)
     tasks: list[Task] = []
     for sid in job.ids:
-        if chained:
-            tasks.append(Task(sid=sid, step="b1", job=job))
-            tasks += [Task(sid=sid, step=step, job=job, dep="b1") for step in ("b2", "b3")]
-        else:
+        if not chained:
             tasks += [Task(sid=sid, step=step, job=job) for step in job.steps]
+            continue
+        keep = [step for step in ALL_STEPS if step not in steps.skipped_done(job.root, sid)]
+        if "b1" in keep:
+            tasks.append(Task(sid=sid, step="b1", job=job))
+            tasks += [Task(sid=sid, step=step, job=job, dep="b1") for step in keep if step != "b1"]
+        else:
+            tasks += [Task(sid=sid, step=step, job=job) for step in keep]
     return tasks
 
 
@@ -153,26 +163,43 @@ class Runner:
             return "Việc rỗng — không có bài nào để chạy."
         job.ids = ids
         tasks = tasks_for(job)
+        chained = list(job.steps) == list(ALL_STEPS)
         with self._cv:
             busy = [sid for sid in ids if sid in self.in_flight()]
             if busy:
                 where = "trang Tạo bài" if any(s in self._inline for s in busy) else "luồng nền"
                 return f"{', '.join(busy)}: đang chờ/chạy trong {where} — xong bài này hãy bấm lại."
+            if chained and not tasks:
+                # P15a: bài đã xanh lá hết thì KHÔNG giữ chỗ — giữ là bài bị khóa "đang chờ" vĩnh viễn.
+                return (f"{', '.join(ids)}: mọi bước đã xong (xanh lá) — ⚡ không chạy lại. "
+                        f"Muốn chạy lại một B thì mở bài và bấm ▶ ở ô đó.")
+            # Bài nào bị bỏ qua hết B thì coi như xong ngay tại chỗ: nó không có viên việc nào
+            # nên _finish sẽ không bao giờ gọi nó — để nó trong _open là luồng nền báo bận mãi.
+            done_now = [sid for sid in ids if chained and not any(t.sid == sid for t in tasks)]
+            keep = [sid for sid in ids if sid not in done_now]
             if not self._open and not self._slots:
-                self.done, self.total = 0, len(ids)
+                self.done, self.total = len(done_now), len(ids)
             else:
+                self.done += len(done_now)
                 self.total += len(ids)
-            for sid in ids:
+            for sid in keep:
                 self._open[sid] = self._open.get(sid, 0) + sum(1 for t in tasks if t.sid == sid)
+            job.ids = keep
+            if isinstance(job.event.get("ids"), list):  # cancel/executor chỉ thấy bài thật sự chạy
+                job.event["ids"] = keep
             self._jobs.append(job)
             self._ready += [t for t in tasks if not t.dep]
             self._hold += [t for t in tasks if t.dep]
             self._ensure_thread()
             self._cv.notify_all()
         n = len(tasks)
+        skipped = len(ALL_STEPS) * len(ids) - n if chained else 0
+        tail = f" — bỏ qua {skipped} B đã xong (xanh lá)" if skipped else ""
+        if done_now:
+            tail += f" ({len(done_now)} bài đã xanh lá cả 3 B)"
         if self._paused:
-            return (f"Luồng nền đang DỪNG — {job.label} ({n} việc) xếp chờ, bấm ▶ Chạy tiếp để làm.")
-        return f"Đã giao cho luồng nền: {job.label} — {n} việc, bộ nào rảnh là nhảy vào."
+            return (f"Luồng nền đang DỪNG — {job.label} ({n} việc{tail}) xếp chờ, bấm ▶ Chạy tiếp để làm.")
+        return f"Đã giao cho luồng nền: {job.label} — {n} việc{tail}, bộ nào rảnh là nhảy vào."
 
     def snapshot(self) -> dict:
         """Ảnh trạng thái cho grid vẽ: bước nào của bài nào đang chạy, chờ gì, tới đâu."""

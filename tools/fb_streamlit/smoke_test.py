@@ -280,6 +280,30 @@ check("run_pipeline trả log cho từng bước", res.lines[0] == "Ảnh gốc 
       and any("đã lưu 1 ảnh vào" in l for l in res.lines))
 check("run_pipeline gọi đúng provider từng bước", chat_calls and all(name == "FakeAPI" for name, _ in chat_calls))
 
+# P15a: ⚡ tạo bài cũng phải respecting B đã xanh lá — chạy lại là ghi đè và tốn thêm lượt AI.
+chat_calls.clear()
+res_skip = steps.run_pipeline(st_root, sid_b, preset_a, stories.post_view(st_root, sid_b), [], rows2,
+                              {"b1": (row_api, "m1"), "b2": (row_api, "m1"), "b3": (row_api, "m1")})
+check("P15a ⚡ chạy lại bài đã đủ 3 B: không gọi AI, không trả kết quả mới để app ghi đè",
+      chat_calls == [] and res_skip.cap is None and res_skip.seo is None
+      and res_skip.image is None and res_skip.keywords == [])
+check("P15a TẠO BÀI không có ô ▶ từng bước nên mỗi B bị bỏ qua phải tự nói ra",
+      sum("đã xong (xanh lá) — ⚡ bỏ qua" in l for l in res_skip.lines) == 3
+      and any("B1 caption đã xong" in l for l in res_skip.lines)
+      and any("B2 ảnh đã xong" in l for l in res_skip.lines)
+      and any("B3 SEO đã xong" in l for l in res_skip.lines))
+check("P15a bỏ qua không làm hỏng gì: file còn nguyên, ba ô vẫn xanh lá",
+      all((st_root / sid_b / f).is_file() for f in ("caption.txt", "image.png", "seo.md"))
+      and set(stories.states(st_root, sid_b).values()) == {stories.DONE})
+(st_root / sid_b / "seo.md").unlink()  # anh xóa tay 1 kết quả -> chỉ B đó được chạy lại
+chat_calls.clear()
+res_half = steps.run_pipeline(st_root, sid_b, preset_a, stories.post_view(st_root, sid_b), [], rows2,
+                              {"b1": (row_api, "m1"), "b2": (row_api, "m1"), "b3": (row_api, "m1")})
+check("P15a mất 1 file thì đúng 1 B chạy lại — B1/B2 vẫn bỏ qua, B3 lên xanh lại",
+      len(chat_calls) == 1 and sum("đã xong (xanh lá)" in l for l in res_half.lines) == 2
+      and any(l == "B3 SEO: OK" for l in res_half.lines) and res_half.seo
+      and set(stories.states(st_root, sid_b).values()) == {stories.DONE})
+
 prov.chat = boom_chat
 prov.codex_generate_image = boom_codex
 sid_c = stories.create_story(st_root, "Chủ đề lỗi", input_text="nội dung lỗi")["id"]
@@ -1059,6 +1083,54 @@ check("P14a B0 có state riêng trong story.json nên đối chiếu bằng row.
 check("P14a 'waiting' không bao giờ bị đụng tới — modal vẫn khóa ▶ cho bước đã giao việc",
       fbgrid.mark_flow([{"id": "s", "states": {"b1": "pending"}}],
                        {"flow": {"s": {"b1": "waiting"}}})[0]["flow"] == {"b1": "waiting"})
+
+# --- P15a: ⚡/hàng đợi bỏ qua B đã xanh lá, ngay cả trong luồng nền ---
+p15_root = stories.validate_root(box_p5b / "ws_p15")
+s15_all = stories.create_story(p15_root, "Đủ ba B")["id"]
+for fname in ("caption.txt", "image.png", "seo.md"):
+    (p15_root / s15_all / fname).write_text("kết quả cũ", encoding="utf-8")
+s15_b1 = stories.create_story(p15_root, "Mới có B1")["id"]
+(p15_root / s15_b1 / "caption.txt").write_text("kết quả cũ", encoding="utf-8")
+s15_none = stories.create_story(p15_root, "Chưa có gì")["id"]
+check("P15a reading state thật từ folder: đủ 3 file = 3 xanh lá, mới caption = 1, rỗng = 0",
+      steps.skipped_done(p15_root, s15_all) == {"b1", "b2", "b3"}
+      and steps.skipped_done(p15_root, s15_b1) == {"b1"}
+      and steps.skipped_done(p15_root, s15_none) == set())
+j15, _ = gr.job_for({"source": "batch_run", "ids": [s15_all, s15_b1, s15_none]}, p15_root)
+per_sid: dict[str, list] = {s15_all: []}
+for t in gr.tasks_for(j15[0]):
+    per_sid.setdefault(t.sid, []).append((t.step, t.dep))
+check("P15a hàng đợi ⚡ chỉ giao những B chưa xong — bài xanh lá hết không còn việc, bài mới có B1 thì B2/B3 xuống thẳng hàng đợi",
+      per_sid == {s15_all: [], s15_b1: [("b2", ""), ("b3", "")],
+                  s15_none: [("b1", ""), ("b2", "b1"), ("b3", "b1")]})
+ran_par.clear()
+runner_15 = gr.Runner(par_executor, claim=claim_one)
+note15 = runner_15.submit(j15[0])
+check("P15a nhận việc nói đúng số B sẽ chạy và số B đã xanh lá bị bỏ qua (5 việc / bỏ 4)",
+      "Đã giao cho luồng nền" in note15 and "5 việc" in note15
+      and "bỏ qua 4 B đã xong (xanh lá)" in note15 and "1 bài đã xanh lá cả 3 B" in note15)
+ok15 = wait_flow(runner_15)
+check("P15a luồng nền chạy đúng 5 viên và không kẹt bài đã xong: 3/3 bài, hàng đợi trống",
+      ok15 and sorted(ran_par) == sorted(f"{s}/{b}" for s, b in
+                                         [(s15_b1, "b2"), (s15_b1, "b3"), (s15_none, "b1"),
+                                          (s15_none, "b2"), (s15_none, "b3")])
+      and runner_15.snapshot()["done"] == runner_15.snapshot()["total"] == 3
+      and s15_all not in runner_15.in_flight())
+runner_15.stop()
+ran_par.clear()
+j_all, _ = gr.job_for({"source": "run_all", "id": s15_all}, p15_root)
+runner_15b = gr.Runner(par_executor, claim=claim_one)
+note_all = runner_15b.submit(j_all[0])
+check("P15a ⚡ vào bài đã xanh lá hết: từ chối, KHÔNG giữ chỗ — bài không bị khóa 'đang chờ' vĩnh viễn",
+      "mọi bước đã xong (xanh lá)" in note_all and s15_all not in runner_15b.in_flight()
+      and not runner_15b.snapshot()["busy"])
+j_step, _ = gr.job_for({"source": "run_step", "id": s15_all, "step": "b1"}, p15_root)
+check("P15a ▶ riêng một ô (modal) vẫn chạy lại B đã xong — phạm vi bỏ qua chỉ là ⚡ và hàng đợi",
+      [(t.sid, t.step) for t in gr.tasks_for(j_step[0])] == [(s15_all, "b1")]
+      and "bỏ qua" not in runner_15b.submit(j_step[0]))
+check("P15a ▶ của modal thật sự chiếm một bộ và chạy — bài đã xong không bị từ chối",
+      wait_flow(runner_15b) and ran_par == [f"{s15_all}/b1"])
+runner_15b.stop()
 
 # --- P6c: phanh luồng nền + một bài chỉ có MỘT nơi chạy ---
 started_c: list[str] = []

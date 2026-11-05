@@ -302,7 +302,7 @@ def page_create(c):
         ai_gen = st.button("AI tạo input")
     with btn_row[2]:
         st.write("")
-        run_all = st.button("⚡ Chạy pipeline: B1 → (B2 ∥ B3)", help="Tạo caption trước; sau đó ảnh và SEO chạy song song; mỗi B dùng provider đã chọn ở mục đó")
+        run_all = st.button("⚡ Chạy pipeline: B1 → (B2 ∥ B3)", help="Tạo caption trước; sau đó ảnh và SEO chạy song song; mỗi B dùng provider đã chọn ở mục đó. B nào ĐÃ XONG (file đã có kết quả) được bỏ qua — muốn chạy lại đúng B đó thì mở bài ở lưới và bấm ▶ trong modal (▶ vẫn chạy lại, ⚡ thì không).")
     input_text = st.text_area("Dán nội dung gốc / caption cũ *", key="details_field", height=200)
 
     if ai_gen:

@@ -1225,15 +1225,16 @@ function updateBar() {
   const n = PICKED.size;
   b.disabled = n === 0;
   b.textContent = "⚡ Chạy " + n + " bài đã chọn";
-  b.title = "Mỗi bài chạy B1 trước; B2/B3 được nhả ngay khi B1 của nó xong. Bộ nào rảnh là việc nhảy vào — "
-    + n + " bài này có thể chạy cùng lúc tới đúng số provider đang có, không còn chia lượt.";
+  b.title = "Mỗi bài chạy B1 trước; B2/B3 được nhả ngay khi B1 của nó xong. Bộ nào rảnh là việc nhảy vào. "
+    + "B nào đã xanh lá (xong) được BỎ QUA — muốn chạy lại thì mở bài, bấm ▶ riêng ô đó.";
   const q = document.getElementById("queuerun");
   if (q) {
     const ids = queueIds();
     q.disabled = ids.length === 0;
     q.textContent = "▶ Bắt đầu " + ids.length + " bài";
     q.title = "Chạy cả " + ids.length + " bài trong hàng đợi theo thứ tự # — từng B một, "
-      + "nhiều bài cùng lúc nếu có nhiều bộ rảnh.";
+      + "nhiều bài cùng lúc nếu có nhiều bộ rảnh. "
+      + "B nào đã xanh lá (xong) được BỎ QUA, không ghi đè.";
   }
   const e = document.getElementById("queueerr");
   if (e) {
