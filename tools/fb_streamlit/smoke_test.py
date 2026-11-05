@@ -3596,6 +3596,70 @@ check("P19d bài lỗi cũ (chưa có dấu vết) mà folder đã có ảnh th�
 shutil.rmtree(_p19d_box, ignore_errors=True)
 # --- hết P19d ---
 
+# --- P18d: ô Link ngay dưới đầu modal (link đã đăng + link video B4) ---
+_p18d_box = Path(tempfile.mkdtemp(prefix="fbp18d_"))
+_p18d_root = stories.validate_root(_p18d_box / "ws")
+_p18d_conn = db.connect()  # chỉ đọc: không thêm bộ/preset nào, DB của anh giữ nguyên
+_p18d_ctx = ga.build_ctx(_p18d_conn, _p18d_root)
+_p18d_sid = stories.create_story(_p18d_root, "Bài cần nhập link", input_text="nội dung")["id"]
+
+out = ga.apply_event(_p18d_ctx, {"source": "link_save", "id": _p18d_sid, "value": "facebook.com/posts/123"})
+check("P18d ô 🔗 trong modal gửi ĐÚNG event của cột Link (link_save) — một link chỉ có một chỗ ghi",
+      out.lines == [f"{_p18d_sid}: Link = https://facebook.com/posts/123."]
+      and stories.load_story(_p18d_root, _p18d_sid)["link"] == "https://facebook.com/posts/123")
+out = ga.apply_event(_p18d_ctx, {"source": "b4_link_save", "id": _p18d_sid, "value": " https://youtu.be/abc "})
+check("P18d 🎬 Link video lưu vào block b4 của story.json, không đè link đã đăng; clean_url tự vá https:// và spaces",
+      stories.load_story(_p18d_root, _p18d_sid)["b4"]["link"] == "https://youtu.be/abc"
+      and stories.load_story(_p18d_root, _p18d_sid)["link"] == "https://facebook.com/posts/123")
+check("P18d link video KHÔNG làm ô B4 lên xanh: ô đó luôn nói về FILE video trong folder",
+      stories.video_state(stories.load_story(_p18d_root, _p18d_sid), _p18d_root / _p18d_sid) == stories.PENDING)
+_p18d_rows = {r["id"]: r for r in fbgrid.rows_for(_p18d_ctx)}
+check("P18d hàng lưới mang sẵn link + b4link -> modal vẽ được hai ô ngay khi mở, khỏi xin Python một lượt",
+      _p18d_rows[_p18d_sid]["b4link"] == "https://youtu.be/abc"
+      and _p18d_rows[_p18d_sid]["link"] == "https://facebook.com/posts/123")
+_p18d_clip = _p18d_box / "clip.mp4"
+_p18d_clip.write_bytes(b"P18D-VIDEO")
+with open(_p18d_clip, "rb") as _p18d_fh:
+    out = ga.save_video(_p18d_ctx, _p18d_sid, _p18d_fh, "clip.mp4")
+check("P18d tải file video SAU khi đã gõ link: file vào folder, link vẫn còn (save_video đã sửa thành merge)",
+      any("video.mp4" in line for line in out)
+      and stories.video_state(stories.load_story(_p18d_root, _p18d_sid), _p18d_root / _p18d_sid) == stories.DONE
+      and stories.load_story(_p18d_root, _p18d_sid)["b4"]["link"] == "https://youtu.be/abc")
+out = ga.apply_event(_p18d_ctx, {"source": "b4_link_save", "id": _p18d_sid, "value": ""})
+check("P18d xóa trắng ô link rồi Lưu = xóa link thật trong story.json, log nói '(trống)' chứ không im lặng; "
+      "file video vẫn còn nên ô B4 vẫn xanh",
+      stories.load_story(_p18d_root, _p18d_sid)["b4"]["link"] == "" and "(trống)" in out.lines[0]
+      and stories.video_state(stories.load_story(_p18d_root, _p18d_sid), _p18d_root / _p18d_sid) == stories.DONE)
+
+_js18d = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_f18d = _js18d[_js18d.index("function linkBar"):_js18d.index("\n}", _js18d.index("function linkBar"))]
+_n18d = _js18d[_js18d.index("Object.keys(LINK_BARS)"):_js18d.index("modal.appendChild(modalBody")]
+check("P18d tab nào có ô link là do BẢNG LINK_BARS khai báo; modalNode chỉ duyệt bảng — không rải if theo tên tab",
+      'tabs: ["input", "b1", "b2", "b3", "link"]' in _js18d and 'tabs: ["b4"]' in _js18d
+      and 'LINK_BARS[kind].tabs.indexOf(ref.tab) >= 0) modal.appendChild(linkBar(row, kind))' in _n18d)
+check("P18d một lối ghi duy nhất cho mỗi link: link đã đăng -> link_save (dùng lại của cột Link), "
+      "link video -> b4_link_save, JS không tự đoán chỗ lưu",
+      'source: "link_save"' in _js18d and 'source: "b4_link_save"' in _js18d
+      and "send({ source: cfg.source, id: row.id, value: input.value })" in _f18d)
+check("P18d nháp link KHÔNG keyed theo dấu mốc file (batch chạy làm updated_at đổi liên tục, đang gõ mà mất chữ là lỗi) "
+      "+ có data-fid để vẽ lại vẫn trả đúng con trỏ về ô",
+      'const key = String(row.id) + "|" + kind;' in _f18d and "stampOf" not in _f18d
+      and "input.dataset.fid = key;" in _f18d)
+check("P18d Enter ở ô link là LƯU, Esc không bị ô link nuốt (Esc vẫn đóng modal như mọi nơi)",
+      'if (e.key === "Enter")' in _f18d and "Escape" not in _f18d)
+check("P18d chữ link vào DOM bằng value/textContent, không innerHTML — link là chữ từ người đưa lên",
+      "innerHTML" not in _f18d and "input.value =" in _f18d)
+check("P18d b4link vào chữ ký modal (lưu xong ô phải hiện lại chữ mới) + có style riêng .mlink, không vẽ trần",
+      "row.b4link" in _js18d[_js18d.index("function modalSig"):_js18d.index("\n}", _js18d.index("function modalSig"))]
+      and ".mlink {" in _js18d)
+check("P18d tab Link thành bản tóm tắt đủ bốn thứ (đã đăng / nguồn / link video / file video) thay vì một chữ trơ",
+      '"Đã đăng: " + (row.link' in _js18d and '"Nguồn (B0): " + (row.source' in _js18d
+      and '"Link video (B4): " + (row.b4link' in _js18d and '"File video trong folder: " + (row.b4meta' in _js18d
+      and 'bấm ✎ ở cột Link để nhập' not in _js18d)
+_p18d_conn.close()
+shutil.rmtree(_p18d_box, ignore_errors=True)
+# --- hết P18d ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")

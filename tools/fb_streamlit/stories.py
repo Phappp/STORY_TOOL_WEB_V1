@@ -420,8 +420,12 @@ def save_video(root: Path, sid: str, src, suffix: str = ".mp4", method: str = "t
         if tmp.exists():
             tmp.unlink()
     story = load_story(root, sid)
-    story["b4"] = {"state": DONE, "detail": "", "method": method, "file": target.name,
-                   "bytes": size, "updated_at": time.time()}
+    # P18d: link video anh nhập trong modal B4 sống trong block này — tải file mới là đổi file,
+    # không được xóa cái link đã ghi.
+    block = dict(story.get("b4") or {})
+    block.update({"state": DONE, "detail": "", "method": method, "file": target.name,
+                  "bytes": size, "updated_at": time.time()})
+    story["b4"] = block
     save_story(root, sid, story)
     return story["b4"]
 

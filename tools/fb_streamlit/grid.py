@@ -239,6 +239,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "b0meta": ga.b0_meta(story),
             "b4": b4,  # B4 cũng riêng: không có bước AI nào chạy video nên nó không vào states/bucket/hàng đợi
             "b4meta": video_meta(story, folder),
+            "b4link": str((story.get("b4") or {}).get("link") or ""),  # P18d: link video nhập trong modal, chỉ chữ không phải file
             # một dòng cho tab B2: ảnh refs của bài đi vào prompt bằng đường nào (P19a) — xem notes
             "b2ref": ga.b2_ref_hint(story, kinds),
             "bucket": "error" if corrupt else ga.bucket(states),  # bài không đọc được story.json là việc phải xử lý, không phải "chờ"

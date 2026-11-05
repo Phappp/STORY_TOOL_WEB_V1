@@ -76,6 +76,14 @@
     height:24px; padding:0 9px; cursor:pointer; color:var(--muted); }
   .mtab.on { background:var(--running); color:var(--running-t); border-color:var(--running-b); font-weight:650; }
   .mtools { display:flex; gap:6px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  /* P18d: ô Link ngay dưới đầu modal — sửa link đã đăng / link video tại chỗ, khỏi đóng modal bấm ✎ ở cột */
+  .mlink { display:flex; gap:6px; align-items:center; padding:6px 10px; border-bottom:1px solid var(--border);
+    flex-wrap:wrap; background:var(--header); }
+  .mlink .k { color:var(--muted); font-size:12px; }
+  .mlink input { flex:1 1 280px; min-width:0; height:24px; font:inherit; font-size:12px; padding:2px 6px;
+    border:1px solid var(--border); border-radius:6px; background:var(--field); color:var(--text); }
+  .mlink input:focus { outline:2px solid rgba(105,168,239,.45); border-color:var(--accent); }
+  .mlink .upnote { color:var(--muted); font-size:12px; }
   select.prov { height:24px; max-width:240px; font:inherit; font-size:12px; border:1px solid var(--border);
     border-radius:6px; background:var(--field); color:var(--text); }
   .mbody { padding:10px 12px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
@@ -220,6 +228,8 @@ const PROMPT_BY_FIELD = {};  // ngược lại: trường -> spec, để content
 PROMPT_SPECS.forEach(s => { PROMPT_FIELD[s.step] = s.field; PROMPT_BY_FIELD[s.field] = s; });
 const CONTENT = new Map();  // "id|field|dấu_mốc_file" -> chữ, chỉ sống tới khi file đổi
 const DRAFT = new Map();    // "id|B0 preview|dấu_mốc_file" -> chữ anh đang gõ tay, giữ qua mỗi lần grid vẽ lại
+const LINK_DRAFT = new Map();  // "id|link" -> chữ đang gõ ở ô Link (P18d). KHÔNG keyed theo dấu mốc:
+                               // batch chạy làm updated_at đổi liên tục, nháp link đang gõ dở mà mất là lỗi.
 const IMAGES = new Map();   // "id|Ảnh|dấu_mốc_file" -> data URL
 const NOTES = new Map();    // "id|field|dấu_mốc_file" -> dòng giải thích (trống/chưa có ảnh) — chặn xin lại vòng vô hạn
 const WAITING = new Map();  // request_id -> {keys|key, fields|field, id, mode, flash, at} — chờ response về
@@ -779,6 +789,18 @@ const EDITORS = {
         over: "chạy lại B3 sẽ ghi đè bản sửa này" },
 };
 
+// P18d: hai ô link trong modal — cùng một hình, khác chỗ lưu trong story.json và khác tab hiện ra.
+// Link đã đăng hiện ở mọi tab chữ (đang xem caption/SEO thì ghi link ngay tại chỗ, khỏi đóng modal
+// rồi bấm ✎ ở cột); link video chỉ hiện ở tab B4 vì nó không phải thứ cần nhìn khi xem chữ.
+const LINK_BARS = {
+  link: { label: "🔗 Link đã đăng", source: "link_save", stored: "story.json · link",
+          tabs: ["input", "b1", "b2", "b3", "link"],
+          help: "Link bài của bạn đã đăng — Enter để lưu, lưới và cột Link đổi theo" },
+  b4link: { label: "🎬 Link video", source: "b4_link_save", stored: "story.json · b4.link",
+          tabs: ["b4"],
+          help: "Chỉ lưu CHỮ, không tải file — muốn có video trong folder thì dùng mục “🎬 B4 · Video” phía trên lưới" },
+};
+
 // Ảnh tham chiếu B0 đi base64 qua event (component không upload thẳng được).
 function refPicker(row, note) {
   const file = document.createElement("input");
@@ -845,11 +867,72 @@ function textEditor(row, key, tab, loaded) {
   return box;
 }
 
+// P18d: một ô link sửa tại chỗ. Giá trị thật luôn là `row[kind]` (server quyết định), nháp chỉ là
+// chữ đang gõ dở — nên link đổi chỗ khác (sửa ở cột Link, import lại) thì ô này theo đúng, không giữ chữ cũ.
+function linkBar(row, kind) {
+  const cfg = LINK_BARS[kind];
+  const saved = String(row[kind] || "");
+  const key = String(row.id) + "|" + kind;
+  const bar = el("div", "mlink");
+  bar.appendChild(el("span", "k", cfg.label));
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = LINK_DRAFT.has(key) ? String(LINK_DRAFT.get(key)) : saved;
+  input.dataset.fid = key;  // keepView/restoreView trả đúng con trỏ về ô đang gõ khi modal bị vẽ lại
+  input.title = cfg.help;
+  const note = el("span", "upnote");
+  const save = button("💾 Lưu", "", () => commit(), "act");
+  function commit() {
+    if (save.disabled) return;  // bấm hai lần một event: lần hai phải im, không gửi trùng
+    save.disabled = true;
+    LINK_DRAFT.delete(key);
+    send({ source: cfg.source, id: row.id, value: input.value });
+    flash(save, "…đã gửi", "");
+    note.textContent = "đã gửi, chờ grid ghi vào " + cfg.stored;
+  }
+  function sync() {
+    const dirty = input.value !== saved;
+    save.disabled = !dirty;
+    save.title = dirty ? "Ghi chữ đang gõ vào " + cfg.stored + " của " + row.id
+      : saved ? "Chưa sửa gì so với link đang có" : "Chưa có link — dán vào rồi bấm Lưu";
+    note.textContent = dirty ? "bản nháp — chưa lưu" : saved ? "đang có trong " + cfg.stored : "chưa có link";
+  }
+  input.addEventListener("input", () => { LINK_DRAFT.set(key, input.value); sync(); });
+  input.addEventListener("click", e => e.stopPropagation());
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); commit(); }  // Esc KHÔNG chặn: để modal đóng như mọi nơi khác
+  });
+  bar.appendChild(input);
+  bar.appendChild(save);
+  if (saved.trim()) {
+    bar.appendChild(button("📋", "Copy nguyên link đang có của " + row.id + " (" + cfg.stored + ") — dán thẳng, khỏi xóa ô",
+      b => copyToClipboard(saved, ok => flash(b, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad")), "act"));
+    const open = el("a", "link", "↗ mở");
+    open.href = saved;
+    open.target = "_blank";
+    open.rel = "noopener noreferrer";
+    open.title = saved;
+    open.addEventListener("click", e => e.stopPropagation());
+    bar.appendChild(open);
+  }
+  bar.appendChild(note);
+  sync();
+  return bar;
+}
+
 function modalBody(row, tab, key) {
   const body = el("div", "mbody");
   if (tab === "link") {
-    const raw = String(row.link || "");
-    body.appendChild(el("pre", "doc", raw || "(chưa có link — bấm ✎ ở cột Link để nhập)"));
+    // Tab Link = tóm tắt đủ mọi link của bài; thứ sửa được là ô 🔗 ngay dưới hàng tab (P18d),
+    // không còn bắt đóng modal rồi tìm ✎ ở cột Link.
+    body.appendChild(el("pre", "doc", [
+      "Đã đăng: " + (row.link || "(chưa có)"),
+      "Nguồn (B0): " + (row.source || "(chưa có — bài chưa import link)"),
+      "Link video (B4): " + (row.b4link || "(chưa có)"),
+      "File video trong folder: " + (row.b4meta || "(chưa có)"),
+    ].join("\n")));
+    body.appendChild(el("div", "muted", "Sửa link: gõ ở ô 🔗 ngay trên rồi Enter (hoặc bấm 💾 Lưu) · "
+      + "bấm 📋 trong ô đó copy nguyên link, ↗ mở đúng bài."));
     return body;
   }
   if (tab === "b0") {  // một response mang cả caption (input.txt) lẫn ảnh tham chiếu đầu tiên (refs/)
@@ -897,7 +980,9 @@ function modalBody(row, tab, key) {
       + "2. Chọn file video từ ổ đĩa ở đó rồi bấm Lưu — file được ghi vào folder bài thành `video.<đuôi>` (tên khác đi qua lưới).\n"
       + "Ô B4 lên xanh lá khi folder thật sự có file; một bài giữ MỘT video nên tải file mới là ghi đè.\n"
       + "Trần của ô tải lên: " + (Math.round(Number(MODEL.video_max || 0) / 1048576) || 200) + " MB — video lớn hơn thì chép thẳng vào folder bài.\n"
-      + "Lưới không phát video (file quá lớn để gửi qua iframe) — muốn xem thì mở folder bài."));
+      + "Lưới không phát video (file quá lớn để gửi qua iframe) — muốn xem thì mở folder bài.\n"
+      + "Bài chỉ có video nằm nơi khác (YouTube, Drive…)? Gõ link ở ô 🎬 phía trên — nó chỉ là chữ trong story.json, "
+      + "không đổi màu ô B4 vì ô đó luôn nói về FILE trong folder."));
     if (row.detail && row.detail.b4) body.appendChild(el("div", "muted", "Ghi chú: " + row.detail.b4));
     return body;
   }
@@ -1028,6 +1113,11 @@ function modalNode() {
       : "chữ đọc từ " + (EDITORS[ref.tab] ? EDITORS[ref.tab].file : "folder story") +
       " của " + row.id + (EDITORS[ref.tab] ? " — sửa tay rồi bấm lưu, file vẫn là nguồn thật" : "")));
   modal.appendChild(tools);
+  // P18d: ô link ngay dưới đầu modal. Tab nào có ô là do LINK_BARS quyết định — thêm chỗ cần ô link
+  // là sửa bảng đó, không phải rải thêm if.
+  Object.keys(LINK_BARS).forEach(kind => {
+    if (LINK_BARS[kind].tabs.indexOf(ref.tab) >= 0) modal.appendChild(linkBar(row, kind));
+  });
   modal.appendChild(modalBody(row, ref.tab, key));
   const pb = promptBlock(row, ref.tab);
   if (pb) modal.appendChild(pb);  // B1/B2/B3: prompt nằm DƯỚI kết quả, cần copy thì mở ra xem
@@ -1036,7 +1126,8 @@ function modalNode() {
     + " — muốn markdown gốc thì bấm Copy ngay trong modal · click đúp (hoặc bấm ô B0/B2/B4) = mở modal này · Esc hoặc ✕ để đóng · "
     + "← → (hoặc hai nút đầu modal) sang bài trước/kế trong đúng danh sách đang hiện, giữ nguyên tab · "
     + "danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · sửa chữ trong modal là ghi thẳng vào file "
-    + "· ảnh B2 mở trong modal tới " + (Math.round(Number(MODEL.image_max || 0) / 1048576) || 2) + " MB"));
+    + "· ô 🔗/🎬 dưới đầu modal sửa link (Enter = lưu, 📋 = copy nguyên link) · "
+    + "ảnh B2 mở trong modal tới " + (Math.round(Number(MODEL.image_max || 0) / 1048576) || 2) + " MB"));
 
   overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
   overlay.appendChild(modal);
@@ -1460,7 +1551,7 @@ function modalSig() {
   const row = findRow(ref.id);
   if (!row) return "gone";
   return JSON.stringify([ref.id, ref.tab, stampOf(row), row.flow, row.prov, row.b0meta, row.b4, row.b4meta,
-    row.video, row.image, row.link, row.b2ref,
+    row.video, row.image, row.link, row.b4link, row.b2ref,
     row.copyable, row.preset, SHOW_MD, (MODEL.copy_response || {}).request_id || "", (MODEL.providers || []).join("|"),
     String(MODEL.image_max || 0), String(MODEL.video_max || 0)]);
 }

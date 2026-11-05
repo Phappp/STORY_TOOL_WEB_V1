@@ -927,6 +927,13 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             url = clean_url(event.get("value"))
             stories.update_story(ctx.root, sid, link=url)
             out.lines, out.touched = [f"{sid}: Link = {url or '(trống)'}."], [sid]
+        elif source == "b4_link_save":
+            # P18d: tab B4 trong modal chỉ NHẬP LINK — bytes video vẫn đi widget native, không qua iframe.
+            url = clean_url(event.get("value"))
+            block = dict(stories.load_story(ctx.root, sid).get("b4") or {})
+            block["link"] = url
+            stories.update_story(ctx.root, sid, b4=block)
+            out.lines, out.touched = [f"{sid}: link video B4 = {url or '(trống)'}."], [sid]
         elif source == "queue_add_errors":
             ids = error_ids(buckets_for(ctx))
             base = time.time()
