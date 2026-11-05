@@ -66,6 +66,8 @@ import prompts
 import steps
 import providers as prov
 
+_REAL_CHAT = prov.chat  # bản THẬT — các block dưới đè stub lên prov.chat, P19a cần hàm thật để test đường ảnh
+
 ctx = prompts.prompt_context({"topic": "T", "summary": "S", "details": "CAPTION-GOC", "caption": ""})
 out = prompts.gen_prompt("Viết lại:\n<CAPTION CŨ>\nhết", ctx)
 check("gen_prompt replaces <CAPTION CŨ>", out == "Viết lại:\nCAPTION-GOC\nhết")
@@ -204,14 +206,16 @@ gen_file = st_box / "codex.png"
 api_file = st_box / "api.png"
 stock_file = st_box / "stock.jpg"
 chat_calls = []
+vision_calls = []  # P19a — (provider, số ảnh gửi đi Vision): đếm lượt nhìn để proves mô tả chỉ gọi MỘT lần
 
 
-def ok_chat(provider, model, prompt):
+def ok_chat(provider, model, prompt, system="", temperature=0.7, images=()):
     chat_calls.append((provider["name"], model))
+    vision_calls.append((provider["name"], len(images)))  # P19a: lượt nào NHÌN ảnh, nhìn mấy ảnh
     return "NỘI DUNG FAKE " + prompt[:20]
 
 
-def boom_chat(provider, model, prompt):
+def boom_chat(provider, model, prompt, system="", temperature=0.7, images=()):
     raise prov.ProviderError("hết hạn key")
 
 
@@ -257,7 +261,7 @@ text, log = steps.run_b1(st_root, sid_a, {**preset_a, "caption_prompt": ""}, row
 check("run_b1 bỏ qua khi preset thiếu prompt", text is None and log.startswith("B1 caption: bỏ qua"))
 
 
-def boom_chat(provider, model, prompt):
+def boom_chat(provider, model, prompt, system="", temperature=0.7, images=()):
     raise prov.ProviderError("hết hạn key")
 
 
@@ -2230,7 +2234,7 @@ _p17_ctx = ga.build_ctx(_p17_conn, _p17_root)
 _p17_row = next(r for r in _p17_ctx.providers.values() if r["name"] == "P17Chat")
 _p17_sent, _p17_chat0, _p17_parse0 = [], prov.chat, prov.parse_models
 prov.parse_models = lambda provider: ["m1"]
-prov.chat = lambda provider, model, prompt: (_p17_sent.append(prompt), "KẾT QUẢ FAKE P17")[1]
+prov.chat = lambda provider, model, prompt, **kw: (_p17_sent.append(prompt), "KẾT QUẢ FAKE P17")[1]
 try:
     _p17_post = stories.post_view(_p17_root, _p17_sid)
     steps.run_b1(_p17_root, _p17_sid, _p17_preset, _p17_row, "m1", _p17_post)
@@ -3323,6 +3327,210 @@ fbgrid.component = _real_component_p8
 p8_conn.close()
 stories._recents_path = _real_recents_p8
 shutil.rmtree(p8_ws, ignore_errors=True)
+
+# --- P19a: B2 của bộ API NHÌN ảnh refs — một lượt Vision mô tả, nối vào prompt, cache theo dấu mốc refs ---
+# (trước P19a, kind=openai bỏ rơi toàn bộ refs: /images/generations không nhận ảnh đầu vào nên ảnh B0
+#  chưa từng tới được bộ tạo ảnh — đường Codex có `-i` nên chỉ bộ API là mù.)
+_p19_box = Path(tempfile.mkdtemp(prefix="fbp19_"))
+_p19_root = stories.validate_root(_p19_box / "ws")
+
+
+def _raises(fn, exc) -> bool:
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception:  # noqa: BLE001 — sai loại lỗi cũng là FAIL, test phải nói được là đã gọi lên lỗi gì
+        return False
+    return False
+
+
+_p19_conn = db.connect()
+for _p19_left in db.list_providers(_p19_conn):
+    if _p19_left["name"] in ("P19aAPI", "P19aCodex"):
+        db.delete_provider(_p19_conn, _p19_left["id"])
+db.add_provider(_p19_conn, "P19aAPI", "openai", "https://x/v1", "GRID_KEY_ENV", "top-tools-ai")
+db.add_provider(_p19_conn, "P19aCodex", "codex_cli", "", "", "")
+_p19_pid = next(p["id"] for p in db.list_providers(_p19_conn) if p["name"] == "P19aAPI")
+db.save_preset(_p19_conn, None, "P19aPreset", "", "CAP: <DỮ LIỆU>", "ẢNH: <CAPTION MỚI TẠO>",
+               "KW: <DỮ LIỆU>", "SEO: <CAPTION MỚI TẠO>", "INPUT", _p19_pid)
+_p19_preset = next(x for x in db.list_presets(_p19_conn) if x["name"] == "P19aPreset")
+ga.set_pref_preset(_p19_root, _p19_preset["id"])
+ga.set_pref_providers(_p19_root, "b2", ["P19aAPI"])
+_p19_ref = _p19_box / "ref_src.png"
+_p19_ref.write_bytes(b"\x89PNG\r\n\x1a\n" + b"P19A-REF")
+
+
+def _p19_story(name, exts=("png",)):
+    sid = stories.create_story(_p19_root, name, input_text="nội dung " + name)["id"]
+    stories.save_step_text(_p19_root, sid, "b1", "CAPTION P19A")
+    for i, ext in enumerate(exts):
+        src = _p19_box / f"src_{i}.{ext}"
+        src.write_bytes((b"\x89PNG\r\n\x1a\n" + b"P19A-REF") if ext == "png" else b"khong phai anh")
+        stories.save_ref(_p19_root, sid, src)
+    return sid
+
+
+_p19_sid = _p19_story("P19a chính", ("png", "png"))
+_p19_chats, _p19_seen, _p19_sent = [], [], []
+_p19_chat0, _p19_gen0 = prov.chat, prov.generate_image
+_p19_desc = "MỘT CÔ GÁI ĐỨNG BÊN HỒ, ÁNH NẮNG CHIỀU TÔNG CAM"
+
+
+def _p19_chat(provider, model, prompt, system="", temperature=0.7, images=()):
+    _p19_chats.append(prompt)
+    _p19_seen.append([Path(p).name for p in images])
+    return "  " + _p19_desc + "  "
+
+
+def _p19_chat_novision(provider, model, prompt, system="", temperature=0.7, images=()):
+    _p19_chats.append(prompt)
+    raise prov.ProviderError("Provider trả lỗi HTTP 403: Model access denied — no active subscription")
+
+
+def _p19_gen(provider, model, prompt, ref_files=(), timeout=240):
+    _p19_sent.append((provider["name"], prompt))
+    (_p19_box / "out.png").write_bytes(b"P19A-OUT")
+    return _p19_box / "out.png"
+
+
+_p19_ctx = ga.build_ctx(_p19_conn, _p19_root)
+_p19_src = (Path(__file__).resolve().parent / "providers.py").read_text(encoding="utf-8")
+_p19_png = _p19_box / "look.png"
+_p19_png.write_bytes(b"\x89PNG\r\n\x1a\nPNGDATA")
+_p19_txt = _p19_box / "look.txt"
+_p19_txt.write_text("không phải ảnh", encoding="utf-8")
+try:
+    prov.chat = _p19_chat
+    prov.generate_image = _p19_gen
+
+    # lớp providers: body chat/completions chỉ đổi shape KHI CÓ ẢNH
+    _p19_parts = prov._content_parts("prompt gốc", [_p19_png])
+    check("P19a gửi ảnh = content là MẢNG parts text+image_url data URL; không gửi ảnh thì vẫn là CHUỖI "
+          "nguyên bản (B1/B3 không bị đổi body giữa chừng)",
+          prov._content_parts("prompt gốc") == "prompt gốc" and isinstance(_p19_parts, list)
+          and _p19_parts[0] == {"type": "text", "text": "prompt gốc"}
+          and _p19_parts[1]["type"] == "image_url"
+          and _p19_parts[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+    check("P19a file không phải ảnh bị CHẶN ngay lúc đọc data URL, không âm thầm gửi loại mime sai",
+          ".txt" not in prov.VISION_MIME and _raises(lambda: prov._image_data_url(_p19_txt), prov.ProviderError)
+          and _raises(lambda: prov._image_data_url(_p19_box / "khong_ton_tai.png"), prov.ProviderError))
+    check("P19a Codex + ảnh ở lượt chat là tự mâu thuẫn -> báo THẲNG, không im lặng bỏ ảnh "
+          "(bỏ là B2 chạy prompt mù mà vẫn báo OK)",
+          _raises(lambda: _REAL_CHAT({"kind": "codex_cli", "name": "C", "key_env": "", "models": "",
+                                      "base_url": ""}, "", "p", images=[_p19_png]), prov.ProviderError)
+          and _p19_src.count("images=()") >= 2)
+
+    _p19_run1 = ga.apply_event(_p19_ctx, {"source": "run_step", "id": _p19_sid, "step": "b2", "chained": False})
+    check("P19a bộ API được NHÌN refs: đúng MỘT lượt Vision cho cả loạt ảnh, lời yêu cầu là lời mô tả "
+          "chứ không phải prompt ảnh",
+          len(_p19_chats) == 1 and len(_p19_seen[0]) == 2 and "MÔ TẢ" in _p19_chats[0]
+          and "ẢNH: CAPTION P19A" not in _p19_chats[0])
+    check("P19a ảnh thật nhận prompt gốc + ĐÚNG đoạn mô tả Vision — hết cảnh B2 chạy prompt mù với refs",
+          _p19_sent[0][0] == "P19aAPI" and _p19_sent[0][1].startswith("ẢNH: CAPTION P19A")
+          and steps.REF_DESC_HEAD in _p19_sent[0][1] and _p19_desc in _p19_sent[0][1])
+    check("P19a mô tả nằm trong story.json theo dấu mốc refs — chạy B2 lần hai không đốt thêm lượt Vision",
+          stories.load_story(_p19_root, _p19_sid)["b2"]["ref_desc"] == _p19_desc)
+    _p19_prompt1 = _p19_sent[0][1]
+    _p19_sent.clear()
+    _p19_run2 = ga.apply_event(_p19_ctx, {"source": "run_step", "id": _p19_sid, "step": "b2", "chained": False})
+    check("P19a lượt chạy kế dùng cache: không gọi Vision nữa mà prompt gửi đi vẫn nguyên phần mô tả",
+          len(_p19_chats) == 1 and len(_p19_sent) == 1 and _p19_sent[0][1] == _p19_prompt1)
+    stories.save_ref(_p19_root, _p19_sid, _p19_ref)  # ảnh thứ ba: dấu mốc refs đổi
+    _p19_run3 = ga.apply_event(_p19_ctx, {"source": "run_step", "id": _p19_sid, "step": "b2", "chained": False})
+    check("P19a thêm/xóa ảnh refs là mô tả cũ tự hết hiệu lực — lượt ▶ kế nhìn lại ảnh, không vẽ bằng ảnh cũ",
+          len(_p19_chats) == 2 and len(_p19_seen[-1]) == 3)
+    check("P19a ghép mô tả VÀO CHỖ CŨ (không nối đống) — chạy 3 lần vẫn một khối 'ẢNH THAM CHIẾU'",
+          _p19_sent[-1][1].count(steps.REF_DESC_HEAD) == 1
+          and steps.append_ref_desc(steps.append_ref_desc("X", "D"), "D") == steps.append_ref_desc("X", "D"))
+
+    _p19_pay, _p19_err = ga.prompt_payload(_p19_ctx, _p19_sid, "Prompt B2", "req-p19")
+    check("P19a modal B2 hiện ĐÚNG chuỗi sẽ gửi (cùng nguồn ghép) — copy dán sang web là ra ảnh giống nhau",
+          _p19_err == "" and _p19_pay["text"] == _p19_sent[-1][1]
+          and steps.REF_DESC_HEAD in _p19_pay["text"])
+    (_p19_root / _p19_sid / "refs" / "ref_3.png").unlink()
+    _p19_pay2, _p19_err2 = ga.prompt_payload(_p19_ctx, _p19_sid, "Prompt B2", "req-p19b")
+    check("P19a ảnh bị xóa tay khỏi refs/ thì modal KHÔNG vẽ mô tả cũ của nó (cache tự vô hiệu)",
+          _p19_err2 == "" and steps.REF_DESC_HEAD not in _p19_pay2["text"])
+
+    # bộ không có Vision: B2 vẫn phải ra ảnh từ prompt gốc
+    _p19_sid_bad = _p19_story("P19a không vision", ("png",))
+    _p19_chats.clear()
+    prov.chat = _p19_chat_novision
+    _p19_row_api = next(r for r in db.list_providers(_p19_conn) if r["name"] == "P19aAPI")
+    _p19_bad_out = steps.generate_image(_p19_root, _p19_sid_bad, "ẢNH: GỐC", 
+                                        stories.refs_of(_p19_root, _p19_sid_bad), _p19_row_api, "top-tools-ai")
+    _p19_bad_story = stories.load_story(_p19_root, _p19_sid_bad)["b2"]
+    check("P19a Vision thất bại KHÔNG giết B2: ảnh vẫn tạo từ prompt gốc, state vẫn xanh lá, không cắm cờ "
+          "blocked (hết cửa mô tả ≠ hết cửa tạo ảnh)",
+          _p19_bad_out[1] is None and _p19_bad_story["state"] == "done"
+          and not _p19_bad_story.get("blocked") and _p19_sent[-1][1] == "ẢNH: GỐC")
+    check("P19a vì sao không có mô tả hiện ở chi tiết ô B2 (hover card) chứ không im lặng",
+          "403" in _p19_bad_story["detail"] and "prompt gốc" in _p19_bad_story["detail"])
+    _p19_chats.clear()
+    steps.generate_image(_p19_root, _p19_sid_bad, "ẢNH: GỐC", stories.refs_of(_p19_root, _p19_sid_bad),
+                         _p19_row_api, "top-tools-ai")
+    check("P19a lỗi Vision cũng cache theo dấu mốc — ⚡ qua 150 bài không lặp lại một lượt chắc chắn hỏng",
+          _p19_chats == [])
+    prov.chat = _p19_chat
+
+    # refs sai đuôi / quá trần số ảnh
+    _p19_sid_odd = _p19_story("P19a refs lạ", ("txt", "png", "png", "png", "png"))
+    _p19_seen.clear()
+    _p19_odd_out = steps.generate_image(_p19_root, _p19_sid_odd, "ẢNH: GỐC2",
+                                        stories.refs_of(_p19_root, _p19_sid_odd), _p19_row_api, "top-tools-ai")
+    check("P19a chỉ ảnh thật được đưa vào data URL, và MỘT lượt nhìn tối đa REF_VISION_MAX ảnh "
+          "(tránh 6 ảnh = 6 mb base64 trong một request)",
+          all(n.endswith(".png") for n in _p19_seen[-1]) and len(_p19_seen[-1]) == steps.REF_VISION_MAX
+          and _p19_odd_out[1] is None)
+    check("P19a nhìn thiếu ảnh thì nói rõ nhìn mấy/tổng bao nhiêu trong chi tiết ô B2",
+          f"{steps.REF_VISION_MAX}/" in stories.load_story(_p19_root, _p19_sid_odd)["b2"]["detail"])
+
+    # Codex: ảnh đã đi thẳng vào imagegen bằng -i, gọi Vision là đốt tiền
+    _p19_chats.clear()
+    _p19_sid_cdx = _p19_story("P19a codex", ("png",))
+    _p19_row_cdx = next(r for r in db.list_providers(_p19_conn) if r["name"] == "P19aCodex")
+    _p19_cdx = steps.b2_ref_desc(_p19_root, _p19_sid_cdx, _p19_row_cdx, "",
+                                 stories.refs_of(_p19_root, _p19_sid_cdx))
+    check("P19a Codex KHÔNG bị gọi Vision (refs của nó vào imagegen bằng -i) — trả ('', '') và không ghi cache",
+          _p19_cdx == ("", "") and _p19_chats == []
+          and not (stories.load_story(_p19_root, _p19_sid_cdx)["b2"] or {}).get("ref_sig"))
+
+    # chữ của lưới + JS
+    _p19_hint_cdx = ga.b2_ref_hint({"b2": {"provider": "P19aCodex", "refs": ["refs/ref_1.png"]}},
+                                   {"P19aCodex": "codex_cli"})
+    check("P19a một dòng 'Ảnh tham chiếu' trong modal B2 nói đủ 4 trường hợp: Codex -i / đã có mô tả / "
+          "lỗi Vision / chưa nhìn",
+          "`-i`" in _p19_hint_cdx
+          and "mô tả Vision cho 2 ảnh refs" in ga.b2_ref_hint(
+              {"b2": {"provider": "P19aAPI", "refs": ["a", "b"], "ref_desc": "D"}}, {"P19aAPI": "openai"})
+          and "403" in ga.b2_ref_hint({"b2": {"provider": "P19aAPI", "refs": ["a"], "ref_note": "Vision 403"}},
+                                      {"P19aAPI": "openai"})
+          and "chưa có mô tả" in ga.b2_ref_hint({"b2": {"provider": "P19aAPI", "refs": ["a"]}},
+                                                {"P19aAPI": "openai"}))
+    _p19_rows = {r["id"]: r for r in fbgrid.rows_for(_p19_ctx)}
+    check("P19a hàng lưới mang sẵn note refs (row.b2ref) để modal nói được mà khỏi xin thêm lượt Python",
+          _p19_rows[_p19_sid]["b2ref"].startswith("prompt B2 có mô tả Vision")
+          and f"{steps.REF_VISION_MAX}/" in _p19_rows[_p19_sid_odd]["b2ref"]
+          and "chưa có mô tả" in _p19_rows[_p19_sid_cdx]["b2ref"])
+    _js_p19 = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+    _sig_p19 = _js_p19[_js_p19.index("function modalSig"):_js_p19.index("\n}", _js_p19.index("function modalSig"))]
+    _blk_p19 = _js_p19[_js_p19.index("function promptBlock"):_js_p19.index("\n}", _js_p19.index("function promptBlock"))]
+    check("P19a note refs vào chữ ký modal (cache đổi là vẽ lại) + chỉ vẽ ở tab B2, dùng textContent (không innerHTML)",
+          "row.b2ref" in _sig_p19 and 'if (tab === "b2" && row.b2ref)' in _blk_p19
+          and "note.textContent" in _blk_p19 and "innerHTML" not in _blk_p19)
+finally:
+    prov.chat, prov.generate_image = _p19_chat0, _p19_gen0
+
+for _p19_left in db.list_providers(_p19_conn):  # DB của anh là thật — dọn sạch bộ/preset thử nghiệm
+    if _p19_left["name"] in ("P19aAPI", "P19aCodex"):
+        db.delete_provider(_p19_conn, _p19_left["id"])
+for _p19_left in db.list_presets(_p19_conn):
+    if _p19_left["name"] == "P19aPreset":
+        db.delete_preset(_p19_conn, _p19_left["id"])
+
+_p19_conn.close()
+shutil.rmtree(_p19_box, ignore_errors=True)
 
 # cleanup test rows
 c = db.connect()

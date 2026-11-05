@@ -721,6 +721,12 @@ function promptBlock(row, tab) {
       inner.appendChild(cp);
     }
     inner.appendChild(el("pre", "doc", String(text)));
+    if (tab === "b2" && row.b2ref) {  // P19a: cho biết ảnh refs của bài nằm ở đâu trong bức tranh —
+      // thiếu dòng này thì anh thấy prompt không có gì về ảnh gốc mà không biết bộ có nhìn ảnh hay không
+      const note = el("div", "muted");
+      note.textContent = "🔎 Ảnh tham chiếu: " + String(row.b2ref);
+      inner.appendChild(note);
+    }
     inner.appendChild(el("div", "muted", "Prompt này do tool ghép lại từ preset đang áp dụng ("
       + (String(row.preset || "") || "preset của bài") + ") + nội dung trong folder — không phải chữ đã lưu lúc chạy."));
   }
@@ -1454,7 +1460,7 @@ function modalSig() {
   const row = findRow(ref.id);
   if (!row) return "gone";
   return JSON.stringify([ref.id, ref.tab, stampOf(row), row.flow, row.prov, row.b0meta, row.b4, row.b4meta,
-    row.video, row.image, row.link,
+    row.video, row.image, row.link, row.b2ref,
     row.copyable, row.preset, SHOW_MD, (MODEL.copy_response || {}).request_id || "", (MODEL.providers || []).join("|"),
     String(MODEL.image_max || 0), String(MODEL.video_max || 0)]);
 }

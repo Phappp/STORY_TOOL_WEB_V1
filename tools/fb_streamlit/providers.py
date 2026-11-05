@@ -106,15 +106,56 @@ def parse_models(provider) -> list[str]:
     return parts
 
 
-def chat(provider, model: str, prompt: str, system: str = "", temperature: float = 0.7) -> str:
+VISION_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+               ".webp": "image/webp", ".gif": "image/gif"}
+
+
+def _image_data_url(path) -> str:
+    """Đọc file ảnh thành data URL cho `content[].image_url` (docs top-tools-ai: Vision chỉ nhận
+    data URL, không nhận đường dẫn file local). Không có ngả nào khác để gửi ảnh vào
+    /chat/completions từ tool này."""
+    p = Path(path)
+    mime = VISION_MIME.get(p.suffix.lower())
+    if not mime:
+        raise ProviderError(f"Không gửi được ảnh {p.name} cho Vision: đuôi {p.suffix or '(không có)'} "
+                            f"không nằm trong {', '.join(sorted(VISION_MIME))}.")
+    try:
+        return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode("ascii")
+    except OSError as exc:
+        raise ProviderError(f"Không đọc được file ảnh {p}: {exc}") from exc
+
+
+def _content_parts(prompt: str, images=()):
+    """Không có ảnh thì giữ nguyên chuỗi (đúng như trước P19a — B1/B3 không được đổi shape body).
+    Có ảnh thì đổi sang mảng parts theo chuẩn OpenAI Vision: text trước, các image_url sau."""
+    if not images:
+        return prompt
+    parts = [{"type": "text", "text": prompt}]
+    parts.extend({"type": "image_url", "image_url": {"url": _image_data_url(p)}} for p in images)
+    return parts
+
+
+def chat(provider, model: str, prompt: str, system: str = "", temperature: float = 0.7,
+         images=()) -> str:
+    """Một lượt chat. `images` = đường dẫn file ảnh gửi kèm để model NHÌN (vision).
+
+    Đường ảnh chỉ tồn tại ở kind openai (`content` là mảng parts `image_url` data URL — docs
+    top-tools-ai ghi rõ model nào có chip Vision mới nhận). Codex CLI lên hình qua `-i` của
+    imagegen chứ `exec` ở đây đưa prompt qua stdin, nên nếu có ai truyền ảnh thì phải báo
+    thẳng, không được âm thầm bỏ — bỏ là B2 chạy prompt mù mà vẫn báo OK.
+    """
     if provider["kind"] == "codex_cli":
+        if images:
+            raise ProviderError("Codex CLI chưa nhận ảnh ở lượt chat — ảnh refs của nó đi thẳng "
+                                "vào imagegen (`-i`), còn muốn mô tả ảnh bằng Vision thì dùng provider OpenAI-like.")
         return _codex_chat(prompt, system)
     if provider["kind"] == "openai":
-        return _openai_chat(provider, model, prompt, system, temperature)
+        return _openai_chat(provider, model, prompt, system, temperature, images)
     raise ProviderError(f"Provider kind không hợp lệ: {provider['kind']}")
 
 
-def _openai_chat(provider, model: str, prompt: str, system: str, temperature: float) -> str:
+def _openai_chat(provider, model: str, prompt: str, system: str, temperature: float,
+                 images=()) -> str:
     base_url = (provider["base_url"] or "").strip().rstrip("/")
     if not base_url:
         raise ProviderError("Provider chưa có Base URL.")
@@ -123,7 +164,7 @@ def _openai_chat(provider, model: str, prompt: str, system: str, temperature: fl
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    messages.append({"role": "user", "content": _content_parts(prompt, images)})
     headers = {"Content-Type": "application/json"}
     key = _api_key(provider)
     if key:

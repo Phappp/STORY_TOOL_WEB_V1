@@ -22,6 +22,18 @@ PER_KEYWORD = 4
 STEP_LABEL = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
 # Chữ "Cách" hiện trong thẻ hover ô B2 — kể ảnh này do đường nào tạo ra, theo kind của provider
 IMAGE_METHOD = {"codex_cli": "Codex CLI imagegen", "openai": "API ảnh /images/generations"}
+# P19a — ảnh refs vào B2 của bộ API bằng MỘT lượt Vision (xem b2_ref_desc)
+REF_VISION_MAX = 3          # trần số ảnh cho MỘT lượt nhìn: 1 lượt gọi cho cả loạt, không phải mỗi ảnh một lượt
+REF_VISION_BYTES = 4 * 1024 * 1024  # ảnh to hơn 4 MB thì bỏ — base64 phồng ~33% dung lượng body /chat/completions
+REF_DESC_HEAD = "ẢNH THAM CHIẾU (mô tả từ ảnh gốc — giữ đúng chủ thể, bố cục, màu sắc, chi tiết):"
+REF_DESC_PROMPT = (
+    "Nhìn toàn bộ ảnh tham chiếu dưới đây và viết MÔ TẢ để một model tạo ảnh vẽ lại đúng tinh thần "
+    "của chúng. Yêu cầu:\n"
+    "- Mô tả bằng văn xuôi liên tục (không danh sách, không mở đầu kiểu 'bức ảnh cho thấy'), tối đa 120 từ.\n"
+    "- Nêu: chủ thể + dáng/thế, trang phục/kiểu tóc, phong cách ảnh (chụp/3D/minh họa), ánh sáng, "
+    "bảng màu, bố cục và khung hình, bối cảnh, chữ hoặc logo nhìn thấy được.\n"
+    "- Nếu có nhiều ảnh, gộp thành MỘT mô tả chung; khác biệt nổi bật thì nêu rõ là biến thể.\n"
+    "- Chỉ tả những gì thực sự nhìn thấy. Không đoán nội dung, không bình luận, không hỏi lại.")
 
 
 def why(exc: Exception) -> str:
@@ -190,6 +202,116 @@ def b2_blocked_line(provider, reason: str) -> str:
             "(cờ tự mở khi tên/kind bộ đổi).")
 
 
+def refs_files_sig(refs) -> str:
+    """Dấu mốc RIÊNG của bộ ảnh: tên + cỡ + mốc sửa của từng file. Tách ra để chỗ chỉ-XEM-prompt
+    (modal) biết mô tả cache còn ứng với ảnh trên đĩa hay không, mà không cần biết bộ nào đã nhìn."""
+    parts = []
+    for p in sorted(str(x) for x in (refs or [])):
+        f = Path(p)
+        try:
+            st = f.stat()
+            parts.append(f"{f.name}:{st.st_size}:{int(st.st_mtime)}")
+        except OSError:
+            parts.append(f"{f.name}:missing")
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def refs_sig(refs, provider=None, model: str = "") -> str:
+    """Dấu mốc 'bộ nào nhìn ảnh nào' — đổi file (thêm/bớt/sửa, kể cả cùng tên) hoặc đổi bộ/model là
+    sig đổi, mô tả cũ tự bị bỏ. Không có sig thì không biết lúc nào được dùng lại lượt Vision cũ."""
+    files = refs_files_sig(refs)
+    if provider is None:
+        return files
+    return files + hashlib.sha1(f"|see:{provider['name']}:{model}".encode("utf-8")).hexdigest()[:16]
+
+
+def append_ref_desc(prompt: str, desc: str) -> str:
+    """Chỗ DUY NHẤT ghép mô tả refs vào prompt B2 — luồng chạy và modal xem/copy cùng đi qua đây,
+    nên chữ anh thấy trong modal (P17a) chính là chữ AI nhận (P19a gọi lại cũng không ghép đống)."""
+    body = prompt.split(REF_DESC_HEAD, 1)[0] if REF_DESC_HEAD in prompt else prompt
+    if not (desc or "").strip():
+        return body.rstrip()
+    return body.rstrip() + "\n\n" + REF_DESC_HEAD + "\n" + desc.strip()
+
+
+def cached_ref_desc(story: dict, refs) -> str:
+    """Mô tả refs ĐANG CÒN HIỆU LỰC trong story.json — '' khi chưa có hoặc khi ảnh đã đổi.
+
+    Modal xem prompt không được phép gọi AI (P17a) nên chỉ vẽ được phần đã cache. Tin cache mù thì anh
+    copy sang ChatGPT web một prompt mang mô tả của bức ảnh đã bị xóa; ở đây prompt hiện ra luôn là
+    phần thật, và lượt ▶ kế tự nhìn lại ảnh.
+    """
+    block = story.get("b2") or {}
+    desc = str(block.get("ref_desc") or "").strip()
+    if not desc:
+        return ""
+    if str(block.get("ref_files") or "") != refs_files_sig(refs):
+        return ""
+    return desc
+
+
+def b2_ref_desc(root: Path, sid: str, provider, model: str, refs) -> tuple[str, str]:
+    """(mô tả refs, ghi chú) cho B2 — MỘT lượt Vision cho cả loạt, cache trong story.json theo dấu mốc.
+
+    Vì sao phải mô tả ra chữ: `/images/generations` (kể cả top-tools-ai) KHÔNG nhận ảnh đầu vào, và
+    đường API ở đây cũng không có `-i` như Codex — ảnh B0 chỉ tới được bộ tạo ảnh bằng cách một model
+    có chip Vision nhìn chúng rồi viết lại. Codex nhận refs trực tiếp nên trả ('', ''): gọi Vision cho
+    nó là đốt thêm một lượt không ai dùng.
+
+    Thất bại không biến thành lỗi B2: bộ không có Vision, refs sai đuôi/quá to, rớt mạng — bài đó
+    vẫn đáng có ảnh từ prompt gốc, nên chỉ ghi lại vì sao phần mô tả trống (B2 vẫn chạy, không cắm cờ
+    `blocked` vì đây là chuyện mô tả ảnh, không phải chuyện bộ hết cửa tạo ảnh).
+    """
+    if provider is None or not (refs or []):
+        return "", ""
+    if str(provider["kind"]) == "codex_cli":
+        return "", ""
+    sig = refs_sig(refs, provider, model)
+    block = stories.load_story(root, sid).get("b2") or {}
+    if str(block.get("ref_sig") or "") == sig:
+        return str(block.get("ref_desc") or ""), str(block.get("ref_note") or "")
+
+    def cache(desc: str, note: str) -> tuple[str, str]:
+        merged = dict(stories.load_story(root, sid).get("b2") or {})
+        merged.update({"ref_desc": desc, "ref_note": note, "ref_sig": sig,
+                       "ref_files": refs_files_sig(refs),  # để modal từ chối vẽ mô tả của ảnh đã bị đổi/xóa
+                       "ref_at": time.time(), "ref_model": f"{provider['name']}:{model or '(không model)'}"})
+        stories.update_story(root, sid, b2=merged)
+        return desc, note
+
+    usable, skipped = [], 0
+    for item in refs:
+        f = Path(item)
+        try:
+            if (not f.is_file() or f.suffix.lower() not in prov.VISION_MIME
+                    or f.stat().st_size > REF_VISION_BYTES):
+                skipped += 1
+                continue
+        except OSError:
+            skipped += 1
+            continue
+        usable.append(f)
+    if not usable:
+        return cache("", f"refs không gửi cho Vision được file nào ({len(list(refs))} ảnh) — chỉ nhận "
+                        f"{', '.join(sorted(prov.VISION_MIME))} dưới {REF_VISION_BYTES // (1024 * 1024)} MB")
+    seen = usable[:REF_VISION_MAX]
+    try:
+        desc = (prov.chat(provider, model, REF_DESC_PROMPT, images=seen) or "").strip()
+    except Exception as exc:  # 403 "không có subscription", model không Vision, rớt mạng… — B2 vẫn chạy tiếp
+        return cache("", f"'{provider['name']}' ({model}) không mô tả được ảnh refs: {why(exc)[:180]}"
+                         " — B2 chỉ dùng prompt gốc")
+    if not desc:
+        return cache("", f"'{provider['name']}' ({model}) nhìn {len(seen)} ảnh refs nhưng trả về mô tả rỗng "
+                         "— B2 chỉ dùng prompt gốc")
+    note = ""
+    extras = len(usable) - len(seen)
+    if skipped or extras > 0:
+        note = "Vision chỉ nhìn " + f"{len(seen)}/{len(usable)} ảnh" + (
+            f" · bỏ {skipped} file không đọc được" if skipped else "") + (
+            f" · quá trần {REF_VISION_MAX} ảnh" if extras > 0 else "")
+    return cache(desc, note)
+
+
 def generate_image(root: Path, sid: str, prompt: str, refs: list, provider, model: str = "") -> tuple[Path | None, str | None]:
     """B2: ảnh từ ĐÚNG provider đang chọn cho B2 -> image.png. Trả (ảnh|None, lỗi|None).
 
@@ -203,8 +325,12 @@ def generate_image(root: Path, sid: str, prompt: str, refs: list, provider, mode
             else "preset chưa có 'Prompt tạo ảnh'"))
         return None, None
     stories.set_step_state(root, sid, "b2", "running", provider=provider["name"], model=model or "")
+    # P19a: bộ API không có ngả nhét ảnh vào /images/generations, nên refs phải đi qua một lượt Vision
+    # rồi mới vào prompt. Đặt state `running` TRƯỚC khi gọi: lượt nhìn có thể mất cả phút, grid phải
+    # thấy B2 đang chạy ngay chứ không phải ô xám "chưa thử".
+    desc, ref_note = b2_ref_desc(root, sid, provider, model, refs)
     try:
-        src = prov.generate_image(provider, model, prompt, refs)
+        src = prov.generate_image(provider, model, append_ref_desc(prompt, desc), refs)
     except prov.ImageCapabilityError as exc:
         reason = str(exc)
         stories.set_step_state(root, sid, "b2", "error", detail=reason,
@@ -216,7 +342,7 @@ def generate_image(root: Path, sid: str, prompt: str, refs: list, provider, mode
         stories.set_step_state(root, sid, "b2", "error", detail=reason)
         return None, reason
     img = save_image(root, sid, src, method=IMAGE_METHOD.get(str(provider["kind"]), str(provider["kind"])))
-    stories.set_step_state(root, sid, "b2", "done", detail="", blocked=None)
+    stories.set_step_state(root, sid, "b2", "done", detail=ref_note, blocked=None)
     return img, None
 
 

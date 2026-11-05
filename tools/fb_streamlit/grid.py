@@ -207,6 +207,8 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
     một hàng phải parse file đó 5 lần nên 150 bài tốn gần 1 giây cho mỗi tick làm mới.
     """
     out = []
+    # kind theo TÊN bộ — đủ để nói refs của bài đi đường nào mà khỏi đọc prefs cho từng hàng
+    kinds = {str(r["name"]): str(r["kind"]) for r in ctx.providers.values()}
     for sid in stories.list_story_ids(ctx.root):
         story = stories.load_story(ctx.root, sid)
         summary = stories.story_summary(ctx.root, sid, story=story)
@@ -237,6 +239,8 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "b0meta": ga.b0_meta(story),
             "b4": b4,  # B4 cũng riêng: không có bước AI nào chạy video nên nó không vào states/bucket/hàng đợi
             "b4meta": video_meta(story, folder),
+            # một dòng cho tab B2: ảnh refs của bài đi vào prompt bằng đường nào (P19a) — xem notes
+            "b2ref": ga.b2_ref_hint(story, kinds),
             "bucket": "error" if corrupt else ga.bucket(states),  # bài không đọc được story.json là việc phải xử lý, không phải "chờ"
             "queued": bool(story.get("queued")),
             "queued_at": float(story.get("queued_at") or 0),

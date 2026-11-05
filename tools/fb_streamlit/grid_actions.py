@@ -344,6 +344,28 @@ def b0_meta(story: dict) -> str:
     return " · ".join(part for part in parts if part)
 
 
+def b2_ref_hint(story: dict, kinds: dict) -> str:
+    """Một dòng nói refs của bài đi vào B2 bằng đường nào — để modal B2 không im lặng khi prompt
+    thiếu hẳn phần 'ẢNH THAM CHIẾU' mà anh tưởng là ảnh gốc đã được đưa cho bộ tạo ảnh.
+
+    Chỉ đọc story.json (không gọi AI, không đọc DB) vì nó chạy cho từng hàng mỗi tick làm mới.
+    """
+    block = story.get("b2") or {}
+    count = len([r for r in (block.get("refs") or []) if str(r).strip()])
+    if not count:
+        return ""
+    desc = str(block.get("ref_desc") or "").strip()
+    note = str(block.get("ref_note") or "").strip()
+    if str(kinds.get(str(block.get("provider") or "")) or "") == "codex_cli":
+        return f"Codex nhận thẳng {count} ảnh refs qua `-i` — prompt không cần phần mô tả"
+    if desc:
+        return f"prompt B2 có mô tả Vision cho {count} ảnh refs" + (f" · {note}" if note else "")
+    if note:
+        return note
+    return (f"chưa có mô tả Vision cho {count} ảnh refs — bấm ▶ với bộ API, lượt chạy kế sẽ nhìn ảnh "
+            "rồi nối mô tả vào prompt")
+
+
 def bucket(states: dict) -> str:
     """Nhóm việc của cả bài — 'treo' và 'mất file' tính vào 'lỗi' vì đều là bài phải xử lý lại."""
     values = list(states.values())
@@ -586,6 +608,12 @@ def prompt_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
         return None, (f"{sid}: preset “{preset['name']}” chưa có prompt cho {STEP_NAMES[step]} — "
                       "bấm ▶ bước này cũng sẽ bỏ qua.")
     text = steps.step_prompt(step, preset, post, post["caption"] or None)
+    if step == "b2":
+        # P19a: bản sẽ gửi thật có thêm đoạn "ẢNH THAM CHIẾU…" mà một lượt Vision viết ra, nên modal
+        # phải nhân bản nó từ đúng nguồn (steps.append_ref_desc) — nếu không anh copy chữ trong modal
+        # sang web rồi thấy ảnh ra khác, và không thể biết khác từ đâu. Ở đây CHỈ đọc cache (xem prompt
+        # không được đốt một lượt gọi AI); ảnh đã đổi thì cache coi như chưa có, modal hiện prompt gốc.
+        text = steps.append_ref_desc(text, steps.cached_ref_desc(story, stories.refs_of(ctx.root, sid)))
     if not text.strip():
         return None, f"{sid}: prompt {STEP_NAMES[step]} ghép ra rỗng — kiểm tra lại preset."
     spec = prompt_spec(step)
