@@ -217,7 +217,8 @@ const CONTENT = new Map();  // "id|field|dấu_mốc_file" -> chữ, chỉ sốn
 const DRAFT = new Map();    // "id|B0 preview|dấu_mốc_file" -> chữ anh đang gõ tay, giữ qua mỗi lần grid vẽ lại
 const IMAGES = new Map();   // "id|Ảnh|dấu_mốc_file" -> data URL
 const NOTES = new Map();    // "id|field|dấu_mốc_file" -> dòng giải thích (trống/chưa có ảnh) — chặn xin lại vòng vô hạn
-const WAITING = new Map();  // request_id -> {key, id, field, mode, flash} — chờ response về
+const WAITING = new Map();  // request_id -> {keys|key, fields|field, id, mode, flash, at} — chờ response về
+const WAIT_EXPIRE_MS = 6000;  // response lạc (Streamlit chỉ chuyển 1 event/lượt) -> quá hạn thì xin lại, đừng để modal kẹt "đang đọc"
 let FLASH = null;           // {sel, label, cls, at} — nút vừa vẽ xong sẽ nhận nhãn "đã copy"
 let COPY_NOW = null;        // {text, flash} — response xin copy vừa về, ghi vào clipboard sau khi DOM vẽ xong
 let SHOW_MD = true;         // tab B3: hiển thị markdown đã render hay để nguyên chữ
@@ -412,10 +413,45 @@ function requestContent(row, field, mode, flashId) {
   const rid = eventId();
   const key = contentKey(row, field);
   NOTES.delete(key);
-  WAITING.set(rid, { key: key, id: String(row.id), field: field, mode: mode, flash: flashId || "" });
+  WAITING.set(rid, { keys: [key], key: key, fields: [field], field: field,
+                     id: String(row.id), mode: mode, flash: flashId || "", at: Date.now() });
   const source = mode === "copy" ? "copy_request"
     : (field === "Ảnh" ? "image_request" : (field === TAB_FIELD.b0 ? "b0_request" : "content_request"));
   send({ source: source, id: row.id, field: field, request_id: rid });
+}
+
+// Một tab modal = MỘT request cho cả kết quả lẫn prompt (P18a).
+// Streamlit chỉ chuyển đúng MỘT event mỗi lượt script, nên hai send() liền nhau (content + prompt)
+// từng làm mất cái thứ hai — mà WAITING đã nhân khóa nội dung đó thì JS không bao giờ xin lại,
+// modal kẹt hẳn "… đang đọc nội dung từ folder story". Python gom lô trong grid_actions.modal_payload.
+function requestModal(row, fields) {
+  const rid = eventId();
+  const keys = fields.map(f => contentKey(row, f));
+  keys.forEach(k => NOTES.delete(k));
+  WAITING.set(rid, { keys: keys, fields: fields, id: String(row.id), mode: "show", flash: "", at: Date.now() });
+  send({ source: "modal_request", id: row.id, fields: fields, request_id: rid });
+  scheduleWaitRetry();
+}
+
+// Nhịp làm mới không chắc còn chạy đúng lúc (auto-refresh tắt, payload không đổi thì render bị bỏ qua),
+// nên tự hẹn một lần vẽ lại sau đúng một trần chờ: request lạc được xin lại, không treo vô hạn.
+let WAIT_TIMER = null;
+function scheduleWaitRetry() {
+  if (WAIT_TIMER) return;  // một lần hẹn đủ: repaint sẽ xét hết mọi entry quá hạn cùng lúc
+  WAIT_TIMER = setTimeout(() => {
+    WAIT_TIMER = null;
+    if (expiredWaits() > 0) repaint();
+  }, WAIT_EXPIRE_MS + 400);
+}
+function expiredWaits() {
+  const now = Date.now();
+  let n = 0;
+  WAITING.forEach((w, rid) => {
+    if (now - Number(w.at || 0) <= WAIT_EXPIRE_MS) return;
+    n++;
+    WAITING.delete(rid);  // xóa luôn để lần xin lại không bị chính nó chặn
+  });
+  return n;
 }
 
 // response vừa về sau 1 request -> nạp cache (việc copy làm sau khi DOM đã vẽ, xem finishCopy).
@@ -426,23 +462,56 @@ function ingestResponse() {
   const rid = String(r.request_id || "");
   if (!rid || lsGet(LAST_RESP_KEY) === rid) return;
   lsSet(LAST_RESP_KEY, rid);
+  const isLot = Array.isArray(r.items) || (Array.isArray(r.fields) && r.fields.length > 0);
+  if (isLot) { ingestLot(r); return; }
   const wait = WAITING.get(rid);
   WAITING.delete(rid);
   const row = findRow(wait ? wait.id : r.id);
   const field = String((wait && wait.field) || r.field || "Ảnh");
   const mode = (wait && wait.mode) || String(r.mode || "copy");
   const key = row ? contentKey(row, field) : String(r.id || "") + "|" + field + "|";
-  if (r.image) IMAGES.set(key, String(r.image));  // response B0 mang cả chữ lẫn ảnh -> nạp đủ hai ô cache
-  if (String(r.text || "").trim() || field === TAB_FIELD.b0) CONTENT.set(key, String(r.text || ""));  // B0 payload rỗng vẫn là "đã đọc file"
-  if (!r.image && !String(r.text || "").trim() && field !== TAB_FIELD.b0) {  // modal B0 tự có dòng hướng dẫn + ô gõ, không cần note chung
-    NOTES.set(key, String(r.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
-  }
+  fillField(field, key, r);
   if (mode !== "copy") return;
   if (r.copyable === false) return;  // Python nói trường này không ra clipboard được thì thôi, JS không tự đoán theo tên
   const text = String(r.text || "");
   if (!text.trim()) { flashSel(wait ? wait.flash : "", "trống", "bad"); return; }
   COPY_NOW = { text: text, flash: (wait && wait.flash) || "" };
 }
+
+// Lô modal: {items:[{field,...}]} — mỗi phần tử một trường đã đọc được, hoặc lý do không đọc được.
+function ingestLot(r) {
+  const wait = WAITING.get(String(r.request_id || ""));
+  WAITING.delete(String(r.request_id || ""));
+  const row = findRow(wait ? wait.id : r.id);
+  const items = Array.isArray(r.items) ? r.items : [];
+  items.forEach(item => {
+    const field = String((item || {}).field || "");
+    if (!field) return;
+    fillField(field, row ? contentKey(row, field) : String(r.id || "") + "|" + field + "|", item);
+  });
+  // lô rỗng (Python từ chối cả request) vẫn khai rõ từng trường định xin qua r.fields,
+  // và trường bị bỏ sót trong items cũng phải có note — nếu không tab đó hiện "đang đọc" tới hết phiên
+  const told = items.map(item => String((item || {}).field || ""));
+  const wanted = (Array.isArray(r.fields) && r.fields.length ? r.fields : (wait ? wait.fields : [])) || [];
+  wanted.forEach(field => {
+    if (told.indexOf(field) >= 0) return;
+    const key = row ? contentKey(row, field) : String(r.id || "") + "|" + field + "|";
+    if (!CONTENT.has(key) && !IMAGES.has(key) && !NOTES.has(key)) {
+      NOTES.set(key, String(r.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
+    }
+  });
+}
+
+// Nạp một trường (chữ, ảnh, hoặc lý do) vào cache theo đúng key của nó — dùng cho cả single lẫn lô.
+function fillField(field, key, payload) {
+  const p = payload || {};
+  if (p.image) IMAGES.set(key, String(p.image));  // response B0 mang cả chữ lẫn ảnh -> nạp đủ hai ô cache
+  if (String(p.text || "").trim() || field === TAB_FIELD.b0) CONTENT.set(key, String(p.text || ""));  // B0 payload rỗng vẫn là "đã đọc file"
+  if (!p.image && !String(p.text || "").trim() && field !== TAB_FIELD.b0) {  // modal B0 tự có dòng hướng dẫn + ô gõ, không cần note chung
+    NOTES.set(key, String(p.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
+  }
+}
+
 function finishCopy() {
   const job = COPY_NOW;
   if (!job) return;
@@ -530,43 +599,73 @@ function setModal(ref) { lsSet(MODAL_KEY, ref ? JSON.stringify(ref) : ""); }
 function openModal(id, tab) { setModal({ id: String(id), tab: tab || "b1" }); repaint(); }
 function closeModal() { setModal(null); repaint(); }
 
-// Modal mở mà chưa có chữ/ảnh cho tab đó thì xin Python đúng 1 lần (theo dấu mốc file).
-function ensureContent(row, tab) {
+// Tab nào cần trường gì từ Python: kết quả đang hiện + prompt của B đó (nếu có).
+function tabFields(tab) {
+  if (tab === "link") return [];  // link đã nằm sẵn trong row, không phải xin
+  const out = [];
   const field = tabField(tab);
-  if (!field || tab === "link") return;
+  if (field) out.push(field);
+  const spec = promptSpec(tab);
+  if (spec) out.push(spec.field);
+  return out;
+}
+
+// Modal mở mà chưa có chữ/ảnh cho tab đó thì xin Python — ĐÚNG MỘT request cho cả tab (P18a).
+// B0 vẫn đi b0_request riêng vì payload của nó đã là caption + ảnh trong một response (P4d).
+function ensureTab(row, tab) {
+  expiredWaits();  // response lạc từ nãy -> quên hẳn để còn xin lại
+  const fields = tabFields(tab);
+  if (!fields.length) return;
+  if (fields[0] === TAB_FIELD.b0) { ensureOne(row, TAB_FIELD.b0); return; }
+  const ask = fields.filter(field => {
+    const key = contentKey(row, field);
+    if (CONTENT.has(key) || IMAGES.has(key) || NOTES.has(key)) return false;
+    if (field === "Ảnh" && !row.image) { NOTES.set(key, "Bài này chưa có ảnh — chạy B2 để có ảnh."); return false; }
+    // Python đã nói trong row.copyable là trường này không có chữ thì tự trả lời, khỏi gọi lượt đọc
+    if (field !== "Ảnh" && !PROMPT_BY_FIELD[field] && row.copyable && row.copyable[field] === false) {
+      NOTES.set(key, field + " trống — chạy bước này trước.");
+      return false;
+    }
+    return true;
+  });
+  if (!ask.length) return;
+  const askKeys = ask.map(f => contentKey(row, f));
+  let asked = false;  // đang có request sống phủ một trong mấy khóa này -> chưa được xin trùng
+  WAITING.forEach(w => { if ((w.keys || [w.key]).some(k => askKeys.indexOf(k) >= 0)) asked = true; });
+  if (asked) return;
+  requestModal(row, ask);
+}
+function ensureOne(row, field) {  // riêng B0: một request cũ đã mang đủ cả caption lẫn ảnh
   const key = contentKey(row, field);
   if (CONTENT.has(key) || IMAGES.has(key) || NOTES.has(key)) return;
   let asked = false;
-  WAITING.forEach(w => { if (w.key === key) asked = true; });
-  if (asked) return;  // đang chờ response của đúng nội dung này
-  if (field === "Ảnh") {
-    if (!row.image) { NOTES.set(key, "Bài này chưa có ảnh — chạy B2 để có ảnh."); return; }
-    requestContent(row, "Ảnh", "show");
-    return;
-  }
-  if (field !== TAB_FIELD.b0 && row.copyable && row.copyable[field] === false) { NOTES.set(key, field + " trống — chạy bước này trước."); return; }
-  requestContent(row, field, "show");
+  WAITING.forEach(w => { if ((w.keys || [w.key]).indexOf(key) >= 0) asked = true; });
+  if (!asked) requestContent(row, field, "show");
+}
+
+// Chạy lại một B là file đổi, và prompt cũng ghép lại từ file mới -> bỏ cache CẢ TAB, không chỉ ô kết quả.
+function clearTabCache(row, tab, keepDraft) {
+  tabFields(tab).forEach(field => {
+    const k = contentKey(row, field);
+    CONTENT.delete(k); IMAGES.delete(k); NOTES.delete(k);
+    if (keepDraft) DRAFT.delete(k);
+  });
 }
 
 // Prompt không nằm trong folder bài: Python ghép lại đúng chuỗi sẽ gửi AI (steps.step_prompt), nên
 // mở tab là xin một lần theo preset đang áp dụng — anh copy nguyên khối dán sang ChatGPT web được.
+// Xin là việc của ensureTab (một request cho cả tab); ở đây chỉ tính khóa để đọc cache.
 function promptSpec(tab) { return PROMPT_BY_FIELD[PROMPT_FIELD[tab]] || null; }  // tab không có prompt -> null, khỏi vẽ khối rỗng
-function ensurePrompt(row, tab) {
+function promptKey(row, tab) {
   const spec = promptSpec(tab);
-  if (!spec) return "";
-  const key = contentKey(row, spec.field);
-  if (CONTENT.has(key) || NOTES.has(key)) return key;
-  let asked = false;
-  WAITING.forEach(w => { if (w.key === key) asked = true; });
-  if (!asked) requestContent(row, spec.field, "show");
-  return key;
+  return spec ? contentKey(row, spec.field) : "";
 }
 
 function promptBlock(row, tab) {
   const spec = promptSpec(tab);
   if (!spec) return null;  // tab B0/Input/Link/B4 không có prompt — đừng vẽ khối rỗng
   const field = spec.field;
-  const key = ensurePrompt(row, tab);
+  const key = promptKey(row, tab);
   const box = el("details", "prompt");
   box.open = PROMPT_OPEN[tab] === undefined ? spec.open : PROMPT_OPEN[tab];
   box.addEventListener("toggle", () => { PROMPT_OPEN[tab] = box.open; });  // modal dựng lại thì vẫn giữ đúng chỗ anh đang xem
@@ -779,7 +878,7 @@ function modalNode() {
   if (!ref) return null;
   const row = findRow(ref.id);
   if (!row) { setModal(null); return null; }  // bài bị bộ lọc che hoặc đã archive -> đóng cho khớp màn hình
-  ensureContent(row, ref.tab);
+  ensureTab(row, ref.tab);
   const key = contentKey(row, tabField(ref.tab));
   const overlay = el("div", "overlay");
   const modal = el("div", "modal");
@@ -806,7 +905,7 @@ function modalNode() {
         : "Giao luồng nền gọi lại link nguồn để lấy caption + ảnh — chữ bạn sửa tay trong input.txt sẽ không bị đè",
       bb => {
         bb.disabled = true;  // nút trong modal không bị khóa theo grid -> tự khóa tới khi rerun vẽ lại
-        CONTENT.delete(key); IMAGES.delete(key); NOTES.delete(key); DRAFT.delete(key);  // bản nháp cũ không còn nghĩa sau khi trích lại
+        clearTabCache(row, ref.tab, true);  // bản nháp cũ không còn nghĩa sau khi trích lại
         send({ source: "b0_run", id: row.id });
       }, "play");
     if (b0flow) b.disabled = true;
@@ -819,7 +918,7 @@ function modalNode() {
         : "Giao luồng nền chạy lại " + STEP_TITLE[ref.tab] + " cho " + row.id + " — xong thì modal tự hiện kết quả mới",
       bb => {
         bb.disabled = true;  // nút trong modal không bị khóa theo grid -> tự khóa tới khi rerun vẽ lại
-        CONTENT.delete(key); IMAGES.delete(key); NOTES.delete(key);  // bỏ bản cache để lần vẽ sau đọc file mới
+        clearTabCache(row, ref.tab);  // bỏ bản cache (cả prompt) để lần vẽ sau đọc file mới
         send({ source: "run_step", id: row.id, step: ref.tab });
       }, "play");
     if (stepflow) b.disabled = true;

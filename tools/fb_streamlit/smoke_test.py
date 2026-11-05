@@ -2481,6 +2481,154 @@ for _p17c_left in db.list_presets(_p17c_conn):
         db.delete_preset(_p17c_conn, _p17c_left["id"])
 shutil.rmtree(_p17c_box, ignore_errors=True)
 
+# --- P18a: MỘT tab modal = MỘT request (kết quả + prompt) — hết kẹt "… đang đọc nội dung từ folder story" ---
+# Streamlit chỉ chuyển ĐÚNG MỘT event mỗi lượt script. Tab B1/B3 từng gửi hai request liền nhau nên cái
+# thứ hai (prompt) bị bỏ rơi, và WAITING phía JS đã nhân khóa nội dung đó thì không bao giờ xin lại.
+_p18_box = Path(tempfile.mkdtemp(prefix="fbp18a_"))
+_p18_root = stories.validate_root(_p18_box / "ws")
+_p18_conn = db.connect()
+for _p18_left in db.list_presets(_p18_conn):
+    if _p18_left["name"] == "P18Preset":
+        db.delete_preset(_p18_conn, _p18_left["id"])
+for _p18_left in db.list_providers(_p18_conn):
+    if _p18_left["name"] == "P18Chat":
+        db.delete_provider(_p18_conn, _p18_left["id"])
+db.add_provider(_p18_conn, "P18Chat", "openai", "https://x/v1", "GRID_KEY_ENV", "m1")
+_p18_pid = next(p["id"] for p in db.list_providers(_p18_conn) if p["name"] == "P18Chat")
+db.save_preset(_p18_conn, None, "P18Preset", "", "CAP: <DỮ LIỆU>", "ẢNH: <CAPTION MỚI TẠO>",
+               "KW: <CHỦ ĐỀ>", "SEO: <CAPTION MỚI TẠO>", "INPUT", _p18_pid)
+_p18_preset = next(x for x in db.list_presets(_p18_conn) if x["name"] == "P18Preset")
+ga.set_pref_preset(_p18_root, _p18_preset["id"])
+_p18_sid = stories.create_story(_p18_root, "P18 modal", input_text="NỘI DUNG P18")["id"]
+stories.save_step_text(_p18_root, _p18_sid, "b1", "CAPTION P18")
+stories.save_step_text(_p18_root, _p18_sid, "b3", "## SEO P18 **đậm**")
+(_p18_root / _p18_sid / "image.png").write_bytes(b"PNG-P18-BYTES")
+_p18_empty = stories.create_story(_p18_root, "P18 trống", input_text="")["id"]
+_p18_ctx = ga.build_ctx(_p18_conn, _p18_root)
+
+
+def _p18_lot(fields, sid=None, req="rq-p18"):
+    out = ga.apply_event(_p18_ctx, {"source": "modal_request", "id": sid or _p18_sid,
+                                    "fields": fields, "request_id": req})
+    return out, {str(i.get("field")): i for i in (out.copy or {}).get("items") or []}
+
+
+_p18_out, _p18_items = _p18_lot(["Caption", "Prompt B1"])
+check("P18a một cú bấm tab = MỘT response cho cả kết quả lẫn prompt (Streamlit chỉ chuyển 1 event/lượt)",
+      not _p18_out.lines and (_p18_out.copy or {}).get("request_id") == "rq-p18"
+      and (_p18_out.copy or {}).get("mode") == "show" and set(_p18_items) == {"Caption", "Prompt B1"}
+      and all("request_id" not in i for i in _p18_items.values()))
+check("P18a prompt trong lô vẫn là ĐÚNG chuỗi steps.step_prompt ghép từ preset + chữ trong folder",
+      _p18_items["Caption"]["text"] == "CAPTION P18" and "NỘI DUNG P18" in _p18_items["Prompt B1"]["text"]
+      and _p18_items["Prompt B1"]["text"] == steps.step_prompt(
+          "b1", _p18_preset, stories.post_view(_p18_root, _p18_sid), None)
+      and _p18_items["Prompt B1"]["copyable"] is True)
+_p18_out2, _p18_items2 = _p18_lot(["Ảnh", "Bài SEO", "Bài SEO (render)", "Prompt B3"], req="rq-p18-2")
+check("P18a tab B2 xin ảnh trong cùng lô: ảnh đi ĐƯỜNG DẪN FILE cho lớp lưới đổi ra URL, không base64 trong delta",
+      len(_p18_items2) == 4 and _p18_items2["Ảnh"]["image_path"].endswith("image.png")
+      and _p18_items2["Ảnh"]["image"] == "" and _p18_items2["Ảnh"]["bytes"] == len(b"PNG-P18-BYTES")
+      and _p18_items2["Bài SEO (render)"]["text"] == "SEO P18 đậm"
+      and _p18_items2["Prompt B3"]["text"] == steps.step_prompt(
+          "b3", _p18_preset, stories.post_view(_p18_root, _p18_sid), "CAPTION P18"))
+_p18_out3, _p18_items3 = _p18_lot(["Caption", "Không có trường này"], req="rq-p18-3")
+check("P18a một trường sai chỉ hỏng riêng nó — trường kia vẫn về đủ, modal không mất cả tab vì một tên lạ",
+      len(_p18_out3.lines) == 0 and _p18_items3["Caption"]["text"] == "CAPTION P18"
+      and "Không có trường này" in _p18_items3["Không có trường này"]["error"]
+      and "modal xin được" in _p18_items3["Không có trường này"]["error"])
+_p18_out4, _p18_items4 = _p18_lot(["Caption", "Prompt B9"], _p18_empty, req="rq-p18-4")
+check("P18a hỏng CẢ lô mới ghi một dòng log; thiếu một ô (bài chưa chạy) là chuyện bình thường, không đốt log",
+      len(_p18_out4.lines) == 1 and _p18_empty in _p18_out4.lines[0]
+      and "trống" in _p18_items4["Caption"]["error"]
+      and "không phải trường modal xin được" in _p18_items4["Prompt B9"]["error"])
+_p18_out5, _p18_items5 = _p18_lot([], req="rq-p18-5")
+check("P18a modal xin không có trường nào -> từ chối rõ ràng, không mở một lượt đọc file vô nghĩa",
+      _p18_out5.copy is None and "modal xin không có trường nào" in _p18_out5.lines[0])
+_p18_out6, _p18_items6 = _p18_lot(["Caption", "Bài SEO", "Input", "Link", "Prompt B1", "Prompt B3"], req="rq-p18-6")
+check("P18a một lô tối đa MODAL_MAX_FIELDS trường — JS gửi sai cũng không kéo theo cả chục lần đọc file",
+      len(_p18_items6) == ga.MODAL_MAX_FIELDS and set(_p18_items6) == {"Caption", "Bài SEO", "Input", "Link"})
+check("P18a bảng trường modal = đúng các trường Python đọc được (copy ∪ prompt ∪ Ảnh) — thêm ô là sửa một bảng",
+      set(ga.MODAL_FIELDS) == set(ga.COPY_FIELDS) | set(ga.PROMPT_FIELDS) | {"Ảnh"}
+      and 'source == "modal_request"' in (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8"))
+
+grid_src_p18 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
+check("P18a bấm tab là việc XEM: modal_request đứng trong READ_SOURCES -> tick đó không quét lại 150 folder",
+      "modal_request" in fbgrid.READ_SOURCES
+      and '"modal_request"' in grid_src_p18.split("READ_SOURCES")[1].split("\n")[0])
+# qua đúng lớp lưới: ảnh trong lô phải được đổi thành URL /media/, và lô rỗng vẫn khai rõ từng trường
+# để JS gắn note đúng ô — nếu không tab đó hiện "đang đọc" tới hết phiên.
+_p18_ws0 = stories.current()
+cap.clear()
+at_p18 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
+at_p18.session_state["nav_page"] = "Grid"
+at_p18.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
+_p18_media0, fbgrid.media_url = fbgrid.media_url, lambda path, sid: "/media/p18.png"
+_p18_comp0 = fbgrid.component
+fbgrid.component = lambda: (lambda **kw: cap.update(kw))
+try:
+    stories.set_current(_p18_root)
+    at_p18.session_state[fbgrid.KEY] = {"event_id": "evt-p18-1", "source": "modal_request", "id": _p18_sid,
+                                        "fields": ["Ảnh", "Prompt B2"], "request_id": "req-p18-1"}
+    at_p18.run()
+    _p18_resp = cap.get("copy_response") or {}
+    _p18_by = {str(i.get("field")): i for i in _p18_resp.get("items") or []}
+    check("P18a lưới trả cả lô qua _collect: ảnh trong items cũng được cấp URL /media/ như ảnh lẻ",
+          not at_p18.exception and _p18_resp.get("request_id") == "req-p18-1" and set(_p18_by) == {"Ảnh", "Prompt B2"}
+          and _p18_by["Ảnh"]["image"] == "/media/p18.png" and "ẢNH: CAPTION P18" in _p18_by["Prompt B2"]["text"])
+    cap.clear()
+    at_p18.session_state[fbgrid.KEY] = {"event_id": "evt-p18-2", "source": "modal_request", "id": _p18_sid,
+                                        "fields": [], "request_id": "req-p18-2"}
+    at_p18.run()
+    _p18_bad = cap.get("copy_response") or {}
+    check("P18a lô bị từ chối vẫn gửi về danh sách trường định xin — JS có cơ sở mà bỏ chữ 'đang đọc'",
+          not at_p18.exception and _p18_bad.get("request_id") == "req-p18-2"
+          and _p18_bad.get("fields") == [] and "modal xin không có trường nào" in str(_p18_bad.get("error"))
+          and _p18_bad.get("mode") == "show")
+finally:
+    fbgrid.component = _p18_comp0
+    fbgrid.media_url = _p18_media0
+    stories.set_current(_p18_ws0)
+    cap.clear()
+
+_p18_js = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+
+
+def _p18_fn(name):
+    i = _p18_js.index("function " + name)
+    return _p18_js[i:_p18_js.index("\n}", i)]
+
+
+check("P18a modal chỉ xin MỘT lần cho cả tab: ensureTab đứng đầu modalNode, không còn đường xin lẻ",
+      "ensureTab(row, ref.tab)" in _p18_fn("modalNode") and "ensureContent" not in _p18_js
+      and "ensurePrompt" not in _p18_js and "requestModal(row, ask)" in _p18_fn("ensureTab"))
+check("P18a phần vẽ body/prompt KHÔNG được gửi event — đó là chỗ từng làm mất request thứ hai",
+      "send(" not in _p18_fn("modalBody") + _p18_fn("promptBlock")
+      and "requestContent" not in _p18_fn("modalBody") + _p18_fn("promptBlock")
+      and "promptKey(row, tab)" in _p18_fn("promptBlock"))
+check("P18a JS dịch lại đúng bảng của Python: mỗi tab B xin kết quả + prompt của chính B đó",
+      'if (tab === "link") return []' in _p18_fn("tabFields")
+      and "if (field) out.push(field);" in _p18_fn("tabFields")
+      and "out.push(spec.field)" in _p18_fn("tabFields")
+      and "const fields = tabFields(tab)" in _p18_fn("ensureTab"))
+check("P18a response lô chia đường riêng, và trường bị bỏ sót vẫn nhận note — hết cảnh kẹt 'đang đọc' vô hạn",
+      "if (isLot) { ingestLot(r); return; }" in _p18_fn("ingestResponse")
+      and "r.items" in _p18_fn("ingestLot") and "r.fields" in _p18_fn("ingestLot")
+      and "fillField(field, key" in _p18_fn("ingestResponse") and "NOTES.set(key" in _p18_fn("ingestLot"))
+check("P18a response lạc không còn treo cả tab: quá trần chờ là quên hẳn và xin lại, có hẹn giờ tự xét",
+      "const WAIT_EXPIRE_MS = 6000" in _p18_js and "expiredWaits();  // response lạc" in _p18_fn("ensureTab")
+      and "scheduleWaitRetry()" in _p18_fn("requestModal") and "at: Date.now()" in _p18_fn("requestModal"))
+check("P18a ▶ bỏ cache CẢ TAB (kết quả + prompt) — không còn cảnh chữ mới kèm prompt của lượt cũ",
+      "clearTabCache(row, ref.tab)" in _p18_fn("modalNode")
+      and "CONTENT.delete(k); IMAGES.delete(k); NOTES.delete(k)" in _p18_fn("clearTabCache")
+      and _p18_fn("clearTabCache").count("CONTENT.delete") == 1)
+check("P18a B0 giữ đường riêng (một payload đã mang sẵn caption + ảnh), không bị gộp thành lô rỗng",
+      'if (fields[0] === TAB_FIELD.b0) { ensureOne(row, TAB_FIELD.b0); return; }' in _p18_fn("ensureTab")
+      and 'field === TAB_FIELD.b0 ? "b0_request"' in _p18_fn("requestContent"))
+db.delete_provider(_p18_conn, _p18_pid)
+for _p18_left in db.list_presets(_p18_conn):
+    if _p18_left["name"] == "P18Preset":
+        db.delete_preset(_p18_conn, _p18_left["id"])
+shutil.rmtree(_p18_box, ignore_errors=True)
+
 # --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
 grid_src_p13 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
 check("P13a hết chế độ '8 dòng gần nhất + Log cũ' — không còn danh sách dài lẫn lộn mấy cú bấm",

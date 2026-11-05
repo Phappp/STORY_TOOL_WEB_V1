@@ -31,7 +31,7 @@ POLL_SECONDS = 2.0    # nhịp fragment: chỉ đọc lại folder khi có việ
 PAYLOAD_KEY = "grid_payload"       # bản đọc folder gần nhất — 150 bài là 150 lần đọc file
 APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt mới thì phải đọc lại folder
 # mấy event này chỉ XEM nội dung (copy/mở modal), không sửa file -> khỏi đọc lại cả workspace
-READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"}
+READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request", "modal_request"}
 BUSY_STATES = {stories.RUNNING, ga.STALE}  # folder nói bước này đang có lượt gọi AI (chạy dở hoặc treo)
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
 PRESET_KEY = "ws_preset"  # cùng key cho Grid và trang Tạo bài: một widget, một ý nghĩa, một sự thật
@@ -409,14 +409,25 @@ def media_url(path: str, sid: str) -> str:
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     _push(out.lines)
-    if str(event.get("source") or "") in ("copy_request", "content_request", "image_request", "b0_request"):
+    if str(event.get("source") or "") in ("copy_request", "content_request", "image_request", "b0_request",
+                                          "modal_request"):
         # render_component giao response đúng 1 lần rồi xóa; JS latch theo request_id nên không xử lý trùng
         st.session_state["grid_copy_response"] = out.copy or {
             "id": str(event.get("id") or ""), "field": str(event.get("field") or "Ảnh"),
             "request_id": str(event.get("request_id") or ""),
             "mode": "show" if str(event.get("source") or "") != "copy_request" else "copy",
-            "text": "", "error": (lines[0] if lines else "")}
+            "text": "", "error": (lines[0] if lines else ""),
+            # lô rỗng (modal xin sai/Trống folder) vẫn phải biết từng trường nào để JS gắn-note đúng ô,
+            # nếu không tab đó sẽ lại hiện "đang đọc" vô hạn
+            "fields": [str(f) for f in (event.get("fields") or [])]}
         resp = st.session_state["grid_copy_response"]
+        # modal_request trả cả lô trường trong MỘT response (P18a) — ảnh nào cũng cần đổi sang URL /media/
+        for item in resp.get("items") or []:
+            if item.get("image_path"):
+                item["image"] = media_url(str(item["image_path"]), str(resp.get("id") or ""))
+                if not item["image"]:
+                    item["error"] = (f"{resp.get('id')}: server không cấp được đường dẫn ảnh — "
+                                     "mở bài ở trang Tạo bài để xem.")
         if resp.get("image_path"):  # ảnh B2: file -> URL, modal không nhận base64 qua delta
             resp["image"] = media_url(str(resp["image_path"]), str(resp.get("id") or ""))
             if not resp["image"]:

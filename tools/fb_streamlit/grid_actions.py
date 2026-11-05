@@ -52,6 +52,9 @@ PROMPT_SPECS = [{"step": "b1", "field": "Prompt B1", "open": True, "copy": True}
                 {"step": "b2", "field": "Prompt B2", "open": False, "copy": True},
                 {"step": "b3", "field": "Prompt B3", "open": False, "copy": True}]
 PROMPT_FIELDS = {s["field"]: s["step"] for s in PROMPT_SPECS}  # modal hỏi bằng đúng tên ô (xem prompt_payload)
+# Ảnh không phải trường copy (nó đi image_payload, trả đường dẫn chứ không nhét base64 vào delta) —
+# modal xin gộp cả hai trong MỘT request (xem modal_payload), nên "Ảnh" cũng phải có trong bảng.
+MODAL_FIELDS = frozenset(COPY_FIELDS) | set(PROMPT_FIELDS) | {"Ảnh"}
 
 
 def prompt_spec(step: str):
@@ -630,6 +633,44 @@ def image_payload(ctx: Ctx, sid: str, request_id: str):
             "text": "", "bytes": size}, ""
 
 
+MODAL_MAX_FIELDS = 4  # một tab modal cùng lắm xin: kết quả + prompt — nhiều hơn là JS tự gửi sai
+
+
+def modal_payload(ctx: Ctx, sid: str, raw_fields, request_id: str):
+    """MỘT response cho cả tab modal: kết quả + prompt về cùng một lượt.
+
+    P4d đã học: Streamlit chỉ chuyển ĐÚNG MỘT event mỗi lượt. Tab B1/B3 vì thế từng gửi hai
+    `content_request` liền nhau (P18a) — cái thứ hai bị bỏ rơi, mà `WAITING` phía JS đã nhân
+    khóa nội dung đó nên không bao giờ xin lại, modal kẹt hẳn "… đang đọc nội dung từ folder story".
+    Gộp lại thành một request là hết nghẽn, và cũng đỡ một lượt script chạy cho mỗi lần mở tab.
+
+    Trường lạ không có trong bảng là lỗi CHẶT (item.error), không phải đường dẫn: modal chỉ xin
+    bằng đúng tên trường Python biết đọc (COPY_FIELDS ∪ PROMPT_FIELDS ∪ "Ảnh").
+    """
+    fields = [str(f) for f in (raw_fields or []) if str(f).strip()][:MODAL_MAX_FIELDS]
+    if not fields:
+        return None, f"{sid}: modal xin không có trường nào — đóng modal rồi mở lại."
+    items, failed = [], []
+    for name in fields:
+        if name not in MODAL_FIELDS:
+            items.append({"field": name, "error": f"{sid}: '{name}' không phải trường modal xin được."})
+            failed.append(name)
+            continue
+        payload, why = (image_payload(ctx, sid, request_id) if name == "Ảnh"
+                        else _copy_payload(ctx, sid, name, request_id))
+        if payload is None:
+            items.append({"field": name, "error": why or f"{sid}: {name} không đọc được."})
+            failed.append(name)
+            continue
+        item = dict(payload)
+        item["mode"] = "show"  # modal chỉ xem; copy thì đi copy_request riêng, đúng một field
+        item.pop("request_id", None)
+        items.append(item)
+    # chỉ báo dòng log khi CẢ lô thất bại — thiếu một trường (vd B2 chưa có ảnh) là chuyện bình thường
+    note = " · ".join(f"{sid}: {f} không đọc được" for f in failed) if len(failed) == len(items) else ""
+    return {"id": sid, "request_id": request_id, "mode": "show", "items": items}, note
+
+
 def b0_payload(ctx: Ctx, sid: str, request_id: str):
     """Modal B0 cần thấy caption lẫn ảnh trong một response — hai request gửi liền sẽ bị latch event nuốt một.
 
@@ -804,6 +845,9 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             payload, why = _copy_payload(ctx, sid, str(event.get("field") or ""), str(event.get("request_id") or ""))
             if payload is not None:
                 payload["mode"] = "show" if source == "content_request" else "copy"
+            out.copy, out.lines = payload, ([why] if why else [])
+        elif source == "modal_request":
+            payload, why = modal_payload(ctx, sid, event.get("fields"), str(event.get("request_id") or ""))
             out.copy, out.lines = payload, ([why] if why else [])
         elif source == "b0_request":
             payload, note = b0_payload(ctx, sid, str(event.get("request_id") or ""))
