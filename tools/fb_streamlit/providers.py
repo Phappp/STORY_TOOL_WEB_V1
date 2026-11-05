@@ -17,10 +17,15 @@ class ProviderError(RuntimeError):
     pass
 
 
-AV_HINT = ("Máy này có Avast/AVG đang quét HTTPS (driver aswMonFlt): python.exe không mở được "
-           "object của bộ lọc. Cách xử lý — thêm đường dẫn python.exe của tool vào Ngoại lệ của "
-           "Avast, hoặc tắt \"Scanning for HTTPS\" trong Web Shield; cần chạy ngay thì đặt "
-           "HTTP_VERIFY_SSL=false trong .env (nhưng khi đó tool không kiểm tra chứng chỉ nữa).")
+AV_HINT = ("Máy này có Avast/AVG đang quét HTTPS (driver aswMonFlt): chính TIẾN TRÌNH python đang "
+           "chạy app bị bộ lọc từ chối, không phải chứng chỉ hay code. Cách xử lý đúng — thêm "
+           "đường dẫn python.exe NẠO đang chạy streamlit vào danh sách loại trừ của Avast "
+           "(Settings ▸ General ▸ Exceptions, và nếu bản Avast có thì thêm vào Behavior Shield / "
+           "Exclusions nữa), rồi khởi động lại app; kiểm chứng bằng cách mở một process python mới "
+           "mà gọi đúng URL đó. Tắt \"Scanning for HTTPS\" trong Web Shield cũng hết nhưng là đổi "
+           "cài đặt antivirus, anh cân nhắc rồi hẵng làm. Còn HTTP_VERIFY_SSL=false trong .env chỉ "
+           "tắt việc KIỂM TRA chứng chỉ (hết CERTIFICATE_VERIFY_FAILED), KHÔNG gỡ được chốt của "
+           "driver và làm tool không còn nhận ra server giả mạo — đừng dùng nó cho lỗi này.")
 
 
 def http_verify() -> bool:

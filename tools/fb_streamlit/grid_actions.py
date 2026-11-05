@@ -42,7 +42,7 @@ B4_VIDEO_MAX = 200 * 1024 * 1024
 VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".wmv", ".flv", ".3gp")
 
 COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link", "Bài SEO (Facebook)")
-STEP_NAMES = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
+STEP_NAMES = steps.STEP_LABEL  # một sự thật duy nhất về tên B — grid_runner đọc thẳng steps
 ALL_STEPS = ("b1", "b2", "b3")
 HEADER_WORDS = ("link", "url", "source", "nguồn", "fb", "bài")
 

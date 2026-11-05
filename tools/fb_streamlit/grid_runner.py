@@ -22,6 +22,8 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import steps
+
 # Event nào là việc dài (gọi AI, tải ảnh) -> giao thread nền, không chạy trong lượt vẽ.
 HEAVY_SOURCES = ("run_step", "run_all", "b0_run", "batch_run", "b0_batch")
 ALL_STEPS = ("b1", "b2", "b3")
@@ -30,11 +32,28 @@ ALL_STEPS = ("b1", "b2", "b3")
 B0_SLOT = "B0 (trích link)"
 TICK = 1.0  # nhịp thử lại khi còn việc nhưng chưa bộ nào rảnh
 
+_GA = None  # grid_actions nạp MỘT lần rồi giữ tham chiếu, xem actions()
+
+
+def actions():
+    """Lấy grid_actions — nhưng chỉ `import` một lần trong đời process.
+
+    Nhịp tick và nhịp cấp phát từng `import grid_actions` ngay giữa vòng lặp, và Streamlit gỡ
+    module khỏi sys.modules mỗi khi file trên đĩa đổi (file watcher). Vướng đúng lúc đó là
+    KeyError: 'providers' bật lên trong snapshot(), `claim` trả lỗi giả -> một B của bài bị đánh
+    lỗi oan dù không có gì sai. Giữ tham chiếu module đang chạy còn an toàn hơn dựng cái mới
+    giữa lượt; code mới thì vẫn vào sạch khi khởi động lại app.
+    """
+    global _GA
+    if _GA is None:
+        import grid_actions as ga
+
+        _GA = ga
+    return _GA
+
 
 def _step_name(step: str) -> str:
-    import grid_actions as ga  # import chậm, tránh vòng lặp import
-
-    return ga.STEP_NAMES.get(step, step.upper())
+    return steps.STEP_LABEL.get(step, step.upper())
 
 
 def free_provider(root: Path, sid: str, step: str, busy: set[str]) -> tuple[str, str]:
@@ -44,9 +63,7 @@ def free_provider(root: Path, sid: str, step: str, busy: set[str]) -> tuple[str,
     """
     if step == "b0":
         return ("" if B0_SLOT in busy else B0_SLOT), ""
-    import grid_actions as ga
-
-    return ga.free_provider(root, sid, step, busy)
+    return actions().free_provider(root, sid, step, busy)
 
 
 @dataclass(eq=False)  # so bằng identity: hai việc trùng nội dung vẫn là hai viên khác nhau
@@ -94,8 +111,6 @@ def tasks_for(job: Job) -> list[Task]:
     ghi đè anh đang dùng và tốn thêm một lượt AI. B1 đã xong thì B2/B3 không còn gì để chờ,
     xuống thẳng hàng đợi ready thay vì khóa trong `_hold` mãi mãi.
     """
-    import steps  # đọc state thật từ folder; steps không import gì ngược lại nên không vòng
-
     chained = list(job.steps) == list(ALL_STEPS)
     tasks: list[Task] = []
     for sid in job.ids:
@@ -398,14 +413,12 @@ def job_for(event: dict, root: Path) -> tuple[list[Job], list[str]]:
     P14c bỏ luôn cảnh cắt batch thành "N lượt": đơn vị chạy là từng B của từng bài nên 150 bài
     là 150 dây chuyền nhỏ, bộ rảnh tới đâu hút tới đó — không còn MAX_BATCH đứng giữa.
     """
-    import grid_actions as ga  # import chậm, tránh vòng lặp import
-
     source = str(event.get("source") or "")
     sid = str(event.get("id") or "")
     step = str(event.get("step") or "")
     if source == "run_step":
         return [Job(event=event, root=root, ids=[sid], steps=[step],
-                    name=f"{sid} · {ga.STEP_NAMES.get(step, step)}")], []
+                    name=f"{sid} · {_step_name(step)}")], []
     if source == "run_all":
         return [Job(event=event, root=root, ids=[sid], steps=list(ALL_STEPS),
                     name=f"{sid} · ⚡ đủ B1-B3")], []

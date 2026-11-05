@@ -2052,6 +2052,52 @@ finally:
     httpx_mod.post = _p12_post
     os.environ.pop("P12_TTLS_KEY", None)
 
+# --- P16: Avast chốt TIẾN TRÌNH (không phải chứng chỉ) + luồng nền không `import` giữa nhịp ---
+check("P16 chữ gợi ý Avast chỉ đúng chỗ phải mở loại trừ cho CHÍNH python đang chạy app",
+      "Exceptions" in prov.AV_HINT and "aswMonFlt" in prov.AV_HINT
+      and "python.exe của tool" not in prov.AV_HINT)  # bản chạy thật có thể là python toàn cục, không phải .venv
+check("P16 hết cảnh đẩy anh xuống HTTP_VERIFY_SSL cho lỗi driver — nó chỉ hết lỗi chứng chỉ",
+      "CERTIFICATE_VERIFY_FAILED" in prov.AV_HINT and "KHÔNG gỡ được chốt của driver" in prov.AV_HINT
+      and "HTTP_VERIFY_SSL" in prov.AV_HINT)  # vẫn gọi tên biến để anh biết lối tắt đó thật, nhưng nói rõ giới hạn
+check("P16 một sự thật duy nhất về tên B: grid_actions lấy nguyên bảng của steps",
+      ga.STEP_NAMES is steps.STEP_LABEL
+      and gr._step_name("b2") == "B2 ảnh" and gr._step_name("b4") == "B4")
+_p16_src = (Path(__file__).resolve().parent / "grid_runner.py").read_text(encoding="utf-8")
+check("P16 luồng nền chỉ import grid_actions MỘT lần trong actions() — hết import giữa nhịp tick/cấp phát",
+      _p16_src.count("import grid_actions as ga") == 1
+      and _p16_src.index("def actions()") < _p16_src.index("import grid_actions as ga") < _p16_src.index("def _step_name")
+      and "import" not in inspect.getsource(gr._step_name)
+      and "import" not in inspect.getsource(gr.tasks_for))
+# Fixture riêng cho vụ cấp phát bộ: ga_root đã bị nhiều block trước sửa prefs/xóa provider,
+# dùng nó thì check thành may mắn chứ không phải bằng chứng.
+_p16_root = stories.validate_root(Path(tempfile.mkdtemp(prefix="fbp16_")) / "ws")
+_p16_conn = db.connect()
+db.add_provider(_p16_conn, "P16BoRanh", "openai", "https://x/v1", "GRID_KEY_ENV", "m1")
+ga.set_pref_providers(_p16_root, "b1", ["P16BoRanh"])
+_p16_sid = stories.create_story(_p16_root, "P16 claim", input_text="nội dung")["id"]
+_p16_job, _ = gr.job_for({"source": "run_step", "id": _p16_sid, "step": "b1"}, _p16_root)
+check("P16 nhãn việc lẻ đọc tên B thẳng từ steps, không phải từ grid_actions",
+      _p16_job[0].name == f"{_p16_sid} · B1 caption"
+      and gr.tasks_for(_p16_job[0])[0].label == f"{_p16_sid} · B1 caption")
+_p16_before = ga.free_provider(_p16_root, _p16_sid, "b1", set())
+gr.actions()  # cho nó nạp tham chiếu TRƯỚC khi đầu độc sys.modules — giống đời thật, app đã chạy rồi
+_real_ga = sys.modules["grid_actions"]
+sys.modules["grid_actions"] = None  # CPython halt import khi gặp None: đúng cảnh file watcher gỡ module giữa lượt
+_p16_after = _p16_label = ""
+try:
+    import grid_actions as _p16_trap  # dòng này phải NÉM ra — chứng minh cái bẫy có thật, check dưới không rỗng
+    _p16_raised = ""
+except ImportError:
+    _p16_raised = "ImportError"  # import thô chết thật — chứng minh cái bẫy có tác dụng
+    _p16_after = gr.free_provider(_p16_root, _p16_sid, "b1", set())
+    _p16_label = gr.tasks_for(_p16_job[0])[0].label  # đường từng nổ KeyError: 'providers' trong log 8599
+finally:
+    sys.modules["grid_actions"] = _real_ga
+check("P16 module bị gỡ giữa lượt (file watcher) -> luồng nền vẫn cấp phát bộ + đặt nhãn, không thành lỗi giả",
+      _p16_raised == "ImportError" and _p16_after == _p16_before == ("P16BoRanh", "")
+      and _p16_label == f"{_p16_sid} · B1 caption" and gr.actions() is _real_ga)
+db.delete_provider(_p16_conn, next(p["id"] for p in db.list_providers(_p16_conn) if p["name"] == "P16BoRanh"))
+
 # --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
 grid_src_p13 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
 check("P13a hết chế độ '8 dòng gần nhất + Log cũ' — không còn danh sách dài lẫn lộn mấy cú bấm",
