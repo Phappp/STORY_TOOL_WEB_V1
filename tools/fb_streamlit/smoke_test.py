@@ -1592,6 +1592,58 @@ try:
 except prov.ProviderError as exc:
     check("missing key raises", "OPENROUTER_API_KEY" in str(exc))
 
+# --- P12: TLS phải tin cả gốc của máy (Avast/AVG quét HTTPS) — B3 kind=openai từng chết ở bắt tay TLS ---
+import certifi
+import ssl as _ssl_p12
+
+_p12_ctx = prov.tls_verify()
+check("P12 tls_verify trả về SSLContext vẫn kiểm tra chứng chỉ thật (CERT_REQUIRED + soi hostname)",
+      isinstance(_p12_ctx, _ssl_p12.SSLContext) and _p12_ctx.verify_mode == _ssl_p12.CERT_REQUIRED
+      and _p12_ctx.check_hostname)
+check("P12 app.py không được inject truststore — SSLContext phải là của stdlib để OpenSSL tự soi chứng chỉ "
+      "(inject_into_ssl tắt ngả đó rồi đùn sang CryptoAPI, chính là ngả Avast chặn)",
+      _ssl_p12.SSLContext.__module__ == "ssl")
+try:  # re-inject truststore làm get_ca_certs() nổ NotImplementedError — báo đỏ tại chỗ, đừng vỡ cả suite
+    _p12_certifi = len(_ssl_p12.create_default_context(cafile=certifi.where()).get_ca_certs())
+    _p12_merged = len(_p12_ctx.get_ca_certs())
+    if sys.platform == "win32":  # lỗi thật trên máy anh: certifi-only 118 gốc, không có "Avast Web/Mail Shield Root"
+        check("P12 context gộp đọc thêm store của máy (nơi Avast đặt gốc trung tâm của nó), không chỉ mỗi certifi",
+              _p12_merged > _p12_certifi)
+    else:
+        check("P12 context gộp có đủ bundle certifi trên mọi máy", _p12_merged >= _p12_certifi)
+except NotImplementedError:
+    check("P12 get_ca_certs() đếm được gốc — nghĩa là chưa có truststore chắn giữa", False)
+os.environ["HTTP_VERIFY_SSL"] = "false"
+check("P12 HTTP_VERIFY_SSL=false vẫn là lối tắt có chủ đích (tls_verify trả False, không tự ý nới lỏng)",
+      prov.tls_verify() is False)
+os.environ.pop("HTTP_VERIFY_SSL", None)
+_src_p12 = "".join(Path(f"{m}.py").read_text(encoding="utf-8") for m in ("providers", "images", "fb_import"))
+check("P12 mọi chỗ gọi HTTPS đều dùng tls_verify chung (không còn verify=http_verify() certifi-only)",
+      "verify=http_verify()" not in _src_p12 and _src_p12.count("verify=tls_verify()") >= 5)
+
+
+def _p12_boom(*a, **k):
+    raise PermissionError(13, "Permission denied", "\\\\.\\aswMonFltProxy\\5eafa6b50fa05238")
+
+
+os.environ["P12_TTLS_KEY"] = "sk-abcdefghijklmnopqrstuvwx"
+_p12_provider = {"kind": "openai", "base_url": "https://top-tools-ai.com/api/v1",
+                 "key_env": "P12_TTLS_KEY", "models": "top-tools-ai", "name": "TTA_1"}
+_p12_post, httpx_mod = prov.httpx.post, prov.httpx
+httpx_mod.post = _p12_boom
+try:
+    prov.chat(_p12_provider, "top-tools-ai", "hi")
+    check("P12 PermissionError của bộ lọc Avast phải thành ProviderError đọc được", False)
+except prov.ProviderError as exc:
+    check("P12 PermissionError của bộ lọc Avast phải thành ProviderError đọc được (gọi tên Avast + đường xử lý)",
+          "Avast" in str(exc) and "aswMonFlt" in str(exc) and "HTTP_VERIFY_SSL" in str(exc)
+          and "top-tools-ai.com" in str(exc))
+except OSError as exc:
+    check("P12 PermissionError của bộ lọc Avast phải thành ProviderError đọc được", False)
+finally:
+    httpx_mod.post = _p12_post
+    os.environ.pop("P12_TTLS_KEY", None)
+
 # --- unit: stories.py — story folder là nguồn sự thật ---
 import stories
 

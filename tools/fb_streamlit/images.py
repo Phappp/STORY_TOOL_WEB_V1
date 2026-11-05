@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from providers import http_verify
+from providers import tls_verify
 
 import paths
 
@@ -25,7 +25,7 @@ def download_ref(url: str) -> Path:
     REFS_DIR.mkdir(parents=True, exist_ok=True)
     host = (urlparse(url).netloc or "").lower()
     headers = {"User-Agent": FB_IMAGE_UA} if any(h in host for h in FB_IMAGE_HOSTS) else {}
-    r = httpx.get(url, headers=headers, follow_redirects=True, timeout=60, verify=http_verify())
+    r = httpx.get(url, headers=headers, follow_redirects=True, timeout=60, verify=tls_verify())
     if r.status_code >= 400:
         raise RuntimeError(f"Tải ảnh gốc lỗi HTTP {r.status_code}")
     ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -82,7 +82,7 @@ def _unsplash(query: str, count: int) -> list[dict]:
         headers={"Authorization": f"Client-ID {os.getenv('UNSPLASH_ACCESS_KEY').strip()}"},
         params={"query": query, "per_page": count},
         timeout=60,
-        verify=http_verify(),
+        verify=tls_verify(),
     )
     if resp.status_code >= 400:
         raise RuntimeError(f"Unsplash HTTP {resp.status_code}: {resp.text[:200]}")
@@ -98,7 +98,7 @@ def _pexels(query: str, count: int) -> list[dict]:
         headers={"Authorization": os.getenv("PEXELS_API_KEY").strip()},
         params={"query": query, "per_page": count},
         timeout=60,
-        verify=http_verify(),
+        verify=tls_verify(),
     )
     if resp.status_code >= 400:
         raise RuntimeError(f"Pexels HTTP {resp.status_code}: {resp.text[:200]}")

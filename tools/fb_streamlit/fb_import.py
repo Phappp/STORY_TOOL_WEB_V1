@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from providers import http_verify
+from providers import tls_verify
 
 FB_HOSTS = ("facebook.com", "fb.com", "fb.watch", "m.facebook.com", "web.facebook.com")
 CRAWLER_UA = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
@@ -87,7 +87,7 @@ def extract_via_og(url: str, timeout: int = 30) -> dict:
             headers={"User-Agent": CRAWLER_UA},
             follow_redirects=True,
             timeout=timeout,
-            verify=http_verify(),
+            verify=tls_verify(),
         )
     except httpx.HTTPError as exc:
         raise RuntimeError(f"Không tải được trang FB: {exc}") from exc

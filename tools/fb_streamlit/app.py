@@ -5,11 +5,7 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-try:  # mạng có proxy MITM: dùng certificate store của Windows thay vì certifi
-    import truststore
-    truststore.inject_into_ssl()
-except ImportError:
-    pass
+# KHÔNG inject truststore: nó đùn TLS sang CryptoAPI — ngả bị Avast chặn (PermissionError \\.\aswMonFltProxy). providers.tls_verify() thế chỗ.
 
 import db
 import fb_import

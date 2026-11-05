@@ -1,11 +1,13 @@
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
+import certifi
 import httpx
 
 import paths
@@ -15,8 +17,34 @@ class ProviderError(RuntimeError):
     pass
 
 
+AV_HINT = ("Máy này có Avast/AVG đang quét HTTPS (driver aswMonFlt): python.exe không mở được "
+           "object của bộ lọc. Cách xử lý — thêm đường dẫn python.exe của tool vào Ngoại lệ của "
+           "Avast, hoặc tắt \"Scanning for HTTPS\" trong Web Shield; cần chạy ngay thì đặt "
+           "HTTP_VERIFY_SSL=false trong .env (nhưng khi đó tool không kiểm tra chứng chỉ nữa).")
+
+
 def http_verify() -> bool:
     return os.getenv("HTTP_VERIFY_SSL", "true").lower() != "false"
+
+
+def tls_verify():
+    """Cách tin chứng chỉ cho MỌI kết nối HTTPS của tool: gốc hệ thống + bundle certifi.
+
+    httpx mặc định chỉ tin bundle Mozilla (certifi). Avast/AVG quét HTTPS bằng cách tự phát
+    chứng chỉ cho site, gốc "Avast Web/Mail Shield Root" chỉ nằm trong store Windows — nên
+    tay bắt tay TLS của provider kind=openai bị từ chối, biểu hiện là CERTIFICATE_VERIFY_FAILED
+    hoặc PermissionError trỏ \\\\.\\aswMonFltProxy\\<id> (B3 lỗi, còn B1/B2 chạy Codex CLI vẫn ổn
+    vì tiến trình đó tự lo TLS của nó).
+
+    tin theo store máy (truststore.inject_into_ssl()) KHÔNG cứu được gì: nó tắt kiểm tra của
+    OpenSSL rồi nhờ CryptoAPI xác minh hộ — chính ngả đó bị Avast chặn. Context gộp tự kiểm tra
+    bằng OpenSSL nên không đi qua CryptoAPI nữa: cert tự ký và cert sai hostname vẫn bị chặn (đã đo).
+    """
+    if not http_verify():
+        return False
+    ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
+    ctx.load_verify_locations(cafile=certifi.where())
+    return ctx
 
 
 RAW_KEY_RE = re.compile(r"^sk-[A-Za-z0-9_\-]{20,}$")
@@ -89,10 +117,13 @@ def _openai_chat(provider, model: str, prompt: str, system: str, temperature: fl
             headers=headers,
             json={"model": model, "messages": messages, "temperature": temperature},
             timeout=240,
-            verify=http_verify(),
+            verify=tls_verify(),
         )
     except httpx.HTTPError as exc:
         raise ProviderError(f"Lỗi kết nối tới {base_url}: {exc}") from exc
+    except OSError as exc:  # PermissionError của bộ lọc Avast, lỗi mở file CA… — không phải lỗi HTTP
+        raise ProviderError(f"Không bắt tay TLS được với {base_url}: "
+                            f"{type(exc).__name__}: {exc}. {AV_HINT}") from exc
     if resp.status_code >= 400:
         snippet = resp.text[:400]
         raise ProviderError(f"Provider trả lỗi HTTP {resp.status_code}: {snippet}")
@@ -208,9 +239,12 @@ def test_connection(provider) -> str:
     if key:
         headers["Authorization"] = f"Bearer {key}"
     try:
-        resp = httpx.get(f"{base_url}/models", headers=headers, timeout=60, verify=http_verify())
+        resp = httpx.get(f"{base_url}/models", headers=headers, timeout=60, verify=tls_verify())
     except httpx.HTTPError as exc:
         raise ProviderError(f"Không kết nối được {base_url}: {exc}") from exc
+    except OSError as exc:
+        raise ProviderError(f"Không bắt tay TLS được với {base_url}: "
+                            f"{type(exc).__name__}: {exc}. {AV_HINT}") from exc
     if resp.status_code >= 400:
         raise ProviderError(f"HTTP {resp.status_code}: {resp.text[:300]}")
     data = resp.json()
