@@ -247,7 +247,10 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "prov": {step: str((story.get(step) or {}).get("prov_pick") or "") for step in ga.ALL_STEPS},
             # tên preset sẽ dùng cho bài này — JS cần nó để cache prompt đúng theo preset (P17a)
             "preset": str(pre["name"] if pre is not None else ""),
+            # ô B3 bấm 1 lần copy "Bài SEO (render)" (bản chữ sạch), nên cờ trống phải có cả tên đó —
+            # thiếu là lưới bấm vào không báo gì, Python mới trả lời "trống" ở lượt sau.
             "copyable": {"Caption": summary["b1"] == stories.DONE, "Bài SEO": summary["b3"] == stories.DONE,
+                         "Bài SEO (render)": summary["b3"] == stories.DONE,
                          "Input": summary["has_input"], "Link": bool(summary["link"].strip())},
         })
     return ga.with_positions(ga.queue_sort(out))

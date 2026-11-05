@@ -510,8 +510,9 @@ check("rows_for mang hint cho đủ B0-B4 mọi bài — thẻ hover đọc ngay
       and all(v == "" for v in r_empty["hint"].values()))  # bài chưa chạy gì thì dấu vết phải trống
 check("rows_for bài chưa có input: pending hết, không có ảnh",
       not r_empty["has_input"] and list(r_empty["states"].values()) == ["pending"] * 3 and r_empty["image"] == "")
-check("rows_for báo ô copy theo nội dung thật",
-      r_ok["copyable"] == {"Caption": True, "Bài SEO": True, "Input": True, "Link": False})
+check("rows_for báo ô copy theo nội dung thật — P17b: cờ trống phải có cả tên trường B3 copy (render)",
+      r_ok["copyable"] == {"Caption": True, "Bài SEO": True, "Bài SEO (render)": True,
+                           "Input": True, "Link": False})
 stories.update_story(ga_root, sid_ok, link="https://www.facebook.com/x/posts/1")
 check("copyable Link bật khi story có link",
       next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_ok)["copyable"]["Link"] is True)
@@ -583,6 +584,32 @@ out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "B�
 check("bản dán Facebook là unicode đậm, không còn ký hiệu markdown",
       out.copy is not None and out.copy["text"] == formats.to_fb_unicode(stories.step_text(ga_root, sid_ok, "b3"))
       and "**" not in out.copy["text"] and "##" not in out.copy["text"] and "━━━" in out.copy["text"])
+# --- P17b: bấm 1 lần ở ô B3 copy BẢN ĐÃ RENDER (chữ sạch), không phải nguyên văn seo.md ---
+_p17b_md = (ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Bài SEO",
+                                  "request_id": "req-b3-md"}).copy or {}).get("text") or ""
+_p17b_out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Bài SEO (render)",
+                                  "request_id": "req-b3-render"})
+check("P17b chữ clipboard nhận khi bấm ô B3 = formats.to_plain(seo.md) — hết ##/**, dán nơi không hỗ trợ format được",
+      _p17b_out.copy is not None and _p17b_out.copy["mode"] == "copy"
+      and _p17b_out.copy["text"] == formats.to_plain(stories.step_text(ga_root, sid_ok, "b3"))
+      and _p17b_out.copy["text"] == "Tiêu đề đậm\n\nĐoạn văn có chữ đậm và nghiêng.")
+check("P17b markdown gốc vẫn có đường riêng (“Bài SEO” cho modal lúc tắt render) — hai bản khác nhau thật",
+      _p17b_md.startswith("## Tiêu đề") and "**đậm**" in _p17b_md and _p17b_md != _p17b_out.copy["text"])
+_p17b_empty = ga.apply_event(gctx, {"source": "copy_request", "id": sid_empty, "field": "Bài SEO (render)",
+                                    "request_id": "req-b3-empty"})
+check("P17b bài chưa chạy B3: bản render báo “trống” bằng lời, không im lặng copy chuỗi rỗng",
+      _p17b_empty.copy is None and _p17b_empty.lines and "trống" in _p17b_empty.lines[0])
+_p17b_js = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+check("P17b ô B3 xin đúng trường Python biết render — tên lạc là bấm vào không ra gì",
+      'const STEP_FIELD = { b1: "Caption", b3: "Bài SEO (render)" };' in _p17b_js
+      and "Bài SEO (render)" in ga.COPY_FIELDS)
+check("P17b mọi tên trường JS xin copy đều có trong COPY_FIELDS — không còn tên tự bịa",
+      {f for f in re.findall(r'"(Caption|Bài SEO(?: \([^)]*\))?|Input|Link)"', _p17b_js)} <= set(ga.COPY_FIELDS))
+check("P17b modal B3 copy theo đúng thứ ĐANG HIỆN: nhãn nút nói tên bản, footer nói ô vuông luôn copy bản sạch",
+      'ref.tab === "b3" && SHOW_MD' in _p17b_js and 'SHOW_MD ? "bản đã render" : "markdown"' in _p17b_js
+      and "BẢN ĐÃ RENDER (chữ sạch, hết ## và **)" in _p17b_js
+      and 'ở ô B3 = copy bản đã render (chữ sạch, hết ## và **) bất kể modal đang hiện gì' in _p17b_js
+      and 'copy " + (SHOW_MD' not in _p17b_js)  # footer mà đổi chữ theo SHOW_MD là nó nói sai về ô vuông
 out = ga.apply_event(gctx, {"source": "image_request", "id": sid_ok, "request_id": "req-img"})
 data = (out.copy or {}).get("image") or ""
 check("image_request trả ĐƯỜNG DẪN file chứ không nhét base64 vào message (modal tải qua /media/)",

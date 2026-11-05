@@ -198,7 +198,9 @@ const SUMMARY_ORDER = [["queued", "hàng đợi"], ["waiting", "chờ"], ["runni
 const DUBBLE_MS = 260;
 const MAX_UPLOAD = 4 * 1024 * 1024;  // khớp B0_UPLOAD_MAX trong grid_actions — ảnh tay đi base64 qua event
 const REF_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
-const STEP_FIELD = { b1: "Caption", b3: "Bài SEO" };
+// Bấm 1 lần ở ô B3 = copy bản ĐÃ RENDER (chữ sạch, hết ## và **) — thứ anh nhìn thấy trong modal,
+// không phải nguyên văn seo.md; muốn markdown thì mở modal, tắt chế độ render rồi bấm Copy ở đó.
+const STEP_FIELD = { b1: "Caption", b3: "Bài SEO (render)" };
 const TABS = [["b0", "B0 trích"], ["input", "Input"], ["b1", "B1 caption"], ["b2", "B2 ảnh"], ["b3", "B3 SEO"], ["b4", "B4 video"], ["link", "Link"]];
 const TAB_FIELD = { b0: "B0 preview", input: "Input", b1: "Caption", b3: "Bài SEO" };  // nội dung xin từ Python cho từng tab
 const TAB_COPY = { b0: "Input", input: "Input", b1: "Caption", b3: "Bài SEO" };        // tab B0 copy đúng caption trong input.txt
@@ -490,7 +492,8 @@ function stepsCell(row) {
     const preview = step === "b0" || step === "b2" || step === "b4";  // mấy bước này không có gì để copy — bấm là mở modal xem
     const how = preview ? "bấm để mở modal xem " + (step === "b0" ? "caption + ảnh trích được, sửa caption hoặc thêm ảnh tay ở đó"
       : step === "b4" ? "video đang nằm trong folder và chọn bài này để tải file từ ổ đĩa" : "ảnh")
-      : "bấm 1 lần để copy, bấm đúp để mở modal";
+      : step === "b3" ? "bấm 1 lần để copy BẢN ĐÃ RENDER (chữ sạch, hết ## và **), bấm đúp để mở modal"
+        : "bấm 1 lần để copy, bấm đúp để mở modal";
     // KHÔNG đặt b.title: tooltip mặc định của trình duyệt hiện trễ ~1 giây, chữ nhỏ và không
     // nói được provider/model/lúc chạy. Dữ liệu thẻ hover đi theo viên pill nên patchCells
     // đổi ô nào là thẻ đổi theo ô đó, không phải tra lại hàng.
@@ -840,12 +843,17 @@ function modalNode() {
       bb => { bb.disabled = true; send({ source: "b4_pick", id: row.id }); }, "act"));
   }
   if (ref.tab !== "b2") {
-    const field = TAB_COPY[ref.tab] || "";
+    // B3 copy đúng thứ ĐANG HIỆN: bản chữ sạch khi modal đang render, markdown gốc khi anh để nguyên chữ
+    const field = (ref.tab === "b3" && SHOW_MD) ? "Bài SEO (render)" : (TAB_COPY[ref.tab] || "");
     if (field) {
       const manual = ref.tab === "b0";  // tab B0 có ô sửa tay -> copy luôn lấy bản đã lưu trong file, không lấy bản nháp
-      const cp = button(manual ? "📋 Copy caption" : "📋 Copy " + field, manual
+      const sameAsPill = STEP_FIELD[ref.tab] === field;  // ô vuông bấm 1 lần có copy đúng trường này không
+      const cp = button(manual ? "📋 Copy caption"
+        : "📋 Copy " + (ref.tab === "b3" ? (SHOW_MD ? "bản đã render" : "markdown") : field), manual
         ? "Copy caption đang có trong input.txt — bản nháp chưa lưu thì bấm “💾 Lưu caption” trước"
-        : "Copy đúng chữ đang hiện" + (["b1", "b3"].indexOf(ref.tab) >= 0 ? " (bấm 1 lần ở ô " + field + " cũng vậy)" : ""),
+        : "Copy đúng chữ đang hiện" + (sameAsPill
+          ? " (bấm 1 lần ở ô " + (STEP_TITLE[ref.tab] || ref.tab) + " cũng ra bản này)"
+          : " (modal đang để nguyên chữ, còn bấm 1 lần ở ô " + (STEP_TITLE[ref.tab] || ref.tab) + " copy bản đã render)"),
         b => copyField(row, field, b, "modal:" + ref.tab), "act");
       cp.dataset.flash = "modal:" + ref.tab;
       tools.appendChild(cp);
@@ -869,7 +877,8 @@ function modalNode() {
   const pb = promptBlock(row, ref.tab);
   if (pb) modal.appendChild(pb);  // B1/B2/B3: prompt nằm DƯỚI kết quả, cần copy thì mở ra xem
   modal.appendChild(el("div", "mfoot",
-    "click 1 lần ở ô B1/B3 = copy · click đúp (hoặc bấm ô B0/B2/B4) = mở modal này · Esc hoặc ✕ để đóng · "
+    "click 1 lần ở ô B1 = copy caption, ở ô B3 = copy bản đã render (chữ sạch, hết ## và **) bất kể modal đang hiện gì"
+    + " — muốn markdown gốc thì bấm Copy ngay trong modal · click đúp (hoặc bấm ô B0/B2/B4) = mở modal này · Esc hoặc ✕ để đóng · "
     + "danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · sửa chữ trong modal là ghi thẳng vào file "
     + "· ảnh B2 mở trong modal tới " + (Math.round(Number(MODEL.image_max || 0) / 1048576) || 2) + " MB"));
 

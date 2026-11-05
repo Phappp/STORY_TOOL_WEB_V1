@@ -41,7 +41,9 @@ REF_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 B4_VIDEO_MAX = 200 * 1024 * 1024
 VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".wmv", ".flv", ".3gp")
 
-COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link", "Bài SEO (Facebook)")
+# "Bài SEO" = nguyên văn seo.md (modal đang hiện markdown thì copy thứ đó);
+# "Bài SEO (render)" = bản chữ sạch qua formats.to_plain — đúng thứ lưới hiện ra khi đang render.
+COPY_FIELDS = ("Caption", "Bài SEO", "Bài SEO (render)", "Input", "Link", "Bài SEO (Facebook)")
 # Bảng MỘT SỐ của các ô prompt trong modal: thêm một B ở đây là JS hiện theo, không phải đi sửa tên
 # chuỗi rải rác hay đoán theo tiền tố "Prompt". `open`/`copy` là hành vi UI: B1 mở sẵn vì anh hay copy
 # sang ChatGPT web, B2/B3 gập lại cho đỡ choáng. `copy` còn đi theo payload (copyable) để clipboard biết
@@ -592,6 +594,8 @@ def _copy_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
         text = stories.step_text(ctx.root, sid, "b1")
     elif field_name == "Bài SEO":
         text = stories.step_text(ctx.root, sid, "b3")
+    elif field_name == "Bài SEO (render)":
+        text = formats.to_plain(stories.step_text(ctx.root, sid, "b3"))
     elif field_name == "Bài SEO (Facebook)":
         text = formats.to_fb_unicode(stories.step_text(ctx.root, sid, "b3"))
     elif field_name == "Input":
