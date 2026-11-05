@@ -70,6 +70,7 @@
     max-height:calc(100vh - 40px); display:flex; flex-direction:column; box-shadow:0 14px 34px rgba(0,0,0,.5); }
   .mhead { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
   .mhead .mid { font-family:ui-monospace,Consolas,monospace; font-weight:600; }
+  .mhead .mpos { font-family:ui-monospace,Consolas,monospace; font-size:12px; color:var(--muted); min-width:52px; text-align:center; }
   .mtabs { display:flex; gap:4px; flex-wrap:wrap; margin-right:auto; }
   .mtab { border:1px solid var(--border); background:var(--field); border-radius:6px; font:inherit; font-size:12px;
     height:24px; padding:0 9px; cursor:pointer; color:var(--muted); }
@@ -603,6 +604,39 @@ function setModal(ref) { lsSet(MODAL_KEY, ref ? JSON.stringify(ref) : ""); }
 function openModal(id, tab) { setModal({ id: String(id), tab: tab || "b1" }); repaint(); }
 function closeModal() { setModal(null); repaint(); }
 
+// ← → trong modal: nhảy sang bài trước/kế TRONG ĐÚNG danh sách anh đang thấy (bộ lọc + ô tìm đều tính),
+// giữ nguyên tab đang xem để dò B1 hết loạt bài khỏi phải mở lại modal. Không xin Python thêm lượt nào:
+// đổi id là đổi khóa cache -> ensureTab tự gọi đúng một modal_request cho tab mới (P18a).
+function neighbours(id) {
+  const list = visible();
+  const at = list.findIndex(r => String(r.id) === String(id));
+  return { at: at, total: list.length,
+    prev: at > 0 ? list[at - 1] : null,
+    next: at >= 0 && at < list.length - 1 ? list[at + 1] : null };
+}
+function stepStory(delta, tab) {
+  const ref = modalRef();
+  if (!ref) return;
+  const nb = neighbours(ref.id);
+  const target = delta < 0 ? nb.prev : nb.next;
+  if (!target) return;
+  setModal({ id: String(target.id), tab: tab || ref.tab });
+  CURSOR = String(target.id);  // ↑ ↓ bấm tiếp là đi từ đúng bài đang mở, không quay về bài cũ
+  paintCursor();
+  repaint();
+}
+function navButton(label, verb, nb, delta) {
+  const target = delta < 0 ? nb.prev : nb.next;
+  const tip = target
+    ? verb + ": " + target.id + " — giữ nguyên tab đang xem (phím " + (delta < 0 ? "←" : "→") + ")"
+    : nb.at < 0
+      ? verb + ": bài này bị ô tìm/bộ lọc che — ← → chỉ đi trong phần đang hiện"
+      : verb + ": hết bài (" + nb.total + " bài đang hiện)";
+  const b = button(label, tip, () => stepStory(delta));
+  if (!target) b.disabled = true;
+  return b;
+}
+
 // Tab nào cần trường gì từ Python: kết quả đang hiện + prompt của B đó (nếu có).
 function tabFields(tab) {
   if (tab === "link") return [];  // link đã nằm sẵn trong row, không phải xin
@@ -898,6 +932,10 @@ function modalNode() {
     tabs.appendChild(t);
   });
   head.appendChild(tabs);
+  const nb = neighbours(row.id);
+  head.appendChild(navButton("←", "Bài trước", nb, -1));
+  head.appendChild(el("span", "mpos", nb.at >= 0 ? (nb.at + 1) + "/" + nb.total : "— / " + nb.total));
+  head.appendChild(navButton("→", "Bài kế", nb, 1));
   head.appendChild(button("✕", "Đóng (Esc)", () => closeModal()));
   modal.appendChild(head);
 
@@ -990,6 +1028,7 @@ function modalNode() {
   modal.appendChild(el("div", "mfoot",
     "click 1 lần ở ô B1 = copy caption, ở ô B3 = copy bản đã render (chữ sạch, hết ## và **) bất kể modal đang hiện gì"
     + " — muốn markdown gốc thì bấm Copy ngay trong modal · click đúp (hoặc bấm ô B0/B2/B4) = mở modal này · Esc hoặc ✕ để đóng · "
+    + "← → (hoặc hai nút đầu modal) sang bài trước/kế trong đúng danh sách đang hiện, giữ nguyên tab · "
     + "danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · sửa chữ trong modal là ghi thẳng vào file "
     + "· ảnh B2 mở trong modal tới " + (Math.round(Number(MODEL.image_max || 0) / 1048576) || 2) + " MB"));
 
@@ -1619,7 +1658,7 @@ function render(args, force) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, đặt trong “📥 Import link…” · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ⋮ thêm thao tác (↗ trang Tạo bài · ✅ đã đăng · hàng đợi · 🗑 dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · 📋 ở cột Link để copy nguyên link đã đăng (khỏi mở modal), ✎ để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
+    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, đặt trong “📥 Import link…” · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ⋮ thêm thao tác (↗ trang Tạo bài · ✅ đã đăng · hàng đợi · 🗑 dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · 📋 ở cột Link để copy nguyên link đã đăng (khỏi mở modal), ✎ để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · ← → trong modal đổi bài · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
   root.appendChild(wrap);
   unmarkSent();
   const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này
@@ -1678,7 +1717,13 @@ document.addEventListener("keydown", e => {
   const nav = e.key === "ArrowDown" || e.key === "ArrowUp";
   if (typing && !inSearch) return;  // đang sửa ô Link / gõ note trong modal thì phím là chữ
   if (inSearch && !nav) return;     // ở ô tìm chỉ ↑ ↓ nhảy hàng, mọi phím khác tiếp tục gõ chữ
-  if (modalRef()) return;           // modal đang mở thì bàn phím thuộc về modal
+  if (modalRef()) {           // modal đang mở thì bàn phím thuộc về modal
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      stepStory(e.key === "ArrowLeft" ? -1 : 1);
+    }
+    return;
+  }
   const row = CURSOR ? findRow(CURSOR) : null;
   if (nav) { e.preventDefault(); moveCursor(e.key === "ArrowDown" ? 1 : -1); return; }
   if (e.key === "Enter") { if (row) { e.preventDefault(); openModal(row.id, "b1"); } return; }

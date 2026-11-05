@@ -2659,6 +2659,36 @@ check("P18b tiêu đề cột + chữ gợi ý nói đủ ba việc của ô Lin
       and "📋 ở cột Link để copy nguyên link đã đăng" in _js_p18b)
 shutil.rmtree(_p18b_box, ignore_errors=True)
 
+# --- P18c: ← / → trong modal nhảy bài trước/kế ngay trên danh sách đang thấy, giữ nguyên tab ---
+_js_p18c = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_nav_p18c = _js_p18c[_js_p18c.index("function neighbours"):_js_p18c.index("function navButton")]
+_navbtn_p18c = _js_p18c[_js_p18c.index("function navButton"):_js_p18c.index("\n}", _js_p18c.index("function navButton"))]
+_head_p18c = _js_p18c[_js_p18c.index("head.appendChild(tabs);"):_js_p18c.index('button("✕"')]
+_keys_p18c = _js_p18c[_js_p18c.index('document.addEventListener("keydown"'):
+                      _js_p18c.index("\n});", _js_p18c.index('document.addEventListener("keydown"'))]
+_sig_p18c = _js_p18c[_js_p18c.index("function modalSig"):
+                      _js_p18c.index("\n}", _js_p18c.index("function modalSig"))]
+check("P18c ← → đi theo đúng thứ tự hàng lưới đang thấy (visible() — cả ô tìm), không phải theo id hay sorted riêng",
+      "const list = visible();" in _nav_p18c and "MODEL.rows" not in _nav_p18c and ".sort(" not in _nav_p18c)
+check("P18c giữ nguyên tab khi nhảy bài — một cú nhảy là một modal_request, không phải lượt xin riêng cho navigation",
+      "setModal({ id: String(target.id), tab: tab || ref.tab });" in _nav_p18c
+      and "send(" not in _nav_p18c and "requestContent" not in _nav_p18c and "requestModal" not in _nav_p18c)
+check("P18c nhảy bài làm chữ ký modal đổi thật (ref.id nằm trong sig) — nếu bỏ là modal treo bài cũ",
+      "JSON.stringify([ref.id, ref.tab, stampOf(row)" in _sig_p18c)
+check("P18c đầu modal nói rõ vị trí + bài kề; nút TÀN khi hết bài hoặc khi bài đang mở bị bộ lọc che",
+      "nb.at < 0" in _navbtn_p18c and "b.disabled = true" in _navbtn_p18c
+      and "bài này bị ô tìm/bộ lọc che" in _navbtn_p18c and "hết bài (" in _navbtn_p18c
+      and 'el("span", "mpos"' in _head_p18c and '"←", "Bài trước"' in _head_p18c and '"→", "Bài kế"' in _head_p18c)
+_p18c_arrow = _keys_p18c.index('e.key === "ArrowLeft"')
+check("P18c ← → trong modal KHÔNG cướp phím của ô chữ đang gõ (guard typing đứng trước, nhánh ← → nằm trong guard modal)",
+      _keys_p18c.index("if (typing && !inSearch) return;") < _p18c_arrow
+      and "modalRef()" in _keys_p18c[max(0, _p18c_arrow - 90):_p18c_arrow]
+      and 'e.key === "ArrowRight"' in _keys_p18c[_p18c_arrow:_p18c_arrow + 60])
+check("P18c bài vừa mở bằng ← → cũng trở thành hàng đang chọn — ↑ ↓ bấm tiếp đi từ đúng chỗ anh đang xem",
+      "CURSOR = String(target.id);" in _nav_p18c and "paintCursor();" in _nav_p18c)
+check("P18c chữ gợi ý của lưới + chân modal nói đủ phím ← → (biết là khỏi đoán)",
+      "← → trong modal đổi bài" in _js_p18c and "sang bài trước/kế trong đúng danh sách đang hiện, giữ nguyên tab" in _js_p18c)
+
 # --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
 
 grid_src_p13 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
