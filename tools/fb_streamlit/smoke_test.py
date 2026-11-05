@@ -3532,6 +3532,70 @@ for _p19_left in db.list_presets(_p19_conn):
 _p19_conn.close()
 shutil.rmtree(_p19_box, ignore_errors=True)
 
+# --- unit: P19d — file anh bỏ tay vào folder phải xóa được ô LỖI ---
+_p19d_box = Path(tempfile.mkdtemp(prefix="fbp19d_"))
+_p19d_root = stories.validate_root(_p19d_box / "ws")
+_p19d_day = 86400.0  # Explorer copy GIỮ NGUYÊN ngày giờ file nguồn, nên ảnh chép vào hôm nay vẫn có thể đề hôm trước.
+
+
+def _p19d_backdated(path: Path, raw: bytes) -> Path:
+    """Giả cảnh anh chép tay một ảnh tải về từ hôm trước: ghi file rồi vặn ngày giờ về 3 hôm trước."""
+    path.write_bytes(raw)
+    long_ago = time.time() - 3 * _p19d_day
+    os.utime(path, (long_ago, long_ago))
+    return path
+
+
+_p19d_id = stories.create_story(_p19d_root, "Bài hỏng B2 tự thay ảnh", input_text="nội dung gốc")["id"]
+stories.set_step_state(_p19d_root, _p19d_id, "b2", stories.ERROR, detail="nhà cung cấp từ chối")
+check("P19d lần báo lỗi ghi lại DẤU VẾT file đang có (chưa có ảnh = '') — đó là mốc để nhận file mới",
+      stories.load_story(_p19d_root, _p19d_id)["b2"]["file_fp"] == ""
+      and stories.states(_p19d_root, _p19d_id)["b2"] == "error")
+_p19d_backdated(_p19d_root / _p19d_id / "image.png", b"ANH-CHEP-TAY-" + b"X" * 60)
+check("P19d chép image.png THẲNG vào folder (không qua grid) -> ô B2 lên xanh, không phải bấm ▶ lại",
+      stories.states(_p19d_root, _p19d_id)["b2"] == "done"
+      and ga.display_states(_p19d_root, _p19d_id)["b2"] == stories.DONE
+      and ga.bucket(ga.display_states(_p19d_root, _p19d_id)) != "error")
+check("P19d so DẤU VẾT file chứ không so mtime với mốc lỗi — ảnh hôm trước chép vào hôm nay vẫn tính",
+      (_p19d_root / _p19d_id / "image.png").stat().st_mtime
+      < float(stories.load_story(_p19d_root, _p19d_id)["b2"]["updated_at"])
+      and stories.states(_p19d_root, _p19d_id)["b2"] == "done")
+check("P19d ảnh bỏ tay đủ để ⚡ BỎ QUA bước đó — khỏi trả thêm tiền cho bài đã có ảnh",
+      "b2" in steps.skipped_done(_p19d_root, _p19d_id))
+
+# Ảnh còn sót của lần chạy hỏng thì phải GIỮ ĐỎ: đó là lý do `error` từng thắng file.
+stories.set_step_state(_p19d_root, _p19d_id, "b2", stories.RUNNING)
+stories.set_step_state(_p19d_root, _p19d_id, "b2", stories.ERROR, detail="hỏng lần hai")
+check("P19d chạy lại rồi hỏng: ảnh cũ nguyên dấu vết vẫn ĐỎ — lỗi mới không bị ảnh lần trước che",
+      stories.states(_p19d_root, _p19d_id)["b2"] == "error"
+      and stories.load_story(_p19d_root, _p19d_id)["b2"]["file_fp"]
+      == f"image.png:{(_p19d_root / _p19d_id / 'image.png').stat().st_size}:"
+         f"{int((_p19d_root / _p19d_id / 'image.png').stat().st_mtime)}")
+_p19d_backdated(_p19d_root / _p19d_id / "image.png", b"ANH-THAY-DOI-" + b"Y" * 200)
+check("P19d thay bằng ảnh khác trên đĩa -> xanh lại ngay (muốn chạy lại thì bấm ▶ riêng ô B2)",
+      stories.states(_p19d_root, _p19d_id)["b2"] == "done")
+stories.set_step_state(_p19d_root, _p19d_id, "b2", stories.RUNNING)
+check("P19d 'running' vẫn thắng tuyệt đối — lưới đang chạy không được tự đổi màu vì file",
+      stories.states(_p19d_root, _p19d_id)["b2"] == "running")
+
+_p19d_b1 = stories.create_story(_p19d_root, "Bài hỏng B1 tự sửa caption", input_text="nội dung gốc")["id"]
+stories.set_step_state(_p19d_root, _p19d_b1, "b1", stories.ERROR, detail="hết hạn key")
+_p19d_backdated(_p19d_root / _p19d_b1 / "caption.txt", "caption anh tự viết".encode())
+check("P19d luật áp đủ B1/B2/B3: tự viết caption.txt vào folder cũng xóa được ô đỏ B1",
+      stories.states(_p19d_root, _p19d_b1)["b1"] == "done")
+
+_p19d_old = stories.create_story(_p19d_root, "Bài lỗi từ trước bản P19d", input_text="nội dung gốc")["id"]
+_p19d_backdated(_p19d_root / _p19d_old / "image.png", b"ANH-" + b"Z" * 100)
+stories.set_step_state(_p19d_root, _p19d_old, "b2", stories.ERROR, detail="lỗi cũ")
+_legacy = stories.load_story(_p19d_root, _p19d_old)
+_legacy["b2"].pop("file_fp")  # story.json viết TRƯỚC khi có P19d: không còn dấu vết file lúc báo lỗi
+stories.save_story(_p19d_root, _p19d_old, _legacy)
+check("P19d bài lỗi cũ (chưa có dấu vết) mà folder đã có ảnh thì lên xanh luôn — thiếu dấu vết coi như "
+      "'lúc lỗi chưa có file'. Đây là hiệu ứng một lần của bản nâng cấp, không phải cửa để lỗi mới bị che",
+      stories.states(_p19d_root, _p19d_old)["b2"] == "done")
+shutil.rmtree(_p19d_box, ignore_errors=True)
+# --- hết P19d ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")

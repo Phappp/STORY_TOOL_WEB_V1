@@ -360,6 +360,24 @@ def _image_file(folder: Path) -> Path | None:
     return found[0] if found else None
 
 
+def _step_file(folder: Path, step: str) -> Path | None:
+    """File kết quả của một bước, chỉ tính khi có chữ: B2 theo quy ước `image.*`, B khác đúng tên trong STEP_FILE."""
+    if step == "b2":
+        found = _image_file(folder)
+    else:
+        cand = folder / STEP_FILE[step]
+        found = cand if cand.is_file() else None
+    return found if found is not None and found.stat().st_size > 0 else None
+
+
+def _file_fp(path: Path | None) -> str:
+    """Dấu vết file: tên + kích thước + mtime. Rỗng khi không có file."""
+    if path is None:
+        return ""
+    stat = path.stat()
+    return f"{path.name}:{stat.st_size}:{int(stat.st_mtime)}"
+
+
 def video_file(folder: Path) -> Path | None:
     """File video của một bài: quy ước `video.<đuôi>` giống hệt ảnh — không có bảng nào giữ đường dẫn."""
     found = sorted(p for p in folder.glob(VIDEO_BASE + ".*") if p.is_file())
@@ -511,6 +529,10 @@ def set_step_state(root: Path, sid: str, step: str, state: str, detail: str = ""
     story = load_story(root, sid)
     block = dict(story.get(step) or {})
     block.update({"state": state, "detail": detail[:350], "updated_at": time.time()})
+    if state == ERROR:
+        # P19d: dấu vết file LÚC BÁO LỖI, để step_state biết file trên đĩa là ảnh anh bỏ tay vào sau đó
+        # chứ không phải ảnh sót của lần chạy trước. So mtime với mốc lỗi không dùng được: copy giữ nguyên ngày giờ.
+        block["file_fp"] = _file_fp(_step_file(story_dir(root, sid), step))
     block.update(meta)
     story[step] = block
     return save_story(root, sid, story)
@@ -520,20 +542,21 @@ def set_step_state(root: Path, sid: str, step: str, state: str, detail: str = ""
 
 
 def step_state(story: dict, folder: Path, step: str) -> str:
-    """state trong story.json thắng khi đang chạy/lỗi; nếu không, quyết định theo file."""
+    """state trong story.json thắng khi đang chạy/lỗi; nếu không, quyết định theo file.
+
+    P19d: `error` chỉ thắng khi file trên đĩa vẫn là file mà lần chạy hỏng đó để lại (cùng `file_fp`) —
+    anh chép `image.png`/`caption.txt` thẳng vào folder thì ô lên xanh, khỏi qua grid.
+    """
     block = story.get(step) or {}
     state = str(block.get("state") or PENDING)
-    if state in (RUNNING, ERROR):
+    if state == RUNNING:
         return state
-    if step == "b2":
-        image = _image_file(folder)
-        has_file = image is not None and image.stat().st_size > 0
-    else:
-        file = folder / STEP_FILE[step]
-        has_file = file.is_file() and file.stat().st_size > 0
-    if has_file:
-        return DONE
-    return MISSING if state == DONE else PENDING
+    file = _step_file(folder, step)
+    if state == ERROR:
+        if file is not None and _file_fp(file) != str(block.get("file_fp") or ""):
+            return DONE
+        return state
+    return DONE if file is not None else (MISSING if state == DONE else PENDING)
 
 
 def states(root: Path, sid: str) -> dict:
