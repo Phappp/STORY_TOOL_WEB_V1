@@ -741,8 +741,10 @@ function modalNode() {
     sel.appendChild(none);
     names.forEach(name => { const o = el("option", null, name); o.value = name; sel.appendChild(o); });
     sel.value = names.indexOf(pick) >= 0 ? pick : "";
+    const pool = Array.isArray(MODEL.defaults[ref.tab]) ? MODEL.defaults[ref.tab] : [];
+    const def = pool.length ? pool.join(" → ") : "preset";
     sel.title = "Provider riêng cho " + STEP_TITLE[ref.tab] + " của " + row.id +
-      " — mặc định của grid đang là " + String(MODEL.defaults[ref.tab] || "preset") + ", để trống là không chọn riêng";
+      " — mặc định của grid đang là " + def + " (bộ đầu tiên được dùng, bài chọn riêng thì chỉ đúng bộ này), để trống là không chọn riêng";
     sel.addEventListener("click", e => e.stopPropagation());
     sel.addEventListener("change", () => send({ source: "set_provider", id: row.id, step: ref.tab, provider: sel.value }));
     tools.appendChild(sel);

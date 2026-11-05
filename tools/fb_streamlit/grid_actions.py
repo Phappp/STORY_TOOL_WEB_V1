@@ -122,16 +122,41 @@ def set_pref_cols(root: Path, cols) -> str:
 
 
 def pref_providers(root: Path) -> dict:
+    """Provider của từng bước theo prefs workspace — MỘT DANH SÁCH, thứ tự chính là ưu tiên.
+
+    File cũ ghi một chuỗi cho mỗi bước thì đọc thành danh sách một phần tử; anh không phải
+    làm gì thêm, và lần đổi kế tiếp sẽ ghi lại đúng dạng danh sách.
+    """
     stored = load_prefs(root).get("providers")
-    return {str(k): str(v) for k, v in stored.items()} if isinstance(stored, dict) else {}
+    if not isinstance(stored, dict):
+        return {}
+    out = {}
+    for k, v in stored.items():
+        raw = list(v) if isinstance(v, (list, tuple)) else [v]
+        names: list[str] = []
+        for n in raw:
+            n = str(n).strip()
+            if n and n not in names:
+                names.append(n)
+        if names:
+            out[str(k)] = names
+    return out
 
 
-def set_pref_provider(root: Path, step: str, name: str) -> str:
-    """Ghi provider mặc định của một bước cho cả workspace; name rỗng = bỏ mặc định, theo preset."""
+def set_pref_providers(root: Path, step: str, names) -> str:
+    """Đặt CẢ danh sách provider mặc định của một bước cho workspace; rỗng = bỏ, bước theo preset.
+
+    Ghi đúng thứ tự anh chọn vì luồng nền bấm theo thứ tự đó: bộ đầu bận mới lần xuống bộ sau.
+    """
     prefs = load_prefs(root)
     stored = dict(prefs.get("providers") or {}) if isinstance(prefs.get("providers"), dict) else {}
-    if name:
-        stored[step] = name
+    clean: list[str] = []
+    for n in names or []:
+        n = str(n).strip()
+        if n and n not in clean:
+            clean.append(n)
+    if clean:
+        stored[step] = clean
     else:
         stored.pop(step, None)
     prefs["providers"] = stored
@@ -165,11 +190,31 @@ def set_pref_preset(root: Path, pid) -> str:
     return save_prefs(root, prefs)
 
 
-def provider_choice(ctx: Ctx, story: dict, step: str) -> str:
-    """Provider sẽ dùng cho bước này: chọn riêng trong modal > mặc định của grid > rỗng (để steps theo preset)."""
+def provider_pool(ctx: Ctx, story: dict, step: str) -> list[str]:
+    """Thứ tự provider bước này CÓ THỂ dùng — rỗng nghĩa là để steps tự theo preset/default.
+
+    Bài chọn riêng trong modal (prov_pick) thì chỉ đúng bộ đó, không nhận thêm pool của workspace:
+    anh đã chỉ định bộ cho bài này thì luồng nền không được tự nhảy sang bộ khác.
+    """
     block = (story or {}).get(step)
     block = block if isinstance(block, dict) else {}
-    return str(block.get("prov_pick") or "") or str(ctx.defaults.get(step) or "")
+    pick = str(block.get("prov_pick") or "")
+    if pick:
+        return [pick]
+    pool = ctx.defaults.get(step)
+    if isinstance(pool, str):
+        pool = [pool] if pool else []
+    return [str(name) for name in (pool or []) if str(name)]
+
+
+def provider_pref(ctx: Ctx, story: dict, step: str) -> str:
+    """Bộ ĐẦU TIÊN trong pool của bước (thứ tự anh liệt kê ở đầu Grid) — rỗng = steps tự theo preset.
+
+    Pool có nhiều bộ là để luồng nền CHIA VIỆC, không phải để chạy bừa: lúc chạy ngay tại chỗ
+    (trang Tạo bài, ⚡ một bài) thì vẫn lấy bộ đầu, bộ sau chỉ được dùng khi bộ trước đang bận.
+    """
+    pool = provider_pool(ctx, story, step)
+    return pool[0] if pool else ""
 
 
 def build_ctx(conn, root: Path) -> Ctx:
@@ -418,7 +463,7 @@ def _run_step(ctx: Ctx, sid: str, step: str) -> list[str]:
     story, preset = ready
     post = stories.post_view(ctx.root, sid)
     provider, model = steps.resolve_provider_model(ctx.providers, story, preset, step,
-                                                   preferred=provider_choice(ctx, story, step))
+                                                   preferred=provider_pref(ctx, story, step))
     if step == "b1":
         return [steps.run_b1(ctx.root, sid, preset, provider, model, post)[1]]
     if step == "b3":
@@ -440,7 +485,8 @@ def _run_all(ctx: Ctx, sid: str) -> list[str]:
     story, preset = ready
     post = stories.post_view(ctx.root, sid)
     providers = {step: steps.resolve_provider_model(ctx.providers, story, preset, step,
-                                                    preferred=provider_choice(ctx, story, step)) for step in ALL_STEPS}
+                                                    preferred=provider_pref(ctx, story, step))
+                 for step in ALL_STEPS}
     res = steps.run_pipeline(ctx.root, sid, preset, post, stories.refs_of(ctx.root, sid), ctx.providers, providers)
     return res.lines
 

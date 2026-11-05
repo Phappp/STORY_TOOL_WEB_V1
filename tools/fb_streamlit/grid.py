@@ -32,7 +32,6 @@ PAYLOAD_KEY = "grid_payload"       # bản đọc folder gần nhất — 150 b�
 APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt mới thì phải đọc lại folder
 # mấy event này chỉ XEM nội dung (copy/mở modal), không sửa file -> khỏi đọc lại cả workspace
 READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"}
-PROV_DEFAULT_LABEL = "Theo preset"
 BUSY_STATES = {stories.RUNNING, ga.STALE}  # folder nói bước này đang có lượt gọi AI (chạy dở hoặc treo)
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
 PRESET_KEY = "ws_preset"  # cùng key cho Grid và trang Tạo bài: một widget, một ý nghĩa, một sự thật
@@ -85,12 +84,12 @@ def refresh_toggle(root: Path) -> bool:
 
 
 def save_provider_pref(ctx: ga.Ctx, step: str) -> None:
-    """on_change của dropdown: chỉ lúc anh thật sự đổi mới ghi prefs của workspace đang mở.
+    """on_change của ô provider: chỉ lúc anh thật sự đổi mới ghi prefs của workspace đang mở.
 
     st.caption không vẽ được trong callback nên gửi ghi chú qua session_state cho lượt sau hiển thị.
     """
-    label = str(st.session_state.get(PROV_KEYS[step]) or PROV_DEFAULT_LABEL)
-    note = ga.set_pref_provider(ctx.root, step, "" if label == PROV_DEFAULT_LABEL else label)
+    names = [str(n) for n in (st.session_state.get(PROV_KEYS[step]) or [])]
+    note = ga.set_pref_providers(ctx.root, step, names)
     if note:
         st.session_state["grid_pref_note"] = note
 
@@ -126,22 +125,24 @@ def workspace_bar(ctx: ga.Ctx) -> None:
         st.caption(note)
     cols = st.columns([1, 1, 1, 1.4])
     for col, step in zip(cols[:3], ga.ALL_STEPS, strict=True):
-        current = str(stored.get(step) or "")
-        options = [PROV_DEFAULT_LABEL] + names
-        if current and current not in names:  # provider đã bị xóa ở Cấu hình -> bỏ khỏi prefs, vẽ lại "Theo preset"
-            note = ga.set_pref_provider(ctx.root, step, "")
+        wanted = [str(n) for n in (stored.get(step) or [])]
+        gone = [n for n in wanted if n not in names]
+        if gone:  # provider đã bị xóa ở Cấu hình -> bỏ khỏi prefs, đừng âm thầm chờ một bộ không còn
+            note = ga.set_pref_providers(ctx.root, step, [n for n in wanted if n in names])
             if note:
                 st.caption(note)
             ctx.defaults.pop(step, None)
-            current = ""
-        st.session_state[PROV_KEYS[step]] = current or PROV_DEFAULT_LABEL
-        col.selectbox(f"Provider {STEP_LABELS[step].replace('▶ ', '')}", options,
-                      key=PROV_KEYS[step],
-                      on_change=lambda s=step: save_provider_pref(ctx, s),
-                      help=("Bài chưa chọn riêng thì bước này chạy bằng provider đặt ở đây; "
-                            "chọn “Theo preset” để dùng provider của preset như trang Tạo bài. "
-                            f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
-                            if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
+            wanted = [n for n in wanted if n in names]
+        st.session_state[PROV_KEYS[step]] = wanted
+        col.multiselect(f"Provider {STEP_LABELS[step].replace('▶ ', '')} (chọn được nhiều bộ)", names,
+                        key=PROV_KEYS[step],
+                        on_change=lambda s=step: save_provider_pref(ctx, s),
+                        help=("Bài chưa chọn riêng thì bước này chạy bằng những provider đặt ở đây. "
+                              "Nhiều bộ = chia việc: mỗi bộ chỉ chạy MỘT lượt một lúc, bộ đang bận "
+                              "thì bài nhảy sang bộ kế đang rảnh (thứ tự ưu tiên = thứ tự anh xếp). "
+                              "Bỏ trống = theo preset như trang Tạo bài. "
+                              f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
+                              if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
 
     pid = ga.pref_preset(ctx.root)
     if pid is not None and pid not in ctx.presets:  # preset đã bị xóa ở Cấu hình -> bỏ khỏi prefs
