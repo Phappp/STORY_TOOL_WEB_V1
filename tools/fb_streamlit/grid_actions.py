@@ -217,6 +217,36 @@ def provider_pref(ctx: Ctx, story: dict, step: str) -> str:
     return pool[0] if pool else ""
 
 
+def free_provider(root: Path, sid: str, step: str, busy) -> tuple[str, str]:
+    """Bộ đang RẢNH cho một việc của luồng nền — trả (tên provider, lý do bó tay).
+
+    Đây là chỗ duy nhất biến "một B có nhiều provider" thành "nhiều bài cùng chạy": provider đã
+    có lượt AI đang chạy (`busy`) bị bỏ qua, việc nhảy xuống bộ kế đang nhàn rỗi. Tự mở kết nối
+    sqlite riêng vì thread nền không dùng được kết nối của thread vẽ grid.
+    ("" , "") nghĩa là chưa tới lượt — mọi bộ trong pool đều đang bận, luồng nền sẽ thử lại nhịp sau.
+    """
+    conn = db.connect()
+    try:
+        ctx = build_ctx(conn, root)
+        story = stories.load_story(root, sid)
+        pool = provider_pool(ctx, story, step)
+        if not pool:  # chưa set bộ nào cho bước -> theo preset/default, vẫn phải là bộ có thật
+            provider, _model = steps.resolve_provider_model(
+                ctx.providers, story, preset_for(ctx, story), step, preferred="")
+            pool = [str(provider["name"])] if provider else []
+        taken = {str(name) for name in busy}
+        for name in pool:
+            if name not in taken:
+                return name, ""
+        if not pool:
+            return "", f"bước {step.upper()} chưa có provider nào (Cấu hình ▸ Providers)."
+        return "", ""
+    except (stories.WorkspaceError, OSError, ValueError) as exc:
+        return "", f"{type(exc).__name__}: {exc}"
+    finally:
+        conn.close()
+
+
 def build_ctx(conn, root: Path) -> Ctx:
     presets = db.list_presets(conn)
     fallback = presets[0] if presets else None
@@ -456,14 +486,15 @@ def _guard(ctx: Ctx, sid: str):
     return (story, preset), ""
 
 
-def _run_step(ctx: Ctx, sid: str, step: str) -> list[str]:
+def _run_step(ctx: Ctx, sid: str, step: str, preferred: str = "") -> list[str]:
     ready, why = _guard(ctx, sid)
     if ready is None:
         return [why]
     story, preset = ready
     post = stories.post_view(ctx.root, sid)
+    # `preferred` là bộ luồng nền vừa chiếm (xem free_provider) — phải thắng để đúng chỗ đã hứa
     provider, model = steps.resolve_provider_model(ctx.providers, story, preset, step,
-                                                   preferred=provider_pref(ctx, story, step))
+                                                   preferred=preferred or provider_pref(ctx, story, step))
     if step == "b1":
         return [steps.run_b1(ctx.root, sid, preset, provider, model, post)[1]]
     if step == "b3":
@@ -654,7 +685,7 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
     step = str(event.get("step") or "")
     try:
         if source == "run_step" and step in ALL_STEPS:
-            out.lines, out.touched = _run_step(ctx, sid, step), [sid]
+            out.lines, out.touched = _run_step(ctx, sid, step, str(event.get("provider") or "")), [sid]
         elif source == "run_all":
             out.lines, out.touched = _run_all(ctx, sid), [sid]
         elif source == "b0_run":

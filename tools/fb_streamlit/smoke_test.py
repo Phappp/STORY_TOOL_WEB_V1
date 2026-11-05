@@ -666,11 +666,28 @@ check("P14b chạy bước lấy bộ ĐẦU của pool workspace (bộ sau ch�
 ga.apply_event(p14_ctx, {"source": "set_provider", "id": sid_pick, "step": "b3", "provider": "GridAPI"})
 check("P14b bài chọn riêng trong modal thì pool co lại ĐÚNG một bộ — đã chỉ định là không tự nhảy bộ khác",
       ga.provider_pool(p14_ctx, stories.load_story(ga_root, sid_pick), "b3") == ["GridAPI"])
+check("P14c bài chọn riêng trong modal thì chỉ bộ đó được dùng — bận thì chờ, không tự sang bộ khác",
+      ga.free_provider(ga_root, sid_pick, "b3", {"GridAPI"}) == ("", "")
+      and ga.free_provider(ga_root, sid_pick, "b3", set()) == ("GridAPI", ""))
 chat_calls.clear()
 ga.apply_event(ga.build_ctx(gconn, ga_root), {"source": "run_step", "id": sid_pick, "step": "b3"})
 check("P14b bài chọn riêng vẫn thắng pool của workspace khi chạy",
       chat_calls[-1][0] == "GridAPI")
 ga.apply_event(ga.build_ctx(gconn, ga_root), {"source": "set_provider", "id": sid_pick, "step": "b3", "provider": ""})
+# P14c: pool nhiều bộ chỉ có nghĩa khi BỘ LẬP LỊCH biết bỏ bộ đang bận. free_provider là chỗ duy nhất
+# biến "một B có N provider" thành "N bài cùng chạy", nên thử thẳng ở đây thay vì chờ thread nền.
+check("P14c bộ đầu đang bận -> free_provider nhảy xuống bộ kế đang nhàn rỗi",
+      ga.free_provider(ga_root, sid_ok, "b3", set()) == ("GridCodex", "")
+      and ga.free_provider(ga_root, sid_ok, "b3", {"GridCodex"}) == ("GridAPI", ""))
+check("P14c mọi bộ trong pool đều bận -> ('', '') = chưa tới lượt, luồng nền thử lại nhịp sau (không báo lỗi)",
+      ga.free_provider(ga_root, sid_ok, "b3", {"GridCodex", "GridAPI"}) == ("", ""))
+names_ga = {x["name"] for x in db.list_providers(gconn)}
+free_b2 = ga.free_provider(ga_root, sid_ok, "b2", set())
+check("P14c bước chưa set bộ nào thì free_provider vẫn tìm ra bộ có thật (theo preset/default)",
+      free_b2[1] == "" and free_b2[0] in names_ga)
+missing = ga.free_provider(ga_root, "story_999", "b1", set())
+check("P14c bài mất folder -> trả lý do thật để luồng nền báo một lần rồi bỏ việc, khỏi chờ vô vọng",
+      missing[0] == "" and missing[1] != "")
 (ga_root / ga.PREFS_FILE).write_text("không phải json", encoding="utf-8")  # trả prefs về rỗng cho các block sau
 
 # --- P4d: import cột A link FB -> tạo bài + B0 trích caption/ảnh tham chiếu ---
@@ -845,14 +862,27 @@ check("lưu caption tay ở modal trống -> mở lại prefill đúng chữ, kh
       out.copy["text"] == "caption dán từ điện thoại" and out.lines == [])
 
 # --- P5b: luồng nền chạy bước — grid trả lời ngay nên ô B1-B3 còn đổi màu giữa chừng ---
-def wait_flow(r, timeout=10.0):
-    """Chờ luồng nền xử lý hết việc đã giao (test không ngủ cứng)."""
+def wait_flow(r, timeout=20.0):
+    """Chờ luồng nền xử lý hết việc đã giao (test không ngủ cứng).
+
+    20 giây chứ không phải 10: mỗi viên việc là một thread riêng, nhưng đĩa + Windows Defender
+    chậm thì lô 6 bài B0 vẫn có thể kéo dài hơn cú bấm một bài.
+    """
     end = time.time() + timeout
     while time.time() < end:
         if not r.snapshot()["busy"]:
             return True
         time.sleep(0.05)
     return False
+
+
+def claim_one(root, sid, step, busy):
+    """Máy chỉ có MỘT bộ cho mọi bước: việc sau phải chờ bộ rảnh — đúng cảnh xếp hàng của P5b/P6c.
+
+    Một chỗ chung cho cả B0 là cố ý (muốn test phần xếp hàng, không test phần chia bộ);
+    chỗ riêng của B0 và cảnh nhiều bộ chạy song song có kiểm tra P14c ngay dưới.
+    """
+    return ("" if "bo-chung" in busy else "bo-chung"), ""
 
 
 box_p5b = Path(tempfile.mkdtemp(prefix="fbsmoke_p5b_"))
@@ -873,13 +903,13 @@ def slow_executor(event, root):
     return [f"{event.get('id')}: luồng nền xong {event.get('source')}"]
 
 
-runner_p5b = gr.Runner(slow_executor)
+runner_p5b = gr.Runner(slow_executor, claim=claim_one)
 job_a, _ = gr.job_for({"source": "run_step", "id": "story_001", "step": "b1"}, p5b_root)
 note_a = runner_p5b.submit(job_a[0])
 got_a = reached.wait(5)
 mid = runner_p5b.snapshot()
 check("giao việc -> có câu trả lời ngay, snapshot báo đang chạy đúng từng bước",
-      got_a and "Luồng nền đang chạy" in note_a and mid["busy"]
+      got_a and "Đã giao cho luồng nền" in note_a and mid["busy"]
       and mid["flow"] == {"story_001": {"b1": "running"}} and mid["current"] == "story_001 · B1 caption")
 job_a2, _ = gr.job_for({"source": "run_step", "id": "story_001", "step": "b2"}, p5b_root)
 note_a2 = runner_p5b.submit(job_a2[0])
@@ -887,8 +917,8 @@ check("bài đang chờ/chạy trong luồng nền -> từ chối bấm thêm, k
       "đang chờ/chạy trong luồng nền" in note_a2 and runner_p5b.snapshot()["queued"] == 0)
 job_b, _ = gr.job_for({"source": "b0_run", "id": "story_002"}, p5b_root)
 note_b = runner_p5b.submit(job_b[0])
-check("bài khác vẫn xếp được phía sau và nói rõ đứng thứ mấy",
-      "Đã xếp vào luồng nền" in note_b and runner_p5b.snapshot()["queued"] == 1)
+check("bài khác vẫn được nhận, việc thừa đứng chờ đúng một việc chứ không xếp trùng",
+      "Đã giao cho luồng nền" in note_b and runner_p5b.snapshot()["queued"] == 1)
 snap_wait = runner_p5b.snapshot()
 check("việc đang chờ được đánh dấu để JS tô tím, việc đang chạy tô xanh nhấp nháy",
       snap_wait["flow"].get("story_002") == {"b0": "waiting"}
@@ -907,20 +937,107 @@ def boom_executor(event, root):
     raise RuntimeError("provider chết giữa chừng")
 
 
-runner_boom = gr.Runner(boom_executor)
+runner_boom = gr.Runner(boom_executor, claim=claim_one)
 job_c, _ = gr.job_for({"source": "run_all", "id": "story_003"}, p5b_root)
 runner_boom.submit(job_c[0])
 check("executor nổ lỗi -> dòng log nói rõ, luồng nền không kẹt 'đang chạy' mãi",
       wait_flow(runner_boom) and any("luồng nền dừng vì lỗi" in line and "provider chết" in line
                                      for line in runner_boom.new_lines(0)[0]))
 jobs_12, notes_12 = gr.job_for({"source": "b0_batch", "ids": [f"story_{i:03d}" for i in range(1, 13)]}, p5b_root)
-check("batch 12 bài -> cắt 3 lượt 5/5/2, mỗi event nằm trong giới hạn MAX_BATCH, nói trước số lượt",
-      [len(j.ids) for j in jobs_12] == [5, 5, 2] and all(j.steps == ["b0"] for j in jobs_12)
-      and all(len(j.event["ids"]) <= ga.MAX_BATCH for j in jobs_12)
-      and any("3 lượt" in n for n in notes_12))
+tasks_12 = [t for j in jobs_12 for t in gr.tasks_for(j)]
+check("P14c batch 12 bài là MỘT việc, không còn cắt '3 lượt' — mỗi bài một viên việc riêng, bỏ trần MAX_BATCH",
+      len(jobs_12) == 1 and len(tasks_12) == 12 and all(t.step == "b0" for t in tasks_12)
+      and len({t.sid for t in tasks_12}) == 12 and notes_12 == [])
 jobs_all, _ = gr.job_for({"source": "run_all", "id": "story_004"}, p5b_root)
-check("run_all đánh dấu cả ba bước nên ô B1/B2/B3 cùng sáng khi chờ tới lượt",
-      jobs_all[0].steps == ["b1", "b2", "b3"] and jobs_all[0].label == "story_004 · ⚡ đủ B1-B3")
+tasks_all = gr.tasks_for(jobs_all[0])
+check("⚡ một bài = DÂY CHUYỀN B1 rồi B2/B3 chờ B1 — nên hai ô sau tím 'đã giao', không giả vờ đang chạy",
+      jobs_all[0].steps == ["b1", "b2", "b3"] and jobs_all[0].label == "story_004 · ⚡ đủ B1-B3"
+      and [t.step for t in tasks_all] == ["b1", "b2", "b3"] and [t.dep for t in tasks_all] == ["", "b1", "b1"])
+
+
+# --- P14c: N provider = N việc cùng chạy, việc chờ nhảy vào ngay bộ vừa rảnh ---
+def wait_until(fn, timeout=5.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        got = fn()
+        if got:
+            return got
+        time.sleep(0.05)
+    return None
+
+
+def claim_two(root, sid, step, busy):
+    for name in ("bo-A", "bo-B"):
+        if name not in busy:
+            return name, ""
+    return "", ""
+
+
+ran_par: list[str] = []
+gate = threading.Event()
+
+
+def par_executor(event, root):
+    ran_par.append(f"{event.get('id')}/{event.get('step') or 'b0'}")
+    gate.wait(10)
+    return [f"{event.get('id')} {event.get('step')}: xong"]
+
+
+runner_par = gr.Runner(par_executor, claim=claim_two)
+j_x, _ = gr.job_for({"source": "run_all", "id": "story_050"}, p5b_root)
+j_y, _ = gr.job_for({"source": "run_all", "id": "story_051"}, p5b_root)
+runner_par.submit(j_x[0])
+runner_par.submit(j_y[0])
+two = wait_until(lambda: runner_par.snapshot() if len(runner_par.snapshot()["slots"]) == 2 else None)
+check("P14c hai bài cùng chạy THẬT (2 chỗ provider bị chiếm), không còn xếp hàng sau một bộ",
+      two is not None and set(two["running_ids"]) == {"story_050", "story_051"}
+      and sorted(two["slots"].values()) == ["story_050 · B1 caption", "story_051 · B1 caption"])
+check("P14c mỗi bài chỉ B1 của nó sáng xanh; B2/B3 đã giao nhưng còn chờ nên ô phải tím",
+      two["flow"] == {"story_050": {"b1": "running", "b2": "waiting", "b3": "waiting"},
+                      "story_051": {"b1": "running", "b2": "waiting", "b3": "waiting"}})
+gate.set()
+ok_par = wait_flow(runner_par)
+end_par = runner_par.snapshot()
+check("P14c B2/B3 được nhả xuống ngay khi B1 của bài đó xong và chia nhau hai bộ còn lại",
+      ok_par and (end_par["done"], end_par["total"]) == (2, 2) and len(ran_par) == 6
+      and {s.split("/")[1] for s in ran_par[:2]} == {"b1"}
+      and all(ran_par.count(f"story_05{u}/{b}") == 1 for u, b in
+              ((0, "b1"), (0, "b2"), (0, "b3"), (1, "b1"), (1, "b2"), (1, "b3"))))
+runner_par.stop()
+
+runner_b0 = gr.Runner(par_executor)  # claim thật: B0 không dùng provider AI nào, chỉ có MỘT chỗ trích link
+gate.clear()
+ran_par.clear()
+j_b1, _ = gr.job_for({"source": "b0_run", "id": "story_060"}, p5b_root)
+j_b2, _ = gr.job_for({"source": "b0_run", "id": "story_061"}, p5b_root)
+runner_b0.submit(j_b1[0])
+runner_b0.submit(j_b2[0])
+one_b0 = wait_until(lambda: runner_b0.snapshot() if ran_par else None)
+check("P14c cả lô B0 dồn vào MỘT chỗ chung — cú import 150 link không spawn 150 lượt trích cùng lúc",
+      one_b0 is not None and list(one_b0["slots"]) == [gr.B0_SLOT]
+      and one_b0["queued"] == 1 and one_b0["waiting_ids"] == ["story_061"])
+gate.set()
+check("P14c B0 xong bài đầu thì bài kế tự nhảy vào, chạy hết rồi luồng nền báo rảnh",
+      wait_flow(runner_b0) and sorted(ran_par) == ["story_060/b0", "story_061/b0"])
+runner_b0.stop()
+
+
+def claim_none(root, sid, step, busy):
+    return "", "bước B1 chưa có provider nào (Cấu hình ▸ Providers)."
+
+
+runner_none = gr.Runner(par_executor, claim=claim_none)
+j_none, _ = gr.job_for({"source": "run_all", "id": "story_070"}, p5b_root)
+runner_none.submit(j_none[0])
+ok_none = wait_flow(runner_none)
+lines_none = runner_none.new_lines(0)[0]
+check("P14c việc không bao giờ giao được -> báo lý do ĐÚNG MỘT lần, bỏ cả bài (kể B2/B3 chờ sau nó)",
+      ok_none and sum("không giao được việc" in l for l in lines_none) == 1
+      and any("chưa có provider" in l for l in lines_none)
+      and not runner_none.snapshot()["busy"] and runner_none.snapshot()["done"] == 0)
+check("P14c bài đã bỏ vì lỗi cấu hình được bấm lại (không bị khóa 'đang chờ' mãi)",
+      "Đã giao cho luồng nền" in runner_none.submit(j_none[0]))
+runner_none.stop()
 marked = fbgrid.mark_flow([{"id": "story_001", "states": {"b1": stories.RUNNING}}, {"id": "story_002", "states": {}}],
                           {"flow": {"story_001": {"b1": "running"}}})
 check("mark_flow gắn state luồng nền vào dòng grid, bài khác để trống",
@@ -956,7 +1073,7 @@ def slow_c(event, root):
     return [f"{event.get('id')}: xong"]
 
 
-runner_p6c = gr.Runner(slow_c)
+runner_p6c = gr.Runner(slow_c, claim=claim_one)
 j_c1, _ = gr.job_for({"source": "run_step", "id": "story_001", "step": "b1"}, p5b_root)
 j_c2, _ = gr.job_for({"source": "run_step", "id": "story_002", "step": "b1"}, p5b_root)
 runner_p6c.submit(j_c1[0])
@@ -1043,6 +1160,9 @@ smoke_ws = Path(tempfile.mkdtemp(prefix="fbsmoke_ws_"))
 stories._recents_path = lambda: smoke_ws / "workspaces.json"
 smoke_root = stories.set_current(stories.validate_root(smoke_ws / "smoke-ws"))
 check("workspace tạm được chọn làm current", stories.current() == smoke_root)
+# Bộ lập lịch thật phải mở DB provider — ở đây thay bằng một bộ giả để test chạy cùng một chỗ,
+# không phụ thuộc anh đã cấu hình provider hay chưa (và không bao giờ gọi tới DB thật).
+fbgrid.RUNNER.claim = claim_one
 
 # --- AppTest: each page renders without exception ---
 at = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30).run()
@@ -1222,13 +1342,22 @@ logs = at_bc.session_state.get("grid_log", [])
 ok_batch = wait_flow(fbgrid.RUNNER)
 at_bc.run()  # dòng của luồng nền chỉ về được ở lần vẽ sau
 logs_after = at_bc.session_state.get("grid_log", [])
-check("batch 6 bài: giao luồng nền 2 lượt 5+1, grid trả lời ngay chứ không chạy inline",
-      not at_bc.exception and ok_batch and any("2 lượt" in line for line in logs)
-      and any("còn 1 lượt kế tiếp đã xếp" in line for line in logs))
-check("batch có dòng tiến trình 'Luồng nền' thay cho khung st.status inline + cả 6 bài đều được xử",
-      any("Luồng nền" in line for line in logs)
-      and sum("input.txt" in line for line in logs_after) == ga.MAX_BATCH + 1
+check("P14c batch 6 bài: MỘT việc gồm 18 viên theo từng B, grid trả lời ngay chứ không chạy inline",
+      not at_bc.exception and ok_batch and any("Đã giao cho luồng nền" in line and "18 việc" in line
+                                              for line in logs)
+      and not any("2 lượt" in line for line in logs))
+check("P14c mỗi B báo của B đó — bài thiếu input thì cả ba B cùng nói một lỗi, grid có dòng tiến trình 'Luồng nền'",
+      sum("input.txt" in line for line in logs_after) == 3 * (ga.MAX_BATCH + 1)
+      and any("Luồng nền" in (c.value or "") for c in at_bc.caption)
       and not any((smoke_root / s / "caption.txt").exists() for s in batch_sids))
+check("P14c dòng tiến trình liệt kê NHIỀU bộ đang chiếm, không chỉ một việc như hồi tuần tự",
+      fbgrid.runner_line({"busy": True, "paused": False, "running": True, "current": "a · B1 caption",
+                          "slots": {"bo-A": "story_001 · B1 caption", "bo-B": "story_002 · B2 ảnh"},
+                          "queued": 4, "done": 3, "total": 6})
+      == "⏳ Luồng nền: bo-A→story_001 · B1 caption, bo-B→story_002 · B2 ảnh · 3/6 bài xong"
+      and "4 việc chờ bộ rảnh" in fbgrid.runner_line(
+          {"busy": True, "paused": False, "running": False, "current": "", "slots": {},
+           "queued": 4, "done": 3, "total": 6}))
 at_bc.run()
 check("event batch cũ không chạy lại ở rerun sau",
       len(at_bc.session_state.get("grid_log", [])) == len(logs_after) and not at_bc.exception)
@@ -1472,9 +1601,11 @@ check("bấm import: tạo đủ 6 story, Nguồn = link, caption B0 vào input.
       and all(stories.load_story(smoke_root, s)["source"].startswith("https://fb.watch/ui-") for s in made)
       and all((smoke_root / s / "input.txt").read_text(encoding="utf-8").startswith("Caption UI") for s in made)
       and all((smoke_root / s / "refs" / "ref_1.jpg").is_file() for s in made))
-check("6 link tự chia lượt 5 bài và luồng nền tự chạy tiếp bài còn lại trong cùng một lần bấm",
+check("P14c 6 link = MỘT việc 6 viên B0, luồng nền tự chạy hết trong cùng một lần bấm — hết cắt '2 lượt'",
       ok_import and len(ui_calls) == 6
-      and any("2 lượt" in line for line in at_im.session_state.get("grid_log", []))
+      and any("Đã giao cho luồng nền" in line and "6 việc" in line
+              for line in at_im.session_state.get("grid_log", []))
+      and not any("2 lượt" in line for line in at_im.session_state.get("grid_log", []))
       and all(ga.b0_state(smoke_root, s) == stories.DONE for s in made))
 check("dòng component mang state B0 để vẽ ô vuông + tổng kết",
       all("b0" in r for r in captured.get("rows", []))
@@ -2219,6 +2350,9 @@ check("P10a tooltip ＋ nói 'xếp CUỐI', hết câu hứa sai 'xếp trên c
       and "Bỏ khỏi hàng đợi" in js_p8i and "không cắt giữa lượt AI" in js_p8i)
 check("P10a tiêu đề cột # giải thích số đó là thứ tự làm, JS gắn tip từ COLS",
       'key: "q"' in js_p8i and "th.title = c.tip" in js_p8i and "# = thứ tự hàng đợi" in js_p8i)
+check("P14c tooltip ⚡/hàng đợi bỏ lời hứa chia '5 bài/lượt' — nói đúng: từng B, bộ nào rảnh là nhảy vào",
+      "MAX_BATCH" not in js_p8i and "Math.ceil(n /" not in js_p8i
+      and "Bộ nào rảnh là việc nhảy vào" in js_p8i and "nhiều bài cùng lúc nếu có nhiều bộ rảnh" in js_p8i)
 check("P10a tick vá chỉ hoãn Ô ĐANG NHẬN CHỮ (input/textarea/contenteditable), không hoãn mọi ô có focus",
       "function isTypingIn(node, cell)" in js_p8i and "node.isContentEditable" in js_p8i
       and "if (!old || isTypingIn(a, old)) return;" in js_p8i
@@ -2246,7 +2380,7 @@ def slow_p10(event, root):
     return [f"{sid}: xong"]
 
 
-runner_p10 = gr.Runner(slow_p10)
+runner_p10 = gr.Runner(slow_p10, claim=claim_one)
 # ids giả (không trùng story nào của p8_root) để đo riêng phần rút việc; bài của app thật dùng p8_q_sid
 j_p10a, _ = gr.job_for({"source": "run_step", "id": "busy_001", "step": "b1"}, p8_root)
 runner_p10.submit(j_p10a[0])
@@ -2263,17 +2397,17 @@ check("P10b bài ĐANG chạy thì không cắt giữa lượt AI — nói rõ, 
 check("P10b bài chưa có việc trong luồng nền -> cancel im lặng, không bịa dòng 'đã rút'",
       runner_p10.cancel(["ghost_9"]) == [])
 line_cut = runner_p10.cancel(["wait_2"])
-job_wait = runner_p10._jobs[0]
+job_wait = next(j for j in runner_p10._jobs if j.counted)
 s_cut = runner_p10.snapshot()
-check("P10b rút 1 bài khỏi batch chưa bắt đầu: ids, event gửi cho executor và bộ đếm cùng gọn đi",
-      any("đã rút khỏi 1 việc" in l for l in line_cut) and job_wait.ids == ["wait_1", "wait_3"]
+check("P10b/P14c rút 1 bài khỏi batch chưa bắt đầu: ids, event gửi cho executor và bộ đếm cùng gọn đi",
+      any("đã rút 3 việc chưa bắt đầu" in l for l in line_cut) and job_wait.ids == ["wait_1", "wait_3"]
       and job_wait.event["ids"] == ["wait_1", "wait_3"] and s_cut["total"] == 3
       and s_cut["waiting_ids"] == ["wait_1", "wait_3"])
 check("P10b nhãn việc batch tính theo ids hiện tại — hết cảnh rút bài rồi còn khoe '3 bài'",
       job_wait.label == "⚡ đủ B1-B3 · 2 bài")
 runner_p10.cancel(["wait_1", "wait_3"])
-check("P10b rút hết bài thì việc bị bỏ hẳn, luồng nền không chạy một lượt rỗng",
-      runner_p10._jobs == [] and not runner_p10.snapshot()["waiting_ids"])
+check("P10b rút hết bài thì việc batch bị bỏ hẳn, luồng nền không chạy một lượt rỗng",
+      job_wait not in runner_p10._jobs and not runner_p10.snapshot()["waiting_ids"])
 # hàng đợi của app thật: bài đã ⚡ giao vào luồng nền, bấm bỏ khỏi hàng đợi phải rút được việc chờ
 j_p10q, _ = gr.job_for({"source": "run_step", "id": p8_q_sid, "step": "b1"}, p8_root)
 note_q = runner_p10.submit(j_p10q[0])
@@ -2283,7 +2417,7 @@ at_p8.run()
 log_p10 = at_p8.session_state.get("grid_log") or []
 check("P10b qua app thật: bỏ khỏi hàng đợi rút luôn việc chưa bắt đầu của bài đó trong luồng nền",
       not at_p8.exception and "đang chờ/chạy" not in note_q and p8_q_sid not in runner_p10.in_flight()
-      and any("đã rút khỏi" in l and p8_q_sid in l for l in log_p10))
+      and any("đã rút" in l and p8_q_sid in l for l in log_p10))
 check("P10b bài bị rút khỏi hàng đợi không còn mang mốc queued_at cũ",
       stories.load_story(p8_root, p8_q_sid).get("queued_at") is None)
 hold_p10.set()

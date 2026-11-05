@@ -164,7 +164,6 @@ const SET_COMPONENT_VALUE = "streamlit:setComponentValue";
 const RENDER = "streamlit:render";
 const COMPONENT_READY = "streamlit:componentReady";
 const SET_FRAME_HEIGHT = "streamlit:setFrameHeight";
-const MAX_BATCH = 5;
 
 const STATE_LABEL = { pending: "chưa chạy", queued: "đợi", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
 const STEP_TITLE = { b0: "B0 trích từ link", b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
@@ -1226,17 +1225,15 @@ function updateBar() {
   const n = PICKED.size;
   b.disabled = n === 0;
   b.textContent = "⚡ Chạy " + n + " bài đã chọn";
-  b.title = n > MAX_BATCH
-    ? "Luồng nền chạy tuần tự " + n + " bài, chia " + Math.ceil(n / MAX_BATCH) + " lượt (" + MAX_BATCH + " bài/lượt), tự chạy tiếp tới khi hết"
-    : "Chạy pipeline cho các bài đã chọn, tuần tự trong luồng nền";
+  b.title = "Mỗi bài chạy B1 trước; B2/B3 được nhả ngay khi B1 của nó xong. Bộ nào rảnh là việc nhảy vào — "
+    + n + " bài này có thể chạy cùng lúc tới đúng số provider đang có, không còn chia lượt.";
   const q = document.getElementById("queuerun");
   if (q) {
     const ids = queueIds();
     q.disabled = ids.length === 0;
     q.textContent = "▶ Bắt đầu " + ids.length + " bài";
-    q.title = ids.length > MAX_BATCH
-      ? "Luồng nền chạy cả " + ids.length + " bài theo thứ tự # — chia " + Math.ceil(ids.length / MAX_BATCH) + " lượt, tự chạy tiếp"
-      : "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #";
+    q.title = "Chạy cả " + ids.length + " bài trong hàng đợi theo thứ tự # — từng B một, "
+      + "nhiều bài cùng lúc nếu có nhiều bộ rảnh.";
   }
   const e = document.getElementById("queueerr");
   if (e) {

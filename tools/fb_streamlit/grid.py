@@ -257,12 +257,22 @@ def end_inline(sid: str) -> None:
 
 
 def runner_line(snap: dict) -> str:
+    """Một dòng nói đúng CẢ LÔ việc đang chạy — luồng nền giờ chạy song song theo provider.
+
+    Trước P14c chỉ có một việc một lúc nên `current` là đủ; bây giờ phải liệt kê mấy bộ đang
+    chiếm và còn bao nhiêu việc chờ, nếu không anh không biết 150 bài đang chạy tới đâu.
+    """
     if snap.get("paused"):
         head = f"⏸ Luồng nền đang DỪNG — {snap['queued']} việc chờ"
-        return head + (f" (bài đang chạy vẫn chạy tới khi xong: {snap['current']})" if snap["running"] else "")
+        return head + (f" (việc đang chạy vẫn chạy tới khi xong: {snap['current']})" if snap["running"] else "")
     if not snap["busy"]:
         return f"Luồng nền đang trống — {snap['done']}/{snap['total']} bài vừa xong."
-    head = f"⏳ Luồng nền: {snap['current']}" if snap["running"] else f"⏳ Luồng nền còn {snap['queued']} việc chờ"
+    slots = snap.get("slots") or {}
+    if slots:
+        run = ", ".join(f"{name}→{label}" for name, label in list(slots.items())[:3])
+        head = f"⏳ Luồng nền: {run}" + (f" (+{len(slots) - 3} việc nữa)" if len(slots) > 3 else "")
+    else:
+        head = f"⏳ Còn {snap['queued']} việc chờ bộ rảnh"
     return f"{head} · {snap['done']}/{snap['total']} bài xong"
 
 
@@ -307,8 +317,8 @@ def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     refused = [m for m in msgs if "đang chờ/chạy" in m]
     accepted = [m for m in msgs if m not in refused]
     notes += refused
-    if accepted:  # batch dài cắt thành nhiều lượt thì chỉ nói lượt đầu, kẻo log đầy dòng "đứng thứ N"
-        notes.append(accepted[0] + (f" · còn {len(accepted) - 1} lượt kế tiếp đã xếp" if len(accepted) > 1 else ""))
+    if accepted:  # P14c: một cú bấm là MỘT việc, không còn "còn N lượt kế tiếp" như hồi cắt batch
+        notes.append(accepted[0])
     out = ga.Outcome(lines=notes)
     _collect(out, event)
     return out
@@ -391,7 +401,7 @@ def _collect(out: ga.Outcome, event: dict) -> None:
 
 
 def run_b0_import(ctx: ga.Ctx, ids: list[str]) -> None:
-    """Trích B0 cho cả danh sách: giao luồng nền, mỗi lượt ga.MAX_BATCH bài, tự chạy tiếp tới khi hết."""
+    """Trích B0 cho cả danh sách: giao luồng nền — mỗi bài một việc, đi qua MỘT chỗ trích link chung."""
     if not ids:
         return
     hand_off(ctx, {"source": "b0_batch", "ids": ids})
@@ -406,7 +416,8 @@ def import_form(ctx: ga.Ctx) -> None:
                   f"Một lần import tạo tối đa {ga.MAX_IMPORT} bài; link trùng tự bỏ."))
         todo = ga.b0_todo_ids(ctx)
         if todo and st.button(f"▶ Trích B0 cho {len(todo)} bài chưa xong (cả workspace)", key="grid_b0_retry",
-                              help=f"{len(todo)} bài có link nguồn mà B0 chưa ra caption — trích lại cả loạt, {ga.MAX_BATCH} bài/lượt, tự chạy tiếp tới khi hết"):
+                              help=f"{len(todo)} bài có link nguồn mà B0 chưa ra caption — trích lại cả loạt, "
+                                   "luồng nền đi qua một chỗ trích chung nên không tải 150 link cùng lúc"):
             run_b0_import(ctx, todo)
         if file is None:
             st.caption("Chưa chọn file. Ảnh và caption chỉ lấy được từ bài công khai — bài trong group riêng tư sẽ báo lỗi ở cột B0.")
@@ -430,7 +441,7 @@ def import_form(ctx: ga.Ctx) -> None:
         if st.button(("✓ Đã tạo " if again else "➕ Tạo ") + f"{len(kept)} bài mới + trích B0",
                      key="grid_import_go", disabled=not kept or again,
                      help=("Tạo folder story cho từng link rồi trích caption + ảnh tham chiếu (B0) ngay, "
-                           f"{ga.MAX_BATCH} bài/lượt và tự chạy tiếp tới khi hết"
+                           "mỗi bài một việc trong luồng nền — không tải cả loạt cùng lúc"
                            if kept and not again else
                            ("File này vừa import xong — bấm ✕ ở ô chọn file rồi chọn lại để import lần nữa." if again
                             else "Không có link Facebook hợp lệ nào ở cột A."))):
