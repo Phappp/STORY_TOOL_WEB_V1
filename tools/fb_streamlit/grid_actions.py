@@ -42,6 +42,20 @@ B4_VIDEO_MAX = 200 * 1024 * 1024
 VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".wmv", ".flv", ".3gp")
 
 COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link", "Bài SEO (Facebook)")
+# Bảng MỘT SỐ của các ô prompt trong modal: thêm một B ở đây là JS hiện theo, không phải đi sửa tên
+# chuỗi rải rác hay đoán theo tiền tố "Prompt". `open`/`copy` là hành vi UI: B1 mở sẵn vì anh hay copy
+# sang ChatGPT web, B2/B3 gập lại cho đỡ choáng. `copy` còn đi theo payload (copyable) để clipboard biết
+# trường nào thật sự được phép ghi — JS không tự phân biệt theo tên.
+PROMPT_SPECS = [{"step": "b1", "field": "Prompt B1", "open": True, "copy": True},
+                {"step": "b2", "field": "Prompt B2", "open": False, "copy": True},
+                {"step": "b3", "field": "Prompt B3", "open": False, "copy": True}]
+PROMPT_FIELDS = {s["field"]: s["step"] for s in PROMPT_SPECS}  # modal hỏi bằng đúng tên ô (xem prompt_payload)
+
+
+def prompt_spec(step: str):
+    return next((s for s in PROMPT_SPECS if s["step"] == step), None)
+
+
 STEP_NAMES = steps.STEP_LABEL  # một sự thật duy nhất về tên B — grid_runner đọc thẳng steps
 ALL_STEPS = ("b1", "b2", "b3")
 HEADER_WORDS = ("link", "url", "source", "nguồn", "fb", "bài")
@@ -505,7 +519,7 @@ def _run_step(ctx: Ctx, sid: str, step: str, preferred: str = "") -> list[str]:
         return [steps.run_b3(ctx.root, sid, preset, provider, model, post, post["caption"] or None)[0]]
     if not post["caption"].strip():
         return [f"{STEP_NAMES['b2']}: bỏ qua (chưa có caption B1 để ghép prompt ảnh)."]
-    prompt_text = prompts.b2_image_prompt(preset, post, post["caption"])
+    prompt_text = steps.step_prompt("b2", preset, post, post["caption"] or None)
     lines, _kws, image = steps.run_b2(ctx.root, sid, preset, post, prompt_text, stories.refs_of(ctx.root, sid),
                                       provider, model, ctx.providers, post["caption"])
     if image is None:
@@ -541,7 +555,38 @@ def _run_b0(ctx: Ctx, sid: str) -> list[str]:
     return [f"{sid} · {line}"]
 
 
+def prompt_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
+    """Prompt hoàn chỉnh của một B — DỰNG LẠI bằng steps.step_prompt, folder không lưu file nào.
+
+    Không ghi prompt ra folder: preset hoặc input đổi là bản ghi thành bản cũ ngay, còn thứ anh cần
+    thấy là đúng chuỗi sẽ được gửi nếu bấm ▶ lúc này. Ghép qua steps.step_prompt — hàm mà cả luồng
+    chạy dùng — để modal không bao giờ vẽ một prompt khác với prompt AI thật nhận.
+    """
+    step = PROMPT_FIELDS[field_name]
+    try:
+        story = stories.load_story(ctx.root, sid)
+        preset = preset_for(ctx, story)
+        post = stories.post_view(ctx.root, sid)
+    except stories.WorkspaceError as exc:
+        return None, f"{sid}: {exc}"
+    if preset is None:
+        return None, f"{sid}: chưa có preset nào (Cấu hình ▸ Presets) — không có template để ghép prompt."
+    template_key = {"b1": "caption_prompt", "b2": "image_prompt", "b3": "seo_prompt"}[step]
+    if step != "b2" and not str(preset[template_key] or "").strip():  # preset là sqlite3.Row: index theo tên cột
+        return None, (f"{sid}: preset “{preset['name']}” chưa có prompt cho {STEP_NAMES[step]} — "
+                      "bấm ▶ bước này cũng sẽ bỏ qua.")
+    text = steps.step_prompt(step, preset, post, post["caption"] or None)
+    if not text.strip():
+        return None, f"{sid}: prompt {STEP_NAMES[step]} ghép ra rỗng — kiểm tra lại preset."
+    spec = prompt_spec(step)
+    return {"id": sid, "field": field_name, "request_id": request_id, "text": text,
+            "copyable": bool(spec and spec["copy"])}, ""
+
+
 def _copy_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
+    step = PROMPT_FIELDS.get(field_name)
+    if step:
+        return prompt_payload(ctx, sid, field_name, request_id)
     text = ""
     if field_name == "Caption":
         text = stories.step_text(ctx.root, sid, "b1")

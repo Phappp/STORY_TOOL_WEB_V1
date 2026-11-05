@@ -220,6 +220,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
         corrupt = str(story.get("_corrupt") or "")
         if corrupt:
             detail["b0"] = "story.json hỏng, đọc không được — coi như bài chưa chạy gì; lần lưu tới sẽ dời file cũ sang story.bad-…"
+        pre = ga.preset_for(ctx, story)  # sqlite3.Row hoặc None — hàng lưới chỉ cần tên để JS keyed cache prompt
         out.append({
             "id": sid,
             "topic": summary["topic"],
@@ -244,6 +245,8 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "stamp": round(float(summary["updated_at"] or 0), 3),  # JS cache nội dung theo mốc này (save_story luôn đổi)
             # provider bài này chọn riêng (modal) — để trống thì theo workspace/preset
             "prov": {step: str((story.get(step) or {}).get("prov_pick") or "") for step in ga.ALL_STEPS},
+            # tên preset sẽ dùng cho bài này — JS cần nó để cache prompt đúng theo preset (P17a)
+            "preset": str(pre["name"] if pre is not None else ""),
             "copyable": {"Caption": summary["b1"] == stories.DONE, "Bài SEO": summary["b3"] == stories.DONE,
                          "Input": summary["has_input"], "Link": bool(summary["link"].strip())},
         })

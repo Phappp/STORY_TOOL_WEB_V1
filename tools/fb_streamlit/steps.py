@@ -129,13 +129,30 @@ def set_keywords(root: Path, sid: str, keywords: list[str]) -> None:
     stories.update_story(root, sid, b2=block)
 
 
+def step_prompt(step: str, preset, post, caption: str | None = None) -> str:
+    """ĐÚNG chuỗi tool gửi AI cho một B — nơi duy nhất ghép prompt (modal xem/copy cũng gọi đây).
+
+    Modal B1/B2/B3 cần cho anh thấy prompt hoàn chỉnh để dán sang ChatGPT web mà ra kết quả giống
+    nhau, nên nó không được tự ghép lại theo kiểu "na na": ba chỗ run_b1/run_b3/run_pipeline trước
+    đây mỗi chỗ gọi `prompts.*` một kiểu, sửa template ở đây là cả chạy lẫn xem đổi theo.
+    """
+    if step == "b1":
+        return prompts.gen_prompt(preset["caption_prompt"], prompts.prompt_context(post))
+    if step == "b2":
+        return prompts.b2_image_prompt(preset, post, caption or post["caption"])
+    if step == "b3":
+        return prompts.gen_prompt(preset["seo_prompt"], prompts.prompt_context(post, caption),
+                                  extra_fallback="\nCaption đã duyệt:\n" + (post["caption"] or "—"))
+    return ""
+
+
 def run_b1(root: Path, sid: str, preset, provider, model: str, post) -> tuple[str | None, str]:
     """B1: caption -> caption.txt. Trả (text|None, log)."""
     if provider is None or not (preset["caption_prompt"] or "").strip():
         return None, "B1 caption: bỏ qua (thiếu provider hoặc prompt)"
     stories.set_step_state(root, sid, "b1", "running", provider=provider["name"], model=model)
     try:
-        text = prov.chat(provider, model, prompts.gen_prompt(preset["caption_prompt"], prompts.prompt_context(post)))
+        text = prov.chat(provider, model, step_prompt("b1", preset, post))
     except Exception as exc:
         stories.set_step_state(root, sid, "b1", "error", detail=why(exc))
         return None, f"B1 caption LỖI: {why(exc)}"
@@ -214,10 +231,8 @@ def run_b3(root: Path, sid: str, preset, provider, model: str, post, caption: st
     if provider is None or not (preset["seo_prompt"] or "").strip():
         return "B3 SEO: bỏ qua (thiếu provider hoặc prompt)", None
     stories.set_step_state(root, sid, "b3", "running", provider=provider["name"], model=model)
-    ctx = prompts.prompt_context(post, caption)
     try:
-        text = prov.chat(provider, model, prompts.gen_prompt(
-            preset["seo_prompt"], ctx, extra_fallback="\nCaption đã duyệt:\n" + (post["caption"] or "—")))
+        text = prov.chat(provider, model, step_prompt("b3", preset, post, caption))
     except Exception as exc:
         stories.set_step_state(root, sid, "b3", "error", detail=why(exc))
         return f"B3 SEO LỖI: {why(exc)}", None
@@ -262,7 +277,7 @@ def run_pipeline(root: Path, sid: str, preset, post, refs: list, rows, providers
 
     p2, m2 = providers["b2"]
     p3, m3 = providers["b3"]
-    img_prompt = prompts.b2_image_prompt(preset, post, caption_now)
+    img_prompt = step_prompt("b2", preset, post, caption_now)
 
     kws, image, seo = [], None, None
     todo = [step for step in ("b2", "b3") if step not in skip]

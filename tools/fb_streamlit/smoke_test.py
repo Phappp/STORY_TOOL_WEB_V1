@@ -2098,6 +2098,119 @@ check("P16 module bị gỡ giữa lượt (file watcher) -> luồng nền vẫn
       and _p16_label == f"{_p16_sid} · B1 caption" and gr.actions() is _real_ga)
 db.delete_provider(_p16_conn, next(p["id"] for p in db.list_providers(_p16_conn) if p["name"] == "P16BoRanh"))
 
+# --- P17a: modal B1/B2/B3 hiện prompt HOÀN CHỈNH — phải là đúng chuỗi tool đưa AI, không phải bản "na na" ---
+_p17_root = stories.validate_root(Path(tempfile.mkdtemp(prefix="fbp17_")) / "ws")
+_p17_conn = db.connect()
+for _p17_left in db.list_presets(_p17_conn):
+    if _p17_left["name"] in ("P17Prompt", "P17Trống"):
+        db.delete_preset(_p17_conn, _p17_left["id"])
+for _p17_left in db.list_providers(_p17_conn):
+    if _p17_left["name"] == "P17Chat":
+        db.delete_provider(_p17_conn, _p17_left["id"])
+db.add_provider(_p17_conn, "P17Chat", "openai", "https://x/v1", "GRID_KEY_ENV", "m1")
+_p17_pid = next(p["id"] for p in db.list_providers(_p17_conn) if p["name"] == "P17Chat")
+db.save_preset(_p17_conn, None, "P17Prompt", "",
+               "VIẾT CAPTION CHO <CHỦ ĐỀ>:\n<DỮ LIỆU>\n(viết 2 câu tiếng Việt, không hashtag)",
+               "ẢNH MINH HỌA CHO: <CAPTION MỚI TẠO>", "TÌM KEYWORD CHO <CHỦ ĐỀ>",
+               "BÀI SEO VỀ <CHỦ ĐỀ>:\n<DỮ LIỆU>\nCaption: <CAPTION MỚI TẠO>", "INPUT CHO <CHỦ ĐỀ>", _p17_pid)
+_p17_preset = next(x for x in db.list_presets(_p17_conn) if x["name"] == "P17Prompt")
+_p17_sid = stories.create_story(_p17_root, "Đà Lạt mùa sương", input_text="NỘI DUNG GỐC P17 123")["id"]
+stories.save_step_text(_p17_root, _p17_sid, "b1", "CAPTION ĐÃ DUYỆT P17")
+ga.set_pref_preset(_p17_root, _p17_preset["id"])
+_p17_ctx = ga.build_ctx(_p17_conn, _p17_root)
+_p17_row = next(r for r in _p17_ctx.providers.values() if r["name"] == "P17Chat")
+_p17_sent, _p17_chat0, _p17_parse0 = [], prov.chat, prov.parse_models
+prov.parse_models = lambda provider: ["m1"]
+prov.chat = lambda provider, model, prompt: (_p17_sent.append(prompt), "KẾT QUẢ FAKE P17")[1]
+try:
+    _p17_post = stories.post_view(_p17_root, _p17_sid)
+    steps.run_b1(_p17_root, _p17_sid, _p17_preset, _p17_row, "m1", _p17_post)
+    _p17_b1_sent = _p17_sent[-1]
+    stories.save_step_text(_p17_root, _p17_sid, "b1", "CAPTION ĐÃ DUYỆT P17")  # B1 vừa ghi caption fake — trả chữ fixture
+    _p17_post = stories.post_view(_p17_root, _p17_sid)
+    steps.run_b3(_p17_root, _p17_sid, _p17_preset, _p17_row, "m1", _p17_post, _p17_post["caption"] or None)
+    _p17_b3_sent = _p17_sent[-1]
+    _p17_stamp = stories.load_story(_p17_root, _p17_sid)["updated_at"]
+    _p17_ask = lambda field, source="content_request", req="rq-p17": ga.apply_event(
+        _p17_ctx, {"source": source, "id": _p17_sid, "field": field, "request_id": req})
+    _p17_b1_modal = (_p17_ask("Prompt B1").copy or {}).get("text")
+    _p17_b2_modal = (_p17_ask("Prompt B2").copy or {}).get("text")
+    _p17_b3_modal = (_p17_ask("Prompt B3").copy or {}).get("text")
+    _p17_cp = _p17_ask("Prompt B1", "copy_request", "rq-p17-copy")
+finally:
+    prov.chat, prov.parse_models = _p17_chat0, _p17_parse0
+check("P17a modal Prompt B1 = ĐÚNG chuỗi run_b1 vừa giao cho AI, token đã thay hết bằng chữ trong folder",
+      _p17_b1_modal == _p17_b1_sent and "Đà Lạt mùa sương" in str(_p17_b1_modal)
+      and "NỘI DUNG GỐC P17 123" in str(_p17_b1_modal) and "<CHỦ ĐỀ>" not in str(_p17_b1_modal)
+      and "<DỮ LIỆU>" not in str(_p17_b1_modal))
+check("P17a modal Prompt B3 = ĐÚNG chuỗi run_b3 vừa giao, gồm caption B1 đã duyệt",
+      _p17_b3_modal == _p17_b3_sent and "CAPTION ĐÃ DUYỆT P17" in str(_p17_b3_modal))
+check("P17a modal Prompt B2 = nguyên khối prompt ảnh imagegen nhận (template + caption B1 đã thay)",
+      _p17_b2_modal == steps.step_prompt("b2", _p17_preset, _p17_post, _p17_post["caption"])
+      and _p17_b2_modal == "ẢNH MINH HỌA CHO: CAPTION ĐÃ DUYỆT P17")
+check("P17a ô prompt là nội dung DỰNG LẠI: không ghi file nào vào folder bài, không làm story.json đổi mốc",
+      _p17_ask("Prompt B1").copy.get("mode") == "show"
+      and not any(p.name.lower().startswith("prompt") for p in (_p17_root / _p17_sid).iterdir())
+      and stories.load_story(_p17_root, _p17_sid)["updated_at"] == _p17_stamp)
+check("P17a nút Copy prompt đi đường copy_request — clipboard nhận đúng nguyên văn khối đang hiện",
+      _p17_cp.copy.get("mode") == "copy" and _p17_cp.copy.get("text") == _p17_b1_modal
+      and _p17_cp.copy.get("request_id") == "rq-p17-copy")
+db.save_preset(_p17_conn, None, "P17Trống", "", "", "", "", "", "", _p17_pid)
+ga.set_pref_preset(_p17_root, next(x["id"] for x in db.list_presets(_p17_conn) if x["name"] == "P17Trống"))
+_p17_ctx2 = ga.build_ctx(_p17_conn, _p17_root)
+_p17_e1 = ga.apply_event(_p17_ctx2, {"source": "content_request", "id": _p17_sid, "field": "Prompt B1",
+                                     "request_id": "rq-p17-empty"})
+_p17_e2 = ga.apply_event(_p17_ctx2, {"source": "content_request", "id": _p17_sid, "field": "Prompt B2",
+                                     "request_id": "rq-p17-empty2"})
+check("P17a preset thiếu template -> modal nói thẳng chưa có prompt (bấm ▶ cũng bỏ qua), không trả chuỗi rỗng",
+      _p17_e1.copy is None and any("chưa có prompt" in l for l in _p17_e1.lines))
+check("P17a B2 không có template vẫn ghép được từ caption — modal không báo oan như B1/B3",
+      (_p17_e2.copy or {}).get("text") == "CAPTION ĐÃ DUYỆT P17")
+ga.set_pref_preset(_p17_root, _p17_preset["id"])
+_p17_grid_row = next(r for r in fbgrid.rows_for(ga.build_ctx(_p17_conn, _p17_root)) if r["id"] == _p17_sid)
+check("P17a mỗi hàng lưới mang TÊN preset sẽ dùng — JS cần nó để không cache prompt của preset cũ",
+      _p17_grid_row["preset"] == "P17Prompt")
+check("P17a chạy B1/B3 và modal xem DÙNG CHUNG steps.step_prompt — không còn chỗ tự ghép trong steps",
+      'step_prompt("b1"' in inspect.getsource(steps.run_b1)
+      and 'step_prompt("b3"' in inspect.getsource(steps.run_b3)
+      and "prompts.gen_prompt" not in inspect.getsource(steps.run_b1) + inspect.getsource(steps.run_b3))
+check("P17a đường chạy B2 (việc lẻ + cả loạt) cũng qua step_prompt như modal — sửa một chỗ là đổi cả hai",
+      'steps.step_prompt("b2"' in inspect.getsource(ga._run_step)
+      and 'step_prompt("b2"' in inspect.getsource(steps.run_pipeline)
+      and "b2_image_prompt" not in inspect.getsource(ga._run_step) + inspect.getsource(steps.run_pipeline))
+_p17_js = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+ga_src_p17 = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+
+
+def _p17_fn(name):
+    i = _p17_js.index("function " + name)
+    return _p17_js[i:_p17_js.index("\n}", i)]
+
+
+check("P17a modal dựng khối prompt NGAY DƯỚI kết quả, và chỉ cho tab có mặt trong bảng spec",
+      "promptBlock(row, ref.tab)" in _p17_fn("modalNode")
+      and _p17_js.index("modal.appendChild(modalBody") < _p17_js.index("const pb = promptBlock")
+      and "if (!spec) return null" in _p17_fn("promptBlock"))
+check("P17a khóa cache prompt gắn thêm tên preset — sửa preset xong modal xin lại, không hiện bản cũ",
+      "|preset=" in _p17_fn("contentKey") and "PROMPT_BY_FIELD" in _p17_fn("contentKey")
+      and "row.preset" in _p17_fn("modalSig"))
+check("P17a JS dịch LẠI đúng bảng của Python (step + tên trường + open/copy) — thêm một B là sửa một bảng",
+      all('{step: "%s", field: "%s", open: %s, copy: %s}'
+          % (s["step"], s["field"], str(s["open"]).lower(), str(s["copy"]).lower()) in _p17_js
+          for s in ga.PROMPT_SPECS)
+      and [s["step"] for s in ga.PROMPT_SPECS] == ["b1", "b2", "b3"]
+      and set(ga.PROMPT_FIELDS) == {s["field"] for s in ga.PROMPT_SPECS})
+check("P17a payload prompt mang copyable lấy từ BẢNG, không phải từ tên chuỗi — clipboard nghe cờ đó",
+      all(_p17_ask(p["field"]).copy.get("copyable") is p["copy"] for p in ga.PROMPT_SPECS)
+      and ga.prompt_spec("b0") is None and "r.copyable === false" in _p17_fn("ingestResponse"))
+check("P17a hết chỗ nào đoán 'Prompt…' theo tiền tố — Python tra bảng, JS tra bảng",
+      'startsWith("Prompt")' not in _p17_js and "startswith(\"Prompt\")" not in ga_src_p17
+      and "PROMPT_FIELDS.get(field_name)" in ga_src_p17 and "PROMPT_BY_FIELD[" in _p17_js)
+db.delete_provider(_p17_conn, _p17_pid)
+for _p17_left in db.list_presets(_p17_conn):
+    if _p17_left["name"] in ("P17Prompt", "P17Trống"):
+        db.delete_preset(_p17_conn, _p17_left["id"])
+
 # --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
 grid_src_p13 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
 check("P13a hết chế độ '8 dòng gần nhất + Log cũ' — không còn danh sách dài lẫn lộn mấy cú bấm",

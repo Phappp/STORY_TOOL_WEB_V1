@@ -89,6 +89,12 @@
   .md ul, .md ol { margin:.4em 0 .4em 1.3em; padding:0; }
   .md code { background:var(--btn); border-radius:4px; padding:0 4px; }
   .mfoot { padding:7px 10px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; background:var(--panel); }
+  details.prompt { border-top:1px solid var(--border); background:var(--panel); }
+  details.prompt > summary { cursor:pointer; padding:7px 12px; color:var(--muted); font-size:12px; list-style:none; }
+  details.prompt > summary::-webkit-details-marker { display:none; }
+  details.prompt .pbody { padding:0 12px 10px; display:flex; flex-direction:column; gap:6px; }
+  details.prompt .pbody pre.doc { margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; line-height:1.5;
+    background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px 9px; max-height:320px; overflow:auto; }
   .chip { display:inline-block; min-width:52px; text-align:center; padding:2px 6px; border-radius:999px;
     font-size:11px; font-weight:650; background:var(--pending); color:var(--pending-t); cursor:default;
     border:1px solid var(--pending-b); }
@@ -196,6 +202,15 @@ const STEP_FIELD = { b1: "Caption", b3: "Bài SEO" };
 const TABS = [["b0", "B0 trích"], ["input", "Input"], ["b1", "B1 caption"], ["b2", "B2 ảnh"], ["b3", "B3 SEO"], ["b4", "B4 video"], ["link", "Link"]];
 const TAB_FIELD = { b0: "B0 preview", input: "Input", b1: "Caption", b3: "Bài SEO" };  // nội dung xin từ Python cho từng tab
 const TAB_COPY = { b0: "Input", input: "Input", b1: "Caption", b3: "Bài SEO" };        // tab B0 copy đúng caption trong input.txt
+/** Bảng MỘT SỐ của khối prompt trong modal — ĐÚNG bảng Python phát (grid_actions.PROMPT_SPECS):
+    thêm một B là sửa bảng này, không phải rải tên chuỗi hay đoán theo tiền tố "Prompt".
+    Python là nơi định nghĩa; check P17a bắt JS dịch lại đúng step/field/open/copy đó. */
+const PROMPT_SPECS = [{step: "b1", field: "Prompt B1", open: true, copy: true},
+                      {step: "b2", field: "Prompt B2", open: false, copy: true},
+                      {step: "b3", field: "Prompt B3", open: false, copy: true}];
+const PROMPT_FIELD = {};     // tab -> tên trường xin Python (prompt không có file nào — dựng lại từ preset+chữ)
+const PROMPT_BY_FIELD = {};  // ngược lại: trường -> spec, để contentKey clipboard biết là prompt mà không so tên
+PROMPT_SPECS.forEach(s => { PROMPT_FIELD[s.step] = s.field; PROMPT_BY_FIELD[s.field] = s; });
 const CONTENT = new Map();  // "id|field|dấu_mốc_file" -> chữ, chỉ sống tới khi file đổi
 const DRAFT = new Map();    // "id|B0 preview|dấu_mốc_file" -> chữ anh đang gõ tay, giữ qua mỗi lần grid vẽ lại
 const IMAGES = new Map();   // "id|Ảnh|dấu_mốc_file" -> data URL
@@ -204,6 +219,7 @@ const WAITING = new Map();  // request_id -> {key, id, field, mode, flash} — c
 let FLASH = null;           // {sel, label, cls, at} — nút vừa vẽ xong sẽ nhận nhãn "đã copy"
 let COPY_NOW = null;        // {text, flash} — response xin copy vừa về, ghi vào clipboard sau khi DOM vẽ xong
 let SHOW_MD = true;         // tab B3: hiển thị markdown đã render hay để nguyên chữ
+let PROMPT_OPEN = {};       // tab -> khối prompt đang gập hay mở (mặc định theo spec.open) — modal dựng lại vẫn giữ chỗ anh đang xem
 let LAST_ARGS = "";         // chữ ký payload lần vẽ trước — tick nào không có gì đổi thì bỏ qua, khỏi vẽ lại
 let LAST_H = 0;             // chiều cao iframe vừa xin Streamlit lần gần nhất (0 = chưa xin)
 // Bộ nhớ cho lối vẽ "vá tại chỗ" (P8i, học từ grid status legacy FX97): giữ lại cây lưới đang có và
@@ -378,7 +394,14 @@ function restoreView(view) {
 }
 
 function stampOf(row) { return String((row && (row.stamp != null ? row.stamp : row.updated)) || ""); }
-function contentKey(row, field) { return String(row.id) + "|" + field + "|" + stampOf(row); }
+function contentKey(row, field) {
+  const base = String(row.id) + "|" + field + "|" + stampOf(row);
+  // Chữ khác thì theo dấu mốc file trong folder bài; prompt không có file nào — nó đổi theo PRESET
+  // đang áp dụng (Cấu hình ▸ Presets, hoặc preset chung của workspace), nên phải gắn preset vào khóa,
+  // không là sửa preset xong modal vẫn hiện lại prompt của preset cũ.
+  const isPrompt = !!PROMPT_BY_FIELD[field];  // đúng bảng spec ở trên — không đoán theo tiền tố "Prompt"
+  return isPrompt ? base + "|preset=" + String(row.preset || "") : base;
+}
 function findRow(id) { return rows().find(r => String(r.id) === String(id)) || null; }
 function tabField(tab) { return tab === "b2" ? "Ảnh" : (TAB_FIELD[tab] || ""); }
 
@@ -413,6 +436,7 @@ function ingestResponse() {
     NOTES.set(key, String(r.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
   }
   if (mode !== "copy") return;
+  if (r.copyable === false) return;  // Python nói trường này không ra clipboard được thì thôi, JS không tự đoán theo tên
   const text = String(r.text || "");
   if (!text.trim()) { flashSel(wait ? wait.flash : "", "trống", "bad"); return; }
   COPY_NOW = { text: text, flash: (wait && wait.flash) || "" };
@@ -519,6 +543,49 @@ function ensureContent(row, tab) {
   }
   if (field !== TAB_FIELD.b0 && row.copyable && row.copyable[field] === false) { NOTES.set(key, field + " trống — chạy bước này trước."); return; }
   requestContent(row, field, "show");
+}
+
+// Prompt không nằm trong folder bài: Python ghép lại đúng chuỗi sẽ gửi AI (steps.step_prompt), nên
+// mở tab là xin một lần theo preset đang áp dụng — anh copy nguyên khối dán sang ChatGPT web được.
+function promptSpec(tab) { return PROMPT_BY_FIELD[PROMPT_FIELD[tab]] || null; }  // tab không có prompt -> null, khỏi vẽ khối rỗng
+function ensurePrompt(row, tab) {
+  const spec = promptSpec(tab);
+  if (!spec) return "";
+  const key = contentKey(row, spec.field);
+  if (CONTENT.has(key) || NOTES.has(key)) return key;
+  let asked = false;
+  WAITING.forEach(w => { if (w.key === key) asked = true; });
+  if (!asked) requestContent(row, spec.field, "show");
+  return key;
+}
+
+function promptBlock(row, tab) {
+  const spec = promptSpec(tab);
+  if (!spec) return null;  // tab B0/Input/Link/B4 không có prompt — đừng vẽ khối rỗng
+  const field = spec.field;
+  const key = ensurePrompt(row, tab);
+  const box = el("details", "prompt");
+  box.open = PROMPT_OPEN[tab] === undefined ? spec.open : PROMPT_OPEN[tab];
+  box.addEventListener("toggle", () => { PROMPT_OPEN[tab] = box.open; });  // modal dựng lại thì vẫn giữ đúng chỗ anh đang xem
+  box.appendChild(el("summary", null, "📝 Prompt " + (STEP_TITLE[tab] || tab) + " — nguyên khối sẽ gửi AI, copy dán sang ChatGPT web"));
+  const inner = el("div", "pbody");
+  const text = CONTENT.get(key);
+  if (text == null) {
+    inner.appendChild(el("div", "loading", NOTES.get(key) || "… đang ghép prompt từ preset + chữ trong folder bài"));
+  } else {
+    if (spec.copy) {  // bảng Python nói trường nào được phép ra clipboard — JS chỉ tuân, không đoán theo tên
+      const cp = button("📋 Copy prompt", "Copy đúng nguyên văn prompt " + (STEP_TITLE[tab] || tab)
+        + " — gồm cả khối dữ liệu đã thay <TOKEN>, không có gì thêm/bớt",
+        b => copyField(row, field, b, "modal:prompt"), "act");
+      cp.dataset.flash = "modal:prompt";
+      inner.appendChild(cp);
+    }
+    inner.appendChild(el("pre", "doc", String(text)));
+    inner.appendChild(el("div", "muted", "Prompt này do tool ghép lại từ preset đang áp dụng ("
+      + (String(row.preset || "") || "preset của bài") + ") + nội dung trong folder — không phải chữ đã lưu lúc chạy."));
+  }
+  box.appendChild(inner);
+  return box;
 }
 
 function mdInline(node, text) {
@@ -799,6 +866,8 @@ function modalNode() {
       " của " + row.id + (EDITORS[ref.tab] ? " — sửa tay rồi bấm lưu, file vẫn là nguồn thật" : "")));
   modal.appendChild(tools);
   modal.appendChild(modalBody(row, ref.tab, key));
+  const pb = promptBlock(row, ref.tab);
+  if (pb) modal.appendChild(pb);  // B1/B2/B3: prompt nằm DƯỚI kết quả, cần copy thì mở ra xem
   modal.appendChild(el("div", "mfoot",
     "click 1 lần ở ô B1/B3 = copy · click đúp (hoặc bấm ô B0/B2/B4) = mở modal này · Esc hoặc ✕ để đóng · "
     + "danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · sửa chữ trong modal là ghi thẳng vào file "
@@ -1221,7 +1290,7 @@ function modalSig() {
   if (!row) return "gone";
   return JSON.stringify([ref.id, ref.tab, stampOf(row), row.flow, row.prov, row.b0meta, row.b4, row.b4meta,
     row.video, row.image, row.link,
-    row.copyable, SHOW_MD, (MODEL.copy_response || {}).request_id || "", (MODEL.providers || []).join("|"),
+    row.copyable, row.preset, SHOW_MD, (MODEL.copy_response || {}).request_id || "", (MODEL.providers || []).join("|"),
     String(MODEL.image_max || 0), String(MODEL.video_max || 0)]);
 }
 
