@@ -355,7 +355,7 @@ def page_create(c):
             ref_log.append(f"Ảnh gốc LỖI: {exc}")
 
         res = run_inline(sid, "⚡ B1 · caption → (B2 ảnh ∥ B3 SEO) đang chạy…",
-                         lambda: steps.run_pipeline(wroot, sid, preset, post, ref_paths, rows, providers,
+                         lambda: steps.run_pipeline(wroot, sid, preset, post, ref_paths, providers,
                                                     caption=st.session_state.get("caption_draft"), extra_lines=ref_log))
         if res is None:
             st.stop()
@@ -414,7 +414,7 @@ def page_create(c):
         if not cap_now:
             st.info("Chưa có caption B1 — prompt tạo ảnh được ghép từ caption mới tạo.")
         final_prompt = b2_image_prompt(preset, current_post, cap_now)
-        st.markdown("**Prompt gửi Codex imagegen** (từ preset, đã thay `<CAPTION MỚI TẠO>`):")
+        st.markdown("**Prompt gửi bộ tạo ảnh** (từ preset, đã thay `<CAPTION MỚI TẠO>`):")
         st.code(final_prompt)
         ref_url = st.text_input("URL ảnh gốc (tùy chọn — Codex biến đổi theo prompt)", key="img_ref_url")
         ref_file = st.file_uploader("…hoặc upload ảnh gốc (tùy chọn)", type=["png", "jpg", "jpeg", "webp"], key="img_ref_file")
@@ -435,31 +435,33 @@ def page_create(c):
                     st.session_state["b0_ref_paths"] = []
                     st.rerun()
 
-        if st.button("🎨 Tạo ảnh (Codex imagegen)"):
+        if st.button("🎨 Tạo ảnh bằng provider vừa chọn"):
             if not cap_now:
                 st.error("Tạo caption ở B1 trước đã — prompt ảnh cần caption mới tạo.")
+            elif provider_kw is None:
+                st.error("Chưa chọn provider cho B2 — chọn ở 'Provider/Model' phía trên "
+                         "(muốn Codex vẽ ảnh thì thêm bộ codex_cli vào danh sách, không có chuyện tool tự đi tìm bộ khác).")
             else:
-                codex_row = steps.codex_row_for(provider_rows(c), provider_kw)
-                if codex_row is None:
-                    st.error("Chưa có provider Codex CLI — thêm ở Cấu hình ▸ Providers.")
-                else:
-                    post = ensure_story()
-                    wroot = require_root()
-                    try:
-                        refs = collect_refs()
-                    except Exception as exc:
-                        refs = []
-                        st.warning(f"Không dùng được ảnh gốc: {exc}")
-                    got = run_inline(story_id, "Codex đang tạo ảnh (có thể mất vài phút)…",
-                                     lambda: steps.generate_image(wroot, story_id, final_prompt, refs, codex_row))
-                    if got is not None:  # None = bài đang có việc ở luồng nền, run_inline đã in lý do
-                        image, err = got
-                        if err is not None:
-                            stories.set_step_state(wroot, story_id, "b2", "error", detail=err)
-                            st.error(err)
-                        else:
-                            st.session_state["saved_images"] = json.loads(stories.post_view(wroot, story_id)["images"])
-                            st.success(f"Đã tạo ảnh mới, ghi đè ảnh cũ: {image}")
+                post = ensure_story()
+                wroot = require_root()
+                try:
+                    refs = collect_refs()
+                except Exception as exc:
+                    refs = []
+                    st.warning(f"Không dùng được ảnh gốc: {exc}")
+                got = run_inline(story_id, f"Đang tạo ảnh bằng '{provider_kw['name']}' "
+                                           "(đường Codex CLI có thể mất vài phút)…",
+                                 lambda: steps.generate_image(wroot, story_id, final_prompt, refs,
+                                                              provider_kw, model_kw))
+                if got is not None:  # None = bài đang có việc ở luồng nền, run_inline đã in lý do
+                    image, err = got
+                    if err is not None:
+                        st.error(err)  # state + nguyên nhân thật đã nằm trong story.json (steps lo)
+                    elif image is None:
+                        st.info("Chưa thử — preset cần có 'Prompt tạo ảnh' và caption để ghép prompt.")
+                    else:
+                        st.session_state["saved_images"] = json.loads(stories.post_view(wroot, story_id)["images"])
+                        st.success(f"Đã tạo ảnh mới, ghi đè ảnh cũ: {image}")
     else:
         if st.button("AI tạo từ khóa ảnh"):
             if provider_kw is None:

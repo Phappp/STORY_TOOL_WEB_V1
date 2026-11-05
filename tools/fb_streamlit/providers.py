@@ -1,3 +1,4 @@
+import base64
 import os
 import re
 import shutil
@@ -15,6 +16,17 @@ import paths
 
 class ProviderError(RuntimeError):
     pass
+
+
+class ImageCapabilityError(ProviderError):
+    """Bộ được chọn CHO B2 không tạo ra ảnh được — lỗi thuộc về nhà cung cấp, không phải mạng.
+
+    Tách lớp này là để luồng nền PHÂN BIỆT được hai thứ trông giống nhau:
+    - "gói này không có image generation" / "model không có công cụ ảnh": thử lại y nguyên lệnh
+      đó bao nhiêu lần vẫn vậy, nên B2 phải DỪNG và nói nguyên nhân thật, chứ không được âm thầm
+      fallback stock hay để ô vuông xám rồi ⚡ lần sau nạp lại từ đầu;
+    - timeout / rớt mạng / TLS: nhất thời, lần sau xứng đáng được thử lại.
+    """
 
 
 AV_HINT = ("Máy này có Avast/AVG đang quét HTTPS (driver aswMonFlt): chính TIẾN TRÌNH python đang "
@@ -139,6 +151,79 @@ def _openai_chat(provider, model: str, prompt: str, system: str, temperature: fl
         raise ProviderError(f"Response không đúng định dạng chat/completions: {str(data)[:300]}") from exc
 
 
+def _api_error_text(resp) -> str:
+    """Lỗi HTTP của provider dạng OpenAI trả về thường có `error.message` người đọc được — ưu tiên nó.
+
+    Đã đo với top-tools-ai: `/images/generations` trả 400 kèm
+    "The free plan does not support image generation. Upgrade to a paid Top-Tools-Ai plan…".
+    Ném bỏ body đi rồi tool chỉ còn nói "không tạo ra file ảnh" là nói dối: anh không biết mình
+    thiếu gì (nâng gói? đổi model? thêm provider Codex vào B2 pool?).
+    """
+    try:
+        err = (resp.json() or {}).get("error")
+        msg = (err.get("message") if isinstance(err, dict) else str(err)) or ""
+    except (ValueError, AttributeError, KeyError):
+        msg = ""
+    return (msg or resp.text or "").strip()[:400]
+
+
+def openai_generate_image(provider, model: str, prompt: str, timeout: int = 240):
+    """Ảnh qua endpoint tương thích OpenAI `/images/generations` → Path file tạm hoặc URL."""
+    base_url = (provider["base_url"] or "").strip().rstrip("/")
+    if not base_url:
+        raise ProviderError("Provider chưa có Base URL.")
+    if not model:
+        raise ProviderError("Chưa chọn model cho B2 (model nhập ở trang Providers).")
+    headers = {"Content-Type": "application/json"}
+    key = _api_key(provider)
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    try:
+        resp = httpx.post(f"{base_url}/images/generations", headers=headers,
+                          json={"model": model, "prompt": prompt.strip(), "n": 1, "size": "1024x1024"},
+                          timeout=timeout, verify=tls_verify())
+    except httpx.HTTPError as exc:
+        raise ProviderError(f"Lỗi kết nối tới {base_url}/images/generations: {exc}") from exc
+    except OSError as exc:  # chốt của driver Avast — xem AV_HINT
+        raise ProviderError(f"Không bắt tay TLS được với {base_url}: "
+                            f"{type(exc).__name__}: {exc}. {AV_HINT}") from exc
+    if resp.status_code >= 400:
+        detail = _api_error_text(resp)
+        # 400/401/403/404 = chính nhà cung cấp từ chối việc tạo ảnh cho bộ/model này; chệch mạng
+        # (5xx, timeout) thì không kết luận được, lần sau vẫn đáng thử lại nên để lỗi thường.
+        cls = ImageCapabilityError if resp.status_code in (400, 401, 403, 404) else ProviderError
+        raise cls(f"Provider '{provider['name']}' ({model}) từ chối tạo ảnh — HTTP {resp.status_code}: {detail}")
+    try:
+        item = (resp.json().get("data") or [])[0]
+    except (ValueError, AttributeError, IndexError, TypeError) as exc:
+        raise ProviderError(f"Response /images/generations không đúng định dạng: {resp.text[:300]}") from exc
+    if item.get("b64_json"):
+        out = Path(tempfile.mkdtemp(prefix="tt_img_")) / "image.png"
+        out.write_bytes(base64.b64decode(item["b64_json"]))
+        return out
+    if item.get("url"):
+        return item["url"]
+    raise ImageCapabilityError(f"Provider '{provider['name']}' ({model}) trả về không có ảnh "
+                               f"(không b64_json, không url).")
+
+
+def generate_image(provider, model: str, prompt: str, ref_files=(), timeout: int = 900):
+    """Ảnh cho B2 bằng ĐÚNG provider được chọn cho B2 — không âm thầm đổi sang bộ khác.
+
+    B2 từng lén đi tìm "bất kỳ provider codex_cli nào trong danh sách" khi bộ anh chọn không phải
+    Codex, nên ô B2 báo lỗi của CODEX1 trong khi anh đang nhìn TTA_1. Giờ muốn Codex làm ảnh thì
+    thêm bộ codex_cli vào pool B2 (đầu Grid ▸ Provider B2) — pool nào, lỗi bộ đó, nói rõ tên bộ.
+    """
+    if provider is None:
+        raise ProviderError("B2 chưa có provider nào (Cấu hình ▸ Providers).")
+    kind = str(provider["kind"])
+    if kind == "codex_cli":
+        return codex_generate_image(prompt, ref_files, timeout=timeout)
+    if kind == "openai":
+        return openai_generate_image(provider, model, prompt, timeout=min(timeout, 240))
+    raise ImageCapabilityError(f"Provider '{provider['name']}' kind '{kind}' không có đường tạo ảnh nào.")
+
+
 def _codex_bin() -> str:
     binary = os.getenv("CODEX_BIN", "codex").strip() or "codex"
     path = shutil.which(binary)
@@ -167,7 +252,13 @@ def _codex_chat(prompt: str, system: str) -> str:
 
 def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> Path:
     """Codex CLI imagegen: ảnh được CLI tự lưu vào ~/.codex/generated_images, tool đọc file mới nhất sau lúc gọi.
-    Attach '-i' hay bị proxy bỏ rơi → thử có reference trước, lỗi thì tự retry không reference."""
+
+    Hai điều học từ lúc Codex không có imagegen mà tool vẫn nói chung chung:
+    - phải GIỮ lời cuối của CLI (`--output-last-message`) — model trả "tôi không có công cụ tạo ảnh"
+      mà vứt đi thì anh chỉ còn đoán;
+    - retry không reference chỉ có nghĩa khi lệnh chạy êm (exit 0) mà không ra file, tức nghi `'-i'`
+      bị proxy bỏ rơi. Lệnh đã chết từ đầu thì chạy lại y nguyên chỉ tốn thêm đúng ngần đó phút.
+    """
     exe = _codex_bin()
     gen_root = Path.home() / ".codex" / "generated_images"
     start = time.time()
@@ -179,14 +270,16 @@ def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> 
     workdir = Path(tempfile.mkdtemp(prefix="codex_img_"))
 
     def attempt(refs):
-        cmd = [exe, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write"]
+        cmd = [exe, "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
+               "--output-last-message", str(workdir / "last_message.txt")]
         for rf in refs:
             cmd += ["-i", str(rf)]
         cmd.append("-")  # prompt qua stdin (shim .CMD hỏng prompt đa dòng ở tham số vị trí)
         try:
             proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=timeout, cwd=str(workdir), encoding="utf-8", errors="replace")
         except subprocess.TimeoutExpired as exc:
-            raise ProviderError("Codex imagegen chạy quá thời gian cho phép.") from exc
+            raise ProviderError(f"Codex imagegen chạy quá {timeout} giây — đây là lỗi thời gian, "
+                                f"đáng được thử lại, không phải provider hết cửa tạo ảnh.") from exc
         candidates = []
         if gen_root.exists():
             for f in gen_root.rglob("*.png"):
@@ -195,21 +288,26 @@ def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> 
                         candidates.append(f)
                 except OSError:
                     continue
-        if candidates:
-            return max(candidates, key=lambda f: f.stat().st_mtime)
         out = (proc.stdout or "") + (proc.stderr or "")
+        if candidates:
+            return max(candidates, key=lambda f: f.stat().st_mtime), proc.returncode, out
         for m in reversed(re.findall(r"[A-Za-z]:[^\s\"'<>|]*\.png", out)):
             pth = Path(m)
             if pth.exists():
-                return pth
-        return None
+                return pth, proc.returncode, out
+        last = workdir / "last_message.txt"
+        reply = (last.read_text(encoding="utf-8", errors="replace").strip() if last.exists() else "") or out.strip()
+        return None, proc.returncode, reply
 
     refs = [r for r in ref_files if Path(r).exists()]
-    src = attempt(refs)
-    if src is None and refs:
-        src = attempt([])
+    src, rc, reply = attempt(refs)
+    if src is None and refs and rc == 0:
+        src, rc, reply = attempt([])
     if src is None:
-        raise ProviderError("Codex imagegen không tạo ra file ảnh (kể cả retry không reference).")
+        raise ImageCapabilityError(
+            f"Codex CLI không để lại file ảnh nào (exit {rc}"
+            + (", đã thử lại bỏ reference" if refs else "")
+            + f"). Lời cuối của CLI: «{str(reply)[-300:].strip()}»")
     return src
 
 

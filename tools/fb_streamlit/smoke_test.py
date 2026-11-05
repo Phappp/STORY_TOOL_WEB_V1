@@ -198,8 +198,10 @@ row_codex = {"id": 2, "name": "FakeCodex", "kind": "codex_cli", "is_default": 0,
 rows2 = {1: row_api, 2: row_codex}
 
 real_chat, real_parse, real_codex = prov.chat, prov.parse_models, prov.codex_generate_image
+real_openai_img = prov.openai_generate_image
 real_search, real_download = images.search_images, images.download_ref
 gen_file = st_box / "codex.png"
+api_file = st_box / "api.png"
 stock_file = st_box / "stock.jpg"
 chat_calls = []
 
@@ -213,13 +215,25 @@ def boom_chat(provider, model, prompt):
     raise prov.ProviderError("hết hạn key")
 
 
-def boom_codex(prompt, refs):
-    raise prov.ProviderError("codex offline")
+# P17c: lỗi "hết cửa tạo ảnh" là lớp RIÊNG (ImageCapabilityError) — chỉ nó mới được khóa B2 của bài.
+def boom_codex(prompt, refs, **kw):
+    raise prov.ImageCapabilityError("Codex CLI không để lại file ảnh nào (exit 1). "
+                                    "Lời cuối của CLI: «I have no image generation tool here»")
 
 
-def fake_codex(prompt, refs):
+def fake_codex(prompt, refs, **kw):
     gen_file.write_bytes(b"CODEX-IMG")
     return gen_file
+
+
+def fake_openai_img(provider, model, prompt, timeout=240):
+    api_file.write_bytes(b"API-IMG")
+    return api_file
+
+
+def boom_openai_img(provider, model, prompt, timeout=240):
+    raise prov.ImageCapabilityError(f"Provider '{provider['name']}' ({model}) từ chối tạo ảnh — "
+                                    "HTTP 400: The free plan does not support image generation.")
 
 
 def fake_download(url):
@@ -230,6 +244,7 @@ def fake_download(url):
 prov.chat = ok_chat
 prov.parse_models = lambda provider: ["m1", "m2"] if provider["kind"] == "openai" else []
 prov.codex_generate_image = fake_codex
+prov.openai_generate_image = fake_openai_img
 images.search_images = lambda query, count=4: [{"url": "https://stock/x.jpg", "thumb": "t", "alt": "a", "source": "stock"}]
 images.download_ref = fake_download
 
@@ -252,16 +267,68 @@ check("run_b1 lỗi -> state error + detail, không ghi file mới",
       text is None and stories.load_story(st_root, sid_a)["b1"]["detail"] == "hết hạn key" and stories.states(st_root, sid_a)["b1"] == "error")
 prov.chat = ok_chat
 
-image, err = steps.generate_image(st_root, sid_a, "prompt ảnh", [], row_codex)
-check("generate_image lưu image.png từ Codex",
-      image is not None and (st_root / sid_a / "image.png").read_bytes() == b"CODEX-IMG" and stories.states(st_root, sid_a)["b2"] == "done")
-check("generate_image bỏ qua khi chưa có Codex", steps.generate_image(st_root, sid_a, "prompt", [], None) == (None, None))
+# PENDING chỉ thấy được TRƯỚC khi image.png tồn tại — file luôn thắng state trong stories.step_state.
+check("generate_image bỏ qua khi chưa có provider: (None, None) + pending nói rõ thiếu gì",
+      steps.generate_image(st_root, sid_a, "prompt", [], None) == (None, None)
+      and "chưa có provider" in stories.load_story(st_root, sid_a)["b2"]["detail"]
+      and stories.states(st_root, sid_a)["b2"] == "pending")
+check("generate_image bỏ qua khi prompt trống, không gọi provider nào",
+      steps.generate_image(st_root, sid_a, "", [], row_api, "m1") == (None, None))
+image, err = steps.generate_image(st_root, sid_a, "prompt ảnh", [], row_codex, "m1")
+check("generate_image: provider codex_cli thì đi đường CLI, lưu image.png + state done",
+      image is not None and (st_root / sid_a / "image.png").read_bytes() == b"CODEX-IMG"
+      and stories.states(st_root, sid_a)["b2"] == "done"
+      and stories.load_story(st_root, sid_a)["b2"]["method"] == steps.IMAGE_METHOD["codex_cli"])
+image, err = steps.generate_image(st_root, sid_a, "prompt ảnh", [], row_api, "m1")
+check("generate_image: provider openai thì đi endpoint /images/generations — B2 không còn độc quyền Codex",
+      image is not None and (st_root / sid_a / "image.png").read_bytes() == b"API-IMG"
+      and stories.load_story(st_root, sid_a)["b2"]["method"] == steps.IMAGE_METHOD["openai"])
 prov.codex_generate_image = boom_codex
-lines, kws, image = steps.run_b2(st_root, sid_a, preset_a, post_a, "prompt", [], row_api, "m1", rows2)
-check("run_b2: Codex lỗi thì fallback ảnh stock",
-      any("fallback stock" in l for l in lines) and (st_root / sid_a / "image.png").read_bytes() == b"STOCK-IMG")
-check("run_b2 lưu từ khóa vào story.json", stories.load_story(st_root, sid_a)["b2"]["keywords"] == kws and kws)
+image, err = steps.generate_image(st_root, sid_a, "prompt ảnh", [], row_codex, "m1")
+check("P17c imagegen bị từ chối -> state error + detail là LỜI CỦA CLI, không phải 'không có ảnh'",
+      image is None and err is not None and "image generation tool" in err
+      and stories.states(st_root, sid_a)["b2"] == "error"
+      and stories.load_story(st_root, sid_a)["b2"]["detail"] == err)
+check("P17c bài mang cờ blocked theo TÊN+KIND bộ vừa bó tay — đó là chìa để ⚡ bỏ qua mà vẫn tự mở khi đổi bộ",
+      stories.load_story(st_root, sid_a)["b2"]["blocked"]["provider"] == "FakeCodex"
+      and stories.load_story(st_root, sid_a)["b2"]["blocked"]["kind"] == "codex_cli"
+      and steps.b2_blocked(st_root, sid_a, row_codex) == err
+      and steps.b2_blocked(st_root, sid_a, row_api) == "")
+
+
+def boom_net(prompt, refs, **kw):
+    raise prov.ProviderError("rớt mạng giữa chừng")
+
+
+prov.codex_generate_image = boom_net
+# Bài MỚI: cờ blocked{FakeCodex} của sid_a còn nguyên từ check trên, dùng lại là test sai thứ mình muốn đo.
+sid_t = stories.create_story(st_root, "Chủ đề B2 lỗi mạng", input_text="nội dung gốc")["id"]
+steps.generate_image(st_root, sid_t, "prompt ảnh", [], row_codex, "m1")
+check("P17c lỗi thời gian/mạng (ProviderError thường) KHÔNG khóa bài — lần sau còn đáng thử lại",
+      stories.states(st_root, sid_t)["b2"] == "error"
+      and stories.load_story(st_root, sid_t)["b2"]["detail"] == "rớt mạng giữa chừng"
+      and not (stories.load_story(st_root, sid_t)["b2"].get("blocked"))
+      and steps.b2_blocked(st_root, sid_t, row_codex) == "")
 prov.codex_generate_image = fake_codex
+steps.generate_image(st_root, sid_a, "prompt ảnh", [], row_codex, "m1")  # để lại ảnh CODEX-IMG làm mốc
+prov.openai_generate_image = boom_openai_img
+lines, kws, image = steps.run_b2(st_root, sid_a, "prompt", [], row_api, "m1")
+check("P17c run_b2: API từ chối là DỪNG — không fallback stock, ảnh cũ còn nguyên, không xin từ khóa",
+      image is None and kws == [] and any("LỖI" in l for l in lines)
+      and (st_root / sid_a / "image.png").read_bytes() == b"CODEX-IMG"
+      and not any("stock" in l for l in lines))
+check("P17c dòng log B2 gọi tên BỘ ĐANG CHỌN + lời từ chối của nhà cung cấp, không nói chung chung 'Codex'",
+      "FakeAPI" in lines[0] and "free plan" in lines[0])
+prov.openai_generate_image = fake_openai_img
+lines, kws, image = steps.run_b2(st_root, sid_a, "prompt", [], row_api, "m1")
+check("run_b2 thành công thì trả ảnh + cờ blocked hết ngay",
+      image is not None and stories.states(st_root, sid_a)["b2"] == "done"
+      and steps.b2_blocked(st_root, sid_a, row_api) == ""
+      and not (stories.load_story(st_root, sid_a)["b2"].get("blocked")))
+kws_search, _kw_err = steps.keywords_for_image(st_root, sid_a, preset_a, post_a, row_api, "m1")
+_s_lines, s_url = steps.stock_image(kws_search)
+check("P17c chỉ bỏ FALLBACK NGẦM: đường 'Tìm kiếm' (từ khóa + stock) trang Tạo bài vẫn gọi thẳng được",
+      bool(kws_search) and bool(s_url) and steps.stock_image([])[1] is None)
 
 log, seo = steps.run_b3(st_root, sid_a, preset_a, row_api, "m1", post_a, "CAP")
 check("run_b3 lưu seo.md + đếm words",
@@ -269,20 +336,20 @@ check("run_b3 lưu seo.md + đếm words",
 
 sid_b = stories.create_story(st_root, "Chủ đề pipeline", input_text="dài dòng 1\ndòng 2")["id"]
 post_b = stories.post_view(st_root, sid_b)
-res = steps.run_pipeline(st_root, sid_b, preset_a, post_b, [], rows2,
+res = steps.run_pipeline(st_root, sid_b, preset_a, post_b, [],
                          {"b1": (row_api, "m1"), "b2": (row_api, "m1"), "b3": (row_api, "m1")}, extra_lines=["Ảnh gốc LỖI: test"])
 check("run_pipeline ghi đủ caption + ảnh + seo",
       all((st_root / sid_b / f).is_file() for f in ("caption.txt", "image.png", "seo.md")) and res.image is not None)
 check("run_pipeline trả log cho từng bước", res.lines[0] == "Ảnh gốc LỖI: test"
       and any(l == "B1 caption: OK" for l in res.lines)
-      and any("Codex" in l for l in res.lines)
+      and any("B2: tạo ảnh bằng 'FakeAPI' OK" in l for l in res.lines)
       and any(l == "B3 SEO: OK" for l in res.lines)
       and any("đã lưu 1 ảnh vào" in l for l in res.lines))
 check("run_pipeline gọi đúng provider từng bước", chat_calls and all(name == "FakeAPI" for name, _ in chat_calls))
 
 # P15a: ⚡ tạo bài cũng phải respecting B đã xanh lá — chạy lại là ghi đè và tốn thêm lượt AI.
 chat_calls.clear()
-res_skip = steps.run_pipeline(st_root, sid_b, preset_a, stories.post_view(st_root, sid_b), [], rows2,
+res_skip = steps.run_pipeline(st_root, sid_b, preset_a, stories.post_view(st_root, sid_b), [],
                               {"b1": (row_api, "m1"), "b2": (row_api, "m1"), "b3": (row_api, "m1")})
 check("P15a ⚡ chạy lại bài đã đủ 3 B: không gọi AI, không trả kết quả mới để app ghi đè",
       chat_calls == [] and res_skip.cap is None and res_skip.seo is None
@@ -297,7 +364,7 @@ check("P15a bỏ qua không làm hỏng gì: file còn nguyên, ba ô vẫn xanh
       and set(stories.states(st_root, sid_b).values()) == {stories.DONE})
 (st_root / sid_b / "seo.md").unlink()  # anh xóa tay 1 kết quả -> chỉ B đó được chạy lại
 chat_calls.clear()
-res_half = steps.run_pipeline(st_root, sid_b, preset_a, stories.post_view(st_root, sid_b), [], rows2,
+res_half = steps.run_pipeline(st_root, sid_b, preset_a, stories.post_view(st_root, sid_b), [],
                               {"b1": (row_api, "m1"), "b2": (row_api, "m1"), "b3": (row_api, "m1")})
 check("P15a mất 1 file thì đúng 1 B chạy lại — B1/B2 vẫn bỏ qua, B3 lên xanh lại",
       len(chat_calls) == 1 and sum("đã xong (xanh lá)" in l for l in res_half.lines) == 2
@@ -306,13 +373,19 @@ check("P15a mất 1 file thì đúng 1 B chạy lại — B1/B2 vẫn bỏ qua, 
 
 prov.chat = boom_chat
 prov.codex_generate_image = boom_codex
+prov.openai_generate_image = boom_openai_img
 sid_c = stories.create_story(st_root, "Chủ đề lỗi", input_text="nội dung lỗi")["id"]
-res_err = steps.run_pipeline(st_root, sid_c, preset_a, stories.post_view(st_root, sid_c), [], {1: row_api},
+res_err = steps.run_pipeline(st_root, sid_c, preset_a, stories.post_view(st_root, sid_c), [],
                              {"b1": (row_api, "m1"), "b2": (row_api, "m1"), "b3": (row_api, "m1")})
+check("P17c ⚡ gặp B2 bó tay: state error (ĐỎ, đọc được nguyên nhân) chứ không còn xám 'chưa có ảnh'",
+      stories.states(st_root, sid_c)["b2"] == "error"
+      and "free plan" in stories.load_story(st_root, sid_c)["b2"]["detail"]
+      and any("FakeAPI" in l for l in res_err.lines))
 check("pipeline lỗi không để state treo running",
-      set(stories.states(st_root, sid_c).values()) <= {"error", "pending"} and list(stories.states(st_root, sid_c).values()) == ["error", "pending", "error"])
+      set(stories.states(st_root, sid_c).values()) <= {"error", "pending"} and list(stories.states(st_root, sid_c).values()) == ["error", "error", "error"])
 
 prov.chat, prov.parse_models, prov.codex_generate_image = real_chat, real_parse, real_codex
+prov.openai_generate_image = real_openai_img
 images.search_images, images.download_ref = real_search, real_download
 p_res = steps.resolve_provider_model(rows2, stories.load_story(st_root, sid_a), preset_a, "b1")
 check("resolve: provider đã lưu trong story.json thắng", p_res[0]["name"] == "FakeAPI" and p_res[1] == "m1")
@@ -343,12 +416,18 @@ sid_empty = stories.create_story(ga_root, "Chưa có input")["id"]
 
 # file giả đặt trong ga_box (thư mục st_box của P2a đã bị xóa ở trên)
 ga_gen_file = ga_box / "codex.png"
+ga_gen_file.write_bytes(b"CODEX-IMG")  # P17c: B2 của GridAPI đi endpoint ảnh, không còn ai tạo file này hộ
 ga_stock_file = ga_box / "stock.jpg"
 
 
-def ga_codex(prompt, refs):
+def ga_codex(prompt, refs, **kw):
     ga_gen_file.write_bytes(b"CODEX-IMG")
     return ga_gen_file
+
+
+def ga_openai_img(provider, model, prompt, timeout=240):
+    (ga_box / "api.png").write_bytes(b"API-IMG")
+    return ga_box / "api.png"
 
 
 def ga_download(url):
@@ -359,6 +438,7 @@ def ga_download(url):
 chat_calls.clear()
 prov.chat = ok_chat
 prov.codex_generate_image = ga_codex
+prov.openai_generate_image = ga_openai_img
 images.download_ref = ga_download
 images.search_images = lambda query, count=4: [{"url": "https://stock/x.jpg", "thumb": "t", "alt": "a", "source": "stock"}]
 
@@ -373,8 +453,10 @@ check("chưa có input -> chặn trước khi gọi provider",
 out = ga.apply_event(gctx, {"source": "run_step", "id": "story_777", "step": "b1"})
 check("story không tồn tại -> line lỗi, không crash", out.lines and "story_777" in out.lines[0])
 out = ga.apply_event(gctx, {"source": "run_step", "id": sid_ok, "step": "b2"})
-check("dispatcher b2 vẫn dùng Codex dù provider bước là API",
-      (ga_root / sid_ok / "image.png").read_bytes() == b"CODEX-IMG" and stories.states(ga_root, sid_ok)["b2"] == "done")
+check("P17c dispatcher b2 chạy ĐÚNG bộ của B2 (GridAPI → endpoint ảnh) — hết cảnh lén vay Codex CLI của bài khác",
+      (ga_root / sid_ok / "image.png").read_bytes() == b"API-IMG"
+      and stories.states(ga_root, sid_ok)["b2"] == "done"
+      and stories.load_story(ga_root, sid_ok)["b2"]["provider"] == "GridAPI")
 out = ga.apply_event(gctx, {"source": "run_step", "id": sid_ok, "step": "b3"})
 check("dispatcher b3 ghi seo.md", (ga_root / sid_ok / "seo.md").is_file() and out.lines == ["B3 SEO: OK"])
 
@@ -2237,6 +2319,167 @@ db.delete_provider(_p17_conn, _p17_pid)
 for _p17_left in db.list_presets(_p17_conn):
     if _p17_left["name"] in ("P17Prompt", "P17Trống"):
         db.delete_preset(_p17_conn, _p17_left["id"])
+
+# --- P17c (lưới): B2 hết cửa tạo ảnh -> viên ĐỎ kèm lời thật, ⚡ bỏ qua riêng B2, ▶ vẫn thử ---
+_p17c_box = Path(tempfile.mkdtemp(prefix="fbp17c_"))
+_p17c_root = stories.validate_root(_p17c_box / "ws")
+_p17c_conn = db.connect()
+for _p17c_left in db.list_providers(_p17c_conn):
+    if _p17c_left["name"] in ("P17cCodex", "P17cChat"):
+        db.delete_provider(_p17c_conn, _p17c_left["id"])
+db.add_provider(_p17c_conn, "P17cCodex", "codex_cli", "", "", "")
+db.add_provider(_p17c_conn, "P17cChat", "openai", "https://x/v1", "GRID_KEY_ENV", "m1")
+_p17c_pid = next(p["id"] for p in db.list_providers(_p17c_conn) if p["name"] == "P17cChat")
+db.save_preset(_p17c_conn, None, "P17cPreset", "", "CAP: <DỮ LIỆU>", "ẢNH: <CAPTION MỚI TẠO>",
+               "KW: <DỮ LIỆU>", "SEO: <CAPTION MỚI TẠO>", "INPUT", _p17c_pid)
+_p17c_preset = next(x for x in db.list_presets(_p17c_conn) if x["name"] == "P17cPreset")
+ga.set_pref_preset(_p17c_root, _p17c_preset["id"])
+ga.set_pref_providers(_p17c_root, "b2", ["P17cCodex"])  # bộ bó tay tạo ảnh được chọn RIÊNG cho B2
+_p17c_sid = stories.create_story(_p17c_root, "P17c B2", input_text="nội dung p17c")["id"]
+stories.save_step_text(_p17c_root, _p17c_sid, "b1", "CAPTION P17C")  # B2 cần caption để ghép prompt
+_p17c_sid2 = stories.create_story(_p17c_root, "P17c luồng nền", input_text="nội dung 2")["id"]
+_p17c_ctx = ga.build_ctx(_p17c_conn, _p17c_root)
+
+_p17c_calls: list[str] = []
+_p17c_chat0, _p17c_cdx0, _p17c_api0 = prov.chat, prov.codex_generate_image, prov.openai_generate_image
+prov.chat = ok_chat
+
+
+def _p17c_boom(prompt, refs, **kw):
+    _p17c_calls.append("P17cCodex")
+    raise prov.ImageCapabilityError("Codex CLI không để lại file ảnh nào (exit 1). "
+                                    "Lời cuối của CLI: «I have no image generation tool here»")
+
+
+def _p17c_codex_ok(prompt, refs, **kw):
+    _p17c_calls.append("P17cCodex")
+    (_p17c_box / "codex.png").write_bytes(b"P17C-CODEX")
+    return _p17c_box / "codex.png"
+
+
+def _p17c_api_ok(provider, model, prompt, timeout=240):
+    _p17c_calls.append(provider["name"])
+    (_p17c_box / "api.png").write_bytes(b"P17C-API")
+    return _p17c_box / "api.png"
+
+
+try:
+    prov.codex_generate_image = _p17c_boom
+    _p17c_force = ga.apply_event(_p17c_ctx, {"source": "run_step", "id": _p17c_sid, "step": "b2", "chained": False})
+    _p17c_story = stories.load_story(_p17c_root, _p17c_sid)
+    check("P17c ▶ ở ô B2 báo đúng LỜI CỦA BỘ trong log, không phải 'không có ảnh' chung chung",
+          _p17c_calls == ["P17cCodex"] and "image generation tool" in _p17c_force.lines[0]
+          and _p17c_story["b2"]["detail"] == "Codex CLI không để lại file ảnh nào (exit 1). "
+          "Lời cuối của CLI: «I have no image generation tool here»")
+    check("P17c viên B2 thành ĐỎ đọc được từ lưới (hover card hiện chi tiết) chứ không còn xám 'chưa có ảnh'",
+          next(r for r in fbgrid.rows_for(_p17c_ctx) if r["id"] == _p17c_sid)["states"]["b2"] == "error"
+          and "image generation tool" in
+          next(r for r in fbgrid.rows_for(_p17c_ctx) if r["id"] == _p17c_sid)["detail"]["b2"])
+    _p17c_calls.clear()
+    _p17c_skip = ga.apply_event(_p17c_ctx, {"source": "run_step", "id": _p17c_sid, "step": "b2", "chained": True})
+    check("P17c ⚡ gặp cờ blocked thì BỎ QUA B2 và KHÔNG gọi bộ nữa — hết cảnh 15 phút CLI cho một câu 'không'",
+          _p17c_calls == [] and "BỎ QUA" in _p17c_skip.lines[0] and "P17cCodex" in _p17c_skip.lines[0])
+    check("P17c bỏ qua không được xóa dấu vết: viên vẫn đỏ + nguyên lời của bộ, để anh biết vì sao nó không chạy",
+          stories.states(_p17c_root, _p17c_sid)["b2"] == "error"
+          and "image generation tool" in stories.load_story(_p17c_root, _p17c_sid)["b2"]["detail"])
+    _p17c_calls.clear()
+    _p17c_all = ga.apply_event(_p17c_ctx, {"source": "run_all", "id": _p17c_sid})
+    check("P17c ⚡ cả bài: B2 bị bỏ qua nhưng B3 vẫn chạy — một B hết cửa không khóa cả bài",
+          _p17c_calls == [] and any("BỎ QUA" in l for l in _p17c_all.lines)
+          and (_p17c_root / _p17c_sid / "seo.md").is_file()
+          and stories.states(_p17c_root, _p17c_sid)["b3"] == "done")
+    _p17c_p_after = stories.load_story(_p17c_root, _p17c_sid)["b2"]["blocked"]
+    check("P17c dòng bỏ qua chỉ rõ đường mở (▶ ở ô B2 / đổi bộ ở Provider B2), không im lặng bỏ qua",
+          "▶ ở ô B2" in _p17c_skip.lines[0] and "Provider B2" in _p17c_skip.lines[0]
+          and _p17c_p_after["provider"] == "P17cCodex" and _p17c_p_after["kind"] == "codex_cli")
+    # đổi bộ ở Provider B2 -> cờ phải TỰ MỞ, không cần đi xóa thủ công
+    ga.set_pref_providers(_p17c_root, "b2", ["P17cChat"])
+    prov.codex_generate_image = _p17c_codex_ok
+    prov.openai_generate_image = _p17c_api_ok
+    _p17c_ctx2 = ga.build_ctx(_p17c_conn, _p17c_root)
+    _p17c_calls.clear()
+    _p17c_new = ga.apply_event(_p17c_ctx2, {"source": "run_step", "id": _p17c_sid, "step": "b2", "chained": True})
+    check("P17c đổi sang bộ khác ở Provider B2 là ⚡ THỬ THẬT ngay (cờ khóa theo tên+kind, tự mở)",
+          _p17c_calls == ["P17cChat"] and "BỎ QUA" not in _p17c_new.lines[0]
+          and (_p17c_root / _p17c_sid / "image.png").read_bytes() == b"P17C-API"
+          and not (stories.load_story(_p17c_root, _p17c_sid)["b2"].get("blocked")))
+
+    # luồng nền: chính nó là nơi sinh ra event chained, nên dấu phải đi từ tasks_for tới executor
+    _p17c_events: list[dict] = []
+
+    def _p17c_exec(event, root):
+        _p17c_events.append(dict(event))
+        return [f"{event.get('id')} {event.get('step')}: xong"]
+
+    _p17c_job, _ = gr.job_for({"source": "run_all", "id": _p17c_sid2}, _p17c_root)
+    _p17c_tasks = gr.tasks_for(_p17c_job[0])
+    _p17c_single, _ = gr.job_for({"source": "run_step", "id": _p17c_sid2, "step": "b2"}, _p17c_root)
+    check("P17c ⚡/hàng đợi đánh dấu từng việc là chained; ▶ một ô thì không — đó là ranh giới được bỏ qua",
+          [t.step for t in _p17c_tasks] == ["b1", "b2", "b3"] and all(t.chained for t in _p17c_tasks)
+          and [t.chained for t in gr.tasks_for(_p17c_single[0])] == [False])
+    _p17c_runner = gr.Runner(_p17c_exec, claim=lambda root, sid, step, busy: ("P17cBo", ""))
+    _p17c_runner.submit(_p17c_job[0])
+    _p17c_ran = wait_flow(_p17c_runner)
+    _p17c_runner.stop()
+    check("P17c event luồng nền giao xuống grid_actions mang theo chained — bên nhận mới phân biệt ⚡ với ▶",
+          _p17c_ran and {e["step"]: e.get("chained") for e in _p17c_events} == {"b1": True, "b2": True, "b3": True})
+
+    # providers.py: lỗi phải TỰ NÓI nguyên nhân, và retry chỉ khi CLI không cãi gì
+    _p17c_src = (Path(__file__).resolve().parent / "providers.py").read_text(encoding="utf-8")
+    check("P17c Codex chỉ retry bỏ reference khi CLI exit 0 im lặng — exit khác là nó đã từ chối rồi",
+          "if src is None and refs and rc == 0" in _p17c_src
+          and "if src is None and refs:" not in _p17c_src
+          and "--output-last-message" in _p17c_src)
+    check("P17c modal B2 cũng in nguyên nhân thật (Ghi chú) — mở bài lên thấy vì sao ô đỏ, không thấy khoảng trống",
+          'const note = String((row.detail || {}).b2 || "");' in _p17_js
+          and _p17_js.count('if (note) body.appendChild(el("div", "muted", "Ghi chú: " + note));') >= 2)
+
+    class _P17cResp:
+        status_code = 400
+        text = '{"error":{"message":"The free plan does not support image generation."}}'
+
+        def json(self):
+            return {"error": {"message": "The free plan does not support image generation."}}
+
+    _p17c_post0 = prov.httpx.post
+    prov.httpx.post = lambda *a, **k: _P17cResp()
+    try:
+        # gọi thẳng hàm THẬT: prov.openai_generate_image lúc này đang là stub của check đổi bộ ở trên
+        real_openai_img({"name": "P17cAPI", "kind": "openai", "base_url": "https://x/v1",
+                         "key_env": "", "models": "m1"}, "dall-e-mini", "prompt")
+        check("P17c API ảnh từ chối (400) -> ImageCapabilityError kèm đúng message của nhà cung cấp", False)
+    except prov.ImageCapabilityError as exc:
+        check("P17c API ảnh từ chối (400) -> ImageCapabilityError kèm đúng message của nhà cung cấp",
+              "free plan does not support image generation" in str(exc) and "P17cAPI" in str(exc)
+              and isinstance(exc, prov.ProviderError))
+    finally:
+        prov.httpx.post = _p17c_post0
+
+    class _P17cResp5(_P17cResp):
+        status_code = 503
+
+    prov.httpx.post = lambda *a, **k: _P17cResp5()
+    try:
+        real_openai_img({"name": "P17cAPI", "kind": "openai", "base_url": "https://x/v1",
+                         "key_env": "", "models": "m1"}, "dall-e-mini", "prompt")
+        check("P17c 5xx/nhà trôi là lỗi THƯỜNG (ProviderError) — chưa kịp thì lần sau còn đáng thử lại", False)
+    except prov.ImageCapabilityError:
+        check("P17c 5xx/nhà trôi là lỗi THƯỜNG (ProviderError) — chưa kịp thì lần sau còn đáng thử lại", False)
+    except prov.ProviderError as exc:
+        check("P17c 5xx/nhà trôi là lỗi THƯỜNG (ProviderError) — chưa kịp thì lần sau còn đáng thử lại",
+              not isinstance(exc, prov.ImageCapabilityError))
+    finally:
+        prov.httpx.post = _p17c_post0
+finally:
+    prov.chat, prov.codex_generate_image, prov.openai_generate_image = _p17c_chat0, _p17c_cdx0, _p17c_api0
+db.delete_provider(_p17c_conn, _p17c_pid)
+for _p17c_left in db.list_providers(_p17c_conn):
+    if _p17c_left["name"] == "P17cCodex":
+        db.delete_provider(_p17c_conn, _p17c_left["id"])
+for _p17c_left in db.list_presets(_p17c_conn):
+    if _p17c_left["name"] == "P17cPreset":
+        db.delete_preset(_p17c_conn, _p17c_left["id"])
+shutil.rmtree(_p17c_box, ignore_errors=True)
 
 # --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
 grid_src_p13 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")

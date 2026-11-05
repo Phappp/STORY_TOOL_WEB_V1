@@ -728,12 +728,20 @@ function modalBody(row, tab, key) {
   }
   if (tab === "b2") {
     const src = IMAGES.get(key);
-    if (!src) { body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc ảnh từ folder story")); return body; }
+    // dòng "Ghi chú" là nguyên nhân THẬT bộ tạo ảnh báo (P17c) — modal phải nói được vì sao ô đỏ,
+    // không chỉ vẽ một khoảng trống chờ ảnh
+    const note = String((row.detail || {}).b2 || "");
+    if (!src) {
+      body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc ảnh từ folder story"));
+      if (note) body.appendChild(el("div", "muted", "Ghi chú: " + note));
+      return body;
+    }
     const img = document.createElement("img");
     img.className = "photo";
     img.alt = "Ảnh B2 của " + row.id;
     img.src = src;
     body.appendChild(img);
+    if (note) body.appendChild(el("div", "muted", "Ghi chú: " + note));
     return body;
   }
   if (tab === "b4") {

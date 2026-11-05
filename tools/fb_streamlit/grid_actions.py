@@ -506,7 +506,7 @@ def _guard(ctx: Ctx, sid: str):
     return (story, preset), ""
 
 
-def _run_step(ctx: Ctx, sid: str, step: str, preferred: str = "") -> list[str]:
+def _run_step(ctx: Ctx, sid: str, step: str, preferred: str = "", chained: bool = False) -> list[str]:
     ready, why = _guard(ctx, sid)
     if ready is None:
         return [why]
@@ -520,13 +520,18 @@ def _run_step(ctx: Ctx, sid: str, step: str, preferred: str = "") -> list[str]:
     if step == "b3":
         return [steps.run_b3(ctx.root, sid, preset, provider, model, post, post["caption"] or None)[0]]
     if not post["caption"].strip():
+        stories.set_step_state(ctx.root, sid, "b2", "pending",
+                               detail="chưa thử — cần caption B1 để ghép prompt ảnh")
         return [f"{STEP_NAMES['b2']}: bỏ qua (chưa có caption B1 để ghép prompt ảnh)."]
     prompt_text = steps.step_prompt("b2", preset, post, post["caption"] or None)
-    lines, _kws, image = steps.run_b2(ctx.root, sid, preset, post, prompt_text, stories.refs_of(ctx.root, sid),
-                                      provider, model, ctx.providers, post["caption"])
-    if image is None:
-        stories.set_step_state(ctx.root, sid, "b2", "pending", detail="chưa có ảnh cho bước này")
-    return lines
+    if chained:
+        # ⚡/hàng đợi: bài nào đã biết bộ đang chọn hết cửa tạo ảnh thì bỏ qua riêng B2, khỏi mất
+        # hàng phút CLI cho cùng một câu từ chối. Việc lẻ (▶ ở ô B2) vẫn force — anh chủ động thử.
+        reason = steps.b2_blocked(ctx.root, sid, provider)
+        if reason:
+            return [steps.b2_blocked_line(provider, reason)]
+    lines, _kws, _image = steps.run_b2(ctx.root, sid, prompt_text, stories.refs_of(ctx.root, sid), provider, model)
+    return lines or [f"{STEP_NAMES['b2']}: không có gì mới — xem chi tiết ở ô B2."]
 
 
 def _run_all(ctx: Ctx, sid: str) -> list[str]:
@@ -538,7 +543,7 @@ def _run_all(ctx: Ctx, sid: str) -> list[str]:
     providers = {step: steps.resolve_provider_model(ctx.providers, story, preset, step,
                                                     preferred=provider_pref(ctx, story, step))
                  for step in ALL_STEPS}
-    res = steps.run_pipeline(ctx.root, sid, preset, post, stories.refs_of(ctx.root, sid), ctx.providers, providers)
+    res = steps.run_pipeline(ctx.root, sid, preset, post, stories.refs_of(ctx.root, sid), providers)
     return res.lines
 
 
@@ -769,7 +774,8 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
     step = str(event.get("step") or "")
     try:
         if source == "run_step" and step in ALL_STEPS:
-            out.lines, out.touched = _run_step(ctx, sid, step, str(event.get("provider") or "")), [sid]
+            out.lines, out.touched = (_run_step(ctx, sid, step, str(event.get("provider") or ""),
+                                                chained=bool(event.get("chained"))), [sid])
         elif source == "run_all":
             out.lines, out.touched = _run_all(ctx, sid), [sid]
         elif source == "b0_run":

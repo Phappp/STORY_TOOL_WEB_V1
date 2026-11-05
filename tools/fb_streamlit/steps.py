@@ -20,6 +20,8 @@ MAX_KEYWORDS = 4
 PER_KEYWORD = 4
 # steps.py không được import grid_actions (layering nằm ngược chiều), nên tên bước tự giữ ở đây
 STEP_LABEL = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
+# Chữ "Cách" hiện trong thẻ hover ô B2 — kể ảnh này do đường nào tạo ra, theo kind của provider
+IMAGE_METHOD = {"codex_cli": "Codex CLI imagegen", "openai": "API ảnh /images/generations"}
 
 
 def why(exc: Exception) -> str:
@@ -160,26 +162,66 @@ def run_b1(root: Path, sid: str, preset, provider, model: str, post) -> tuple[st
     return text, "B1 caption: OK"
 
 
-def codex_row_for(rows, provider):
-    if provider is not None and provider["kind"] == "codex_cli":
-        return provider
-    return next((r for r in rows.values() if r["kind"] == "codex_cli"), None)
+def b2_blocked(root: Path, sid: str, provider) -> str:
+    """Lý do B2 đã biết chắc là vô ích với bài này — '' khi còn đáng thử.
+
+    P17c: trước đây B2 lỗi vì "gói này không có image generation" vẫn để ô vuông MÀU XÁM
+    (`pending`), mà ⚡/hàng đợi chỉ bỏ qua B đã xanh lá (P15a) → mỗi lần bấm là nạp lại B2 cho
+    150 bài, mỗi lần lại mất tới 15 phút CLI cho cùng một câu trả lời "không". Giờ bộ nào báo
+    hết cửa tạo ảnh thì bài đó mang cờ `blocked`; ⚡ bỏ qua riêng B2 (B1/B3 vẫn chạy bình thường).
+
+    Khóa theo TÊN + KIND của bộ sẽ dùng, nên nó tự mở: đổi bộ khác ở Provider B2 (hay thêm
+    bộ codex_cli vào pool) là ⚡ lần sau thử thật, không cần đi xóa cờ. Lỗi thời gian/mạng KHÔNG
+    khóa — lần sau đáng được thử lại.
+    """
+    if provider is None:
+        return ""
+    blk = (stories.load_story(root, sid).get("b2") or {}).get("blocked") or {}
+    if str(blk.get("provider") or "") == str(provider["name"]) and str(blk.get("kind") or "") == str(provider["kind"]):
+        return str(blk.get("reason") or "bộ này không tạo được ảnh")
+    return ""
 
 
-def generate_image(root: Path, sid: str, prompt: str, refs: list, codex_row) -> tuple[Path | None, str | None]:
-    """B2 bằng Codex imagegen -> image.png. Trả (ảnh|None, lỗi|None); (None, None) là không thử."""
-    if codex_row is None or not prompt:
+def b2_blocked_line(provider, reason: str) -> str:
+    """Dòng log cho ⚡ khi B2 bị bỏ qua — gọi TÊN BỘ, vì lời của CLI/API thường không tự xưng."""
+    name = str(provider["name"]) if provider else "bộ đang chọn cho B2"
+    return (f"{STEP_LABEL['b2']} BỎ QUA — B2 vẫn dùng '{name}', bộ đã báo không tạo được ảnh: {reason}. "
+            "⚡ không thử lại mất thời gian; muốn thử thì mở bài bấm ▶ ở ô B2, hoặc đổi bộ ở Provider B2 "
+            "(cờ tự mở khi tên/kind bộ đổi).")
+
+
+def generate_image(root: Path, sid: str, prompt: str, refs: list, provider, model: str = "") -> tuple[Path | None, str | None]:
+    """B2: ảnh từ ĐÚNG provider đang chọn cho B2 -> image.png. Trả (ảnh|None, lỗi|None).
+
+    `err is None` và `ảnh is None` = không thử (thiếu prompt/thiếu bộ) — state để `pending`,
+    nói rõ thiếu gì. Thử mà thất bại thì state là `error` kèm nguyên nhân thật (hover vào ô B2
+    đọc được), không còn cảnh xám "chưa có ảnh cho bước này" che mất lời từ chối của nhà cung cấp.
+    """
+    if provider is None or not (prompt or "").strip():
+        stories.set_step_state(root, sid, "b2", "pending", detail="chưa thử — " + (
+            "B2 chưa có provider nào (Cấu hình ▸ Providers)" if provider is None
+            else "preset chưa có 'Prompt tạo ảnh'"))
         return None, None
-    stories.set_step_state(root, sid, "b2", "running", method="codex")
+    stories.set_step_state(root, sid, "b2", "running", provider=provider["name"], model=model or "")
     try:
-        src = prov.codex_generate_image(prompt, refs)
-    except Exception as exc:
-        return None, why(exc)
-    return save_image(root, sid, src, method="codex"), None
+        src = prov.generate_image(provider, model, prompt, refs)
+    except prov.ImageCapabilityError as exc:
+        reason = str(exc)
+        stories.set_step_state(root, sid, "b2", "error", detail=reason,
+                               blocked={"provider": str(provider["name"]), "kind": str(provider["kind"]),
+                                        "reason": reason[:300], "at": time.time()})
+        return None, reason
+    except Exception as exc:  # timeout/rớt mạng: lỗi thật nhưng không khóa bài
+        reason = why(exc)
+        stories.set_step_state(root, sid, "b2", "error", detail=reason)
+        return None, reason
+    img = save_image(root, sid, src, method=IMAGE_METHOD.get(str(provider["kind"]), str(provider["kind"])))
+    stories.set_step_state(root, sid, "b2", "done", detail="", blocked=None)
+    return img, None
 
 
 def keywords_for_image(root: Path, sid: str, preset, post, provider, model: str, caption: str | None = None) -> tuple[list[str], str | None]:
-    """B2 chế độ tìm kiếm: AI sinh từ khóa rồi lưu vào story.json. Trả (từ khóa, lỗi|None)."""
+    """B2 chế độ tìm kiếm (trang Tạo bài tự chọn): AI sinh từ khóa, lưu vào story.json. Trả (từ khóa, lỗi|None)."""
     if provider is None or not (preset["keyword_prompt"] or "").strip():
         return [], None
     try:
@@ -206,24 +248,21 @@ def stock_image(keywords: list[str]) -> tuple[list[str], str | None]:
     return lines + ["B2 stock: không tìm được ảnh nào"], None
 
 
-def run_b2(root: Path, sid: str, preset, post, prompt: str, refs: list, provider, model: str, rows, caption: str | None = None) -> tuple[list[str], list[str], Path | None]:
-    """B2 cho pipeline: Codex trước, lỗi thì fallback stock theo từ khóa. Trả (log, từ khóa, ảnh|None)."""
-    lines: list[str] = []
-    image, err = generate_image(root, sid, prompt, refs, codex_row_for(rows, provider))
+def run_b2(root: Path, sid: str, prompt: str, refs: list, provider, model: str) -> tuple[list[str], list[str], Path | None]:
+    """B2 cho pipeline: đúng bộ đã chọn cho B2, HẾT cửa là dừng — không lén đổi bộ, không fallback stock.
+
+    P17c bỏ hai đường "cứu" cũ: (1) `codex_row_for` âm thầm bắt một provider codex_cli BẤT KỲ trong
+    danh sách làm ảnh, nên ô B2 báo lỗi của CODEX1 trong khi anh đang chọn TTA_1 ở Provider B2;
+    (2) Codex lỗi thì tự nhảy sang từ khóa + ảnh stock, vừa thêm tiền gọi AI vừa để ô B2 xanh lá
+    bằng một ảnh không liên quan gì prompt anh duyệt. Anh muốn ảnh stock thì chọn "Tìm kiếm" ở
+    trang Tạo bài, muốn Codex làm ảnh thì thêm bộ codex_cli vào pool B2 — lưới đi theo đúng lựa chọn đó.
+    """
+    image, err = generate_image(root, sid, prompt, refs, provider, model)
     if image is not None:
-        return ["B2: tạo ảnh Codex OK"], [], image
+        return [f"B2: tạo ảnh bằng '{provider['name']}' OK"], [], image
     if err:
-        lines.append(f"B2 codex lỗi — fallback stock: {err[:150]}")
-    if provider is None or not (preset["keyword_prompt"] or "").strip():
-        return lines or ["B2 ảnh: bỏ qua (không có Codex imagegen hoặc thiếu prompt từ khóa)"], [], None
-    kws, kw_err = keywords_for_image(root, sid, preset, post, provider, model, caption)
-    if kw_err:
-        return lines + [f"B2 stock LỖI: {kw_err}"], kws, None
-    s_lines, url = stock_image(kws)
-    lines += s_lines
-    if url is None:
-        return lines, kws, None
-    return lines, kws, save_image(root, sid, url, method="stock", source_url=url)
+        return [f"B2 ảnh LỖI — {err}"], [], None
+    return [f"{STEP_LABEL['b2']}: bỏ qua (chưa thử — xem chi tiết ở ô B2)"], [], None
 
 
 def run_b3(root: Path, sid: str, preset, provider, model: str, post, caption: str | None = None) -> tuple[str, str | None]:
@@ -256,11 +295,13 @@ def skip_line(step: str) -> str:
     return f"{STEP_LABEL.get(step, step.upper())} đã xong (xanh lá) — ⚡ bỏ qua, muốn chạy lại thì bấm ▶ riêng bước đó."
 
 
-def run_pipeline(root: Path, sid: str, preset, post, refs: list, rows, providers: dict, caption: str | None = None, extra_lines=()) -> Result:
+def run_pipeline(root: Path, sid: str, preset, post, refs: list, providers: dict, caption: str | None = None, extra_lines=()) -> Result:
     """Nút ⚡: B1 trước, rồi B2 ∥ B3; ghi file + state từng bước. providers = {'b1': (row, model), ...}.
 
     P15a: bước nào đã xanh lá thì ⚡ bỏ qua — chạy lại là ghi đè kết quả anh đang dùng và tốn thêm
-    một lượt gọi AI. Trang Tạo bài không có ô ▶ từng bước, nên bước bỏ qua phải tự nói ra.
+    một lượt gọi AI. P17c: B2 mà bài đó đã biết là bộ đang chọn không tạo được ảnh thì ⚡ cũng bỏ
+    qua riêng B2 (nói rõ vì sao) — ⚡ qua 150 bài không được phép mất 15 phút/bài cho một cửa đã đóng.
+    Trang Tạo bài không có ô ▶ từng bước, nên mỗi bước bỏ qua phải tự nói ra.
     """
     lines = list(extra_lines)
     skip = skipped_done(root, sid)
@@ -284,8 +325,12 @@ def run_pipeline(root: Path, sid: str, preset, post, refs: list, rows, providers
     for step in ("b2", "b3"):
         if step in skip:
             lines.append(skip_line(step))
+    blocked = b2_blocked(root, sid, p2) if "b2" in todo else ""
+    if blocked:
+        todo.remove("b2")
+        lines.append(b2_blocked_line(p2, blocked))
     with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_b2 = pool.submit(run_b2, root, sid, preset, post, img_prompt, refs, p2, m2, rows, caption_now) if "b2" in todo else None
+        fut_b2 = pool.submit(run_b2, root, sid, img_prompt, refs, p2, m2) if "b2" in todo else None
         fut_b3 = pool.submit(run_b3, root, sid, preset, p3, m3, post, caption_now) if "b3" in todo else None
         if fut_b2 is not None:
             log_b2, kws, image = fut_b2.result()
@@ -294,8 +339,6 @@ def run_pipeline(root: Path, sid: str, preset, post, refs: list, rows, providers
             log_b3, seo = fut_b3.result()
             lines.append(log_b3)
 
-    if fut_b2 is not None and image is None:
-        stories.set_step_state(root, sid, "b2", "pending", detail="chưa có ảnh cho bước này")
-    elif image is not None:
+    if image is not None:
         lines.append(f"B2: đã lưu 1 ảnh vào {sid}/image.png (ghi đè ảnh cũ)")
     return Result(cap=cap, seo=seo, keywords=kws, image=image, lines=lines)

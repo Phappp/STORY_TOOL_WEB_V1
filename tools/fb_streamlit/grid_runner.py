@@ -94,6 +94,7 @@ class Task:
     job: Job
     provider: str = ""
     dep: str = ""  # bước phải xong trước (b2/b3 chờ b1 của chính bài này)
+    chained: bool = False  # ⚡/hàng đợi (khác ▶ lẻ): B2 đã biết là hết cửa thì được bỏ qua
 
     @property
     def label(self) -> str:
@@ -119,10 +120,10 @@ def tasks_for(job: Job) -> list[Task]:
             continue
         keep = [step for step in ALL_STEPS if step not in steps.skipped_done(job.root, sid)]
         if "b1" in keep:
-            tasks.append(Task(sid=sid, step="b1", job=job))
-            tasks += [Task(sid=sid, step=step, job=job, dep="b1") for step in keep if step != "b1"]
+            tasks.append(Task(sid=sid, step="b1", job=job, chained=True))
+            tasks += [Task(sid=sid, step=step, job=job, dep="b1", chained=True) for step in keep if step != "b1"]
         else:
-            tasks += [Task(sid=sid, step=step, job=job) for step in keep]
+            tasks += [Task(sid=sid, step=step, job=job, chained=True) for step in keep]
     return tasks
 
 
@@ -365,7 +366,10 @@ class Runner:
 
     def _run_task(self, task: Task) -> None:
         event = ({"source": "b0_run", "id": task.sid} if task.step == "b0" else
-                 {"source": "run_step", "id": task.sid, "step": task.step, "provider": task.provider})
+                 {"source": "run_step", "id": task.sid, "step": task.step, "provider": task.provider,
+                  # ⚡ sinh ra từng việc lẻ theo B — executor không tự biết nó là chuỗi hay anh bấm ▶,
+                  # mà B2 đã khóa thì chỉ chuỗi mới được bỏ qua (P17c).
+                  "chained": task.chained})
         try:
             lines = self.executor(event, task.job.root) or []
         except Exception as exc:  # thread nền không được chết âm thầm
