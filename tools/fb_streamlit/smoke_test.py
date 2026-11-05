@@ -2629,7 +2629,38 @@ for _p18_left in db.list_presets(_p18_conn):
         db.delete_preset(_p18_conn, _p18_left["id"])
 shutil.rmtree(_p18_box, ignore_errors=True)
 
+# --- P18b: 📋 ở cột Link — copy nguyên link NGAY TẠI Ô, không mở modal, không xin Python ---
+_p18b_box = Path(tempfile.mkdtemp(prefix="fbp18b_"))
+_p18b_root = stories.validate_root(_p18b_box / "ws")
+_p18b_conn = db.connect()
+_p18b_sid = stories.create_story(_p18b_root, "P18b link", input_text="nội dung p18b")["id"]
+_p18b_blank = stories.create_story(_p18b_root, "P18b chưa có link", input_text="")["id"]
+_p18b_ctx = ga.build_ctx(_p18b_conn, _p18b_root)
+ga.apply_event(_p18b_ctx, {"source": "link_save", "id": _p18b_sid, "value": "https://fb.watch/p18b-full"})
+_p18b_rows = {r["id"]: r for r in fbgrid.rows_for(ga.build_ctx(_p18b_conn, _p18b_root))}
+_js_p18b = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_link_cell = _js_p18b[_js_p18b.index("function linkCell"):_js_p18b.index("\n}", _js_p18b.index("function linkCell"))]
+_yes, _no = _link_cell.split("if (raw.trim()) {", 1)[1].split("} else {", 1)
+check("P18b hàng lưới mang link NGUYÊN VĂN — JS copy thẳng từ row, không phải rút gọn để hiển thị",
+      _p18b_rows[_p18b_sid]["link"] == "https://fb.watch/p18b-full"
+      and _p18b_rows[_p18b_blank]["link"] == "")
+check("P18b 📋 copy tại chỗ bằng copyToClipboard(raw) — link đã nằm trong row nên không đốt một lượt event như ô B1/B3",
+      'copyToClipboard(raw' in _link_cell and "send(" not in _link_cell
+      and "requestContent" not in _link_cell and "copyField" not in _link_cell)
+check("P18b link trống thì KHÔNG vẽ nút copy — đừng hứa một cú bấm rỗng; ✎ vẫn còn để nhập",
+      "📋" in _yes and "📋" not in _no and 'el("span", "muted", "—")' in _no
+      and 'button("✎"' in _link_cell and "EDITING = { id:" in _link_cell)
+check("P18b kéo cột Link hẹp vẫn còn đủ hai nút: chữ link co lại bằng \"…\", 📋/✎ không bị cắt",
+      "td.link .lnk { display:flex" in _js_p18b
+      and "td.link .lnk a.link { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis" in _js_p18b
+      and "td.link .lnk button.ln { flex:0 0 auto" in _js_p18b)
+check("P18b tiêu đề cột + chữ gợi ý nói đủ ba việc của ô Link (mở · copy · sửa) — một nút một việc",
+      '📋 = copy nguyên link' in _js_p18b and "Copy nguyên link đã đăng" in _link_cell
+      and "📋 ở cột Link để copy nguyên link đã đăng" in _js_p18b)
+shutil.rmtree(_p18b_box, ignore_errors=True)
+
 # --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
+
 grid_src_p13 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
 check("P13a hết chế độ '8 dòng gần nhất + Log cũ' — không còn danh sách dài lẫn lộn mấy cú bấm",
       "LOG_LIMIT" not in grid_src_p13 and "Log cũ" not in grid_src_p13)

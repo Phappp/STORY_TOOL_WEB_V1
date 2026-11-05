@@ -57,6 +57,10 @@
   input.lin { width:calc(100% - 62px); height:22px; font:inherit; font-size:12px; padding:1px 5px;
     border:1px solid var(--accent); border-radius:5px; background:var(--field); color:var(--text); }
   button.ln { width:22px; padding:0; height:22px; margin-left:2px; }
+  /* ô Link có hai nút icon (📋 ✎): cho chữ link co lại bằng "…", hai nút KHÔNG bị cắt khi kéo cột hẹp */
+  td.link .lnk { display:flex; align-items:center; gap:2px; min-width:0; }
+  td.link .lnk a.link { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+  td.link .lnk button.ln { flex:0 0 auto; margin-left:0; }
   button.ok { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
   button.bad { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }
   /* modal result của bước — mở bằng click đúp ô B1/B2/B3 */
@@ -185,7 +189,7 @@ const COLS = [
   { key: "steps", label: "B0 B1 B2 B3 B4", w: 198, min: 192, align: "c" },
   { key: "img", label: "ảnh", w: 48, min: 40, align: "c" },
   { key: "status", label: "status", w: 66, min: 50, align: "c" },
-  { key: "link", label: "Link", w: 220, min: 90 },
+  { key: "link", label: "Link", w: 220, min: 90, tip: "Link bài của bạn đã đăng — chữ = mở bài, 📋 = copy nguyên link, ✎ = sửa link ngay tại ô" },
   { key: "act", label: "", w: 108, min: 96 },
 ];
 const COLS_KEY = "fbgrid:cols:v1";
@@ -1044,18 +1048,24 @@ function linkCell(row) {
   const td = el("td", "link");
   if (EDITING && String(EDITING.id) === String(row.id)) { linkEditor(row, td); return td; }
   const raw = String(row.link || "");
+  // Một hàng ba việc riêng: chữ = mở bài, 📋 = copy nguyên link, ✎ = sửa link.
+  // Link đã nằm sẵn trong row nên copy KHÔNG phải xin Python một lượt như ô B1/B3.
+  const line = el("div", "lnk");
   if (raw.trim()) {
     const a = el("a", "link", shortUrl(raw));
     a.href = raw;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     a.title = raw;
-    td.appendChild(a);
+    line.appendChild(a);
+    line.appendChild(button("📋", "Copy nguyên link đã đăng của " + row.id + " — dán thẳng, khỏi mở modal",
+      b => copyToClipboard(raw, ok => flash(b, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad")), "ln"));
   } else {
-    td.appendChild(el("span", "muted", "—"));
+    line.appendChild(el("span", "muted", "—"));  // chưa có link thì không vẽ nút copy — khỏi hứa một cú bấm rỗng
   }
-  td.appendChild(button("✎", (raw ? "Sửa link" : "Nhập link") + " của " + row.id,
+  line.appendChild(button("✎", (raw ? "Sửa link" : "Nhập link") + " của " + row.id,
     () => { EDITING = { id: String(row.id), value: raw }; repaint(); }, "ln"));
+  td.appendChild(line);
   return td;
 }
 
@@ -1609,7 +1619,7 @@ function render(args, force) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, đặt trong “📥 Import link…” · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ⋮ thêm thao tác (↗ trang Tạo bài · ✅ đã đăng · hàng đợi · 🗑 dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · ✎ ở cột Link để sửa link đã đăng · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
+    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, đặt trong “📥 Import link…” · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ⋮ thêm thao tác (↗ trang Tạo bài · ✅ đã đăng · hàng đợi · 🗑 dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · 📋 ở cột Link để copy nguyên link đã đăng (khỏi mở modal), ✎ để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
   root.appendChild(wrap);
   unmarkSent();
   const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này
