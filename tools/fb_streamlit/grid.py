@@ -33,6 +33,7 @@ APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt m�
 # mấy event này chỉ XEM nội dung (copy/mở modal), không sửa file -> khỏi đọc lại cả workspace
 READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"}
 PROV_DEFAULT_LABEL = "Theo preset"
+BUSY_STATES = {stories.RUNNING, ga.STALE}  # folder nói bước này đang có lượt gọi AI (chạy dở hoặc treo)
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
 PRESET_KEY = "ws_preset"  # cùng key cho Grid và trang Tạo bài: một widget, một ý nghĩa, một sự thật
 PRESET_NONE_LABEL = "— Chưa chọn (mỗi bài theo preset_id của nó) —"
@@ -592,10 +593,24 @@ def copy_blocks(ctx: ga.Ctx, sid: str) -> None:
 
 
 def mark_flow(rows: list[dict], snap: dict) -> list[dict]:
-    """Gắn bài nào đang/do luồng nền giữ vào dòng grid — state folder chỉ đổi sau khi gọi AI xong."""
+    """Gắn bài nào đang/do luồng nền giữ vào dòng grid — nhưng chỉ tô ĐÚNG bước đang chạy.
+
+    Việc ⚡ giao B1+B2+B3 cùng một lượt, còn luồng nền chỉ biết tới CẢ VIỆC chứ không biết
+    bước nào đang thực chạy -> nếu tin nguyên snapshot thì cả ba ô nhảy xanh dương hết khi mới
+    B1 bắt đầu ("chỉ đổi màu xanh dương B đang chạy chứ không đổi màu nguyên B1,B2,B3").
+    story.json mới là chỗ biết điều đó: mỗi bước ghi state `running` ngay trước khi gọi AI.
+    Nên "running" chỉ giữ khi folder nói đúng bước đó đang chạy (hoặc treo), các bước khác của
+    cùng việc vẫn tím nét đứt "đã giao, chờ tới lượt" — ▶ trong modal nhờ thế vẫn khóa.
+    """
     flow = snap["flow"]
     for row in rows:
-        row["flow"] = dict(flow.get(row["id"]) or {})
+        slot = dict(flow.get(row["id"]) or {})
+        states = row.get("states") or {}
+        for step, mark in slot.items():
+            real = str(row.get("b0") if step == "b0" else states.get(step) or "")
+            if mark == "running" and real not in BUSY_STATES:
+                slot[step] = "waiting"
+        row["flow"] = slot
     return rows
 
 

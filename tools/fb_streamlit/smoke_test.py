@@ -897,10 +897,27 @@ check("batch 12 bài -> cắt 3 lượt 5/5/2, mỗi event nằm trong giới h�
 jobs_all, _ = gr.job_for({"source": "run_all", "id": "story_004"}, p5b_root)
 check("run_all đánh dấu cả ba bước nên ô B1/B2/B3 cùng sáng khi chờ tới lượt",
       jobs_all[0].steps == ["b1", "b2", "b3"] and jobs_all[0].label == "story_004 · ⚡ đủ B1-B3")
-marked = fbgrid.mark_flow([{"id": "story_001", "states": {}}, {"id": "story_002", "states": {}}],
+marked = fbgrid.mark_flow([{"id": "story_001", "states": {"b1": stories.RUNNING}}, {"id": "story_002", "states": {}}],
                           {"flow": {"story_001": {"b1": "running"}}})
 check("mark_flow gắn state luồng nền vào dòng grid, bài khác để trống",
       marked[0]["flow"] == {"b1": "running"} and marked[1]["flow"] == {})
+# P14a: ⚡ giao cả ba bước một lượt nhưng luồng nền chỉ biết tới CẢ VIỆC — ô nào THỰC SỰ chạy
+# thì story.json mới biết, nên "running" phải bị hạ xuống "waiting" khi folder không nói vậy.
+w3 = fbgrid.mark_flow([{"id": "s", "states": {"b1": stories.RUNNING, "b2": "pending", "b3": "pending"}}],
+                      {"flow": {"s": {"b1": "running", "b2": "running", "b3": "running"}}})
+check("P14a việc ⚡ chỉ tô ĐÚNG B đang chạy xanh dương, hai B còn lại tím 'đã giao, chờ tới lượt'",
+      w3[0]["flow"] == {"b1": "running", "b2": "waiting", "b3": "waiting"})
+check("P14a bước treo (chạy quá 15 phút) vẫn là đang chạy — không bị hạ xuống chờ",
+      fbgrid.mark_flow([{"id": "s", "states": {"b2": ga.STALE}}],
+                       {"flow": {"s": {"b2": "running"}}})[0]["flow"] == {"b2": "running"})
+w0 = fbgrid.mark_flow([{"id": "s", "states": {}, "b0": stories.RUNNING},
+                       {"id": "t", "states": {}, "b0": stories.DONE}],
+                      {"flow": {"s": {"b0": "running"}, "t": {"b0": "running"}}})
+check("P14a B0 có state riêng trong story.json nên đối chiếu bằng row.b0, không phải row.states",
+      w0[0]["flow"] == {"b0": "running"} and w0[1]["flow"] == {"b0": "waiting"})
+check("P14a 'waiting' không bao giờ bị đụng tới — modal vẫn khóa ▶ cho bước đã giao việc",
+      fbgrid.mark_flow([{"id": "s", "states": {"b1": "pending"}}],
+                       {"flow": {"s": {"b1": "waiting"}}})[0]["flow"] == {"b1": "waiting"})
 
 # --- P6c: phanh luồng nền + một bài chỉ có MỘT nơi chạy ---
 started_c: list[str] = []
@@ -2000,6 +2017,8 @@ check("P8iii event SỬA file thì tick đó phải đọc lại folder — cach
 
 scan_count["n"] = 0
 p8_cap.clear()
+# P14a: flow chỉ được tô "running" khi folder nói đúng bước đó đang chạy — stub phải faithfully
+stories.set_step_state(p8_root, p8_show_sid, "b1", stories.RUNNING)
 fbgrid.RUNNER = _BusyRunner(_real_runner)
 _seed_cache(at_p8)
 at_p8.run()
@@ -2007,6 +2026,7 @@ check("P8iii luồng nền đang chạy thì mỗi tick (2s) đều đọc mới
       not at_p8.exception and scan_count["n"] == 1
       and any((r.get("flow") or {}).get("b1") == "running" for r in (p8_cap.get("rows") or [])))
 fbgrid.RUNNER = _real_runner
+stories.set_step_state(p8_root, p8_show_sid, "b1", stories.DONE)  # trả lại folder như cũ cho các block sau
 
 at_p8.session_state["grid_refresh"] = True
 scan_count["n"] = 0
