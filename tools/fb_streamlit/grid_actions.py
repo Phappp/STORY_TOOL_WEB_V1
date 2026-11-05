@@ -45,12 +45,12 @@ VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".wmv", ".flv
 # "Bài SEO (render)" = bản chữ sạch qua formats.to_plain — đúng thứ lưới hiện ra khi đang render.
 COPY_FIELDS = ("Caption", "Bài SEO", "Bài SEO (render)", "Input", "Link", "Bài SEO (Facebook)")
 # Bảng MỘT SỐ của các ô prompt trong modal: thêm một B ở đây là JS hiện theo, không phải đi sửa tên
-# chuỗi rải rác hay đoán theo tiền tố "Prompt". `open`/`copy` là hành vi UI: B1 mở sẵn vì anh hay copy
-# sang ChatGPT web, B2/B3 gập lại cho đỡ choáng. `copy` còn đi theo payload (copyable) để clipboard biết
-# trường nào thật sự được phép ghi — JS không tự phân biệt theo tên.
-PROMPT_SPECS = [{"step": "b1", "field": "Prompt B1", "open": True, "copy": True},
-                {"step": "b2", "field": "Prompt B2", "open": False, "copy": True},
-                {"step": "b3", "field": "Prompt B3", "open": False, "copy": True}]
+# chuỗi rải rác hay đoán theo tiền tố "Prompt". P20 bỏ luôn khóa `open`: prompt giờ là MỘT THẺ đứng
+# ngang thẻ kết quả nên không còn chuyện gập/mở. `copy` còn đi theo payload (copyable) để clipboard
+# biết trường nào thật sự được phép ghi — JS không tự phân biệt theo tên.
+PROMPT_SPECS = [{"step": "b1", "field": "Prompt B1", "copy": True},
+                {"step": "b2", "field": "Prompt B2", "copy": True},
+                {"step": "b3", "field": "Prompt B3", "copy": True}]
 PROMPT_FIELDS = {s["field"]: s["step"] for s in PROMPT_SPECS}  # modal hỏi bằng đúng tên ô (xem prompt_payload)
 # Ảnh không phải trường copy (nó đi image_payload, trả đường dẫn chứ không nhét base64 vào delta) —
 # modal xin gộp cả hai trong MỘT request (xem modal_payload), nên "Ảnh" cũng phải có trong bảng.

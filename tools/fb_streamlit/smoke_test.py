@@ -691,11 +691,11 @@ check("P17b ô B3 xin đúng trường Python biết render — tên lạc là b
       and "Bài SEO (render)" in ga.COPY_FIELDS)
 check("P17b mọi tên trường JS xin copy đều có trong COPY_FIELDS — không còn tên tự bịa",
       {f for f in re.findall(r'"(Caption|Bài SEO(?: \([^)]*\))?|Input|Link)"', _p17b_js)} <= set(ga.COPY_FIELDS))
-check("P17b modal B3 copy theo đúng thứ ĐANG HIỆN: nhãn nút nói tên bản, footer nói ô vuông luôn copy bản sạch",
-      'ref.tab === "b3" && SHOW_MD' in _p17b_js and 'SHOW_MD ? "bản đã render" : "markdown"' in _p17b_js
-      and "BẢN ĐÃ RENDER (chữ sạch, hết ## và **)" in _p17b_js
-      and 'ở ô B3 = copy bản đã render (chữ sạch, hết ## và **) bất kể modal đang hiện gì' in _p17b_js
-      and 'copy " + (SHOW_MD' not in _p17b_js)  # footer mà đổi chữ theo SHOW_MD là nó nói sai về ô vuông
+check("P17b modal B3 copy theo đúng thứ ĐANG HIỆN (P20: thành icon 📋 + nhãn ngay trong đầu thẻ B3)",
+      'tab === "b3" && SHOW_MD' in _p17b_js and 'copyName = (tab === "b3" && SHOW_MD) ? "Bài SEO (render)"' in _p17b_js
+      and 'SHOW_MD ? "bản đã render' in _p17b_js
+      and "B3 copy BẢN ĐÃ RENDER, chữ sạch hết ## và **" in _p17b_js  # dấu "?" đầu modal nói được ô vuông làm gì
+      and 'copy " + (SHOW_MD' not in _p17b_js)  # chữ giải thích mà đổi theo SHOW_MD là nó nói sai về ô vuông
 out = ga.apply_event(gctx, {"source": "image_request", "id": sid_ok, "request_id": "req-img"})
 data = (out.copy or {}).get("image") or ""
 check("image_request trả ĐƯỜNG DẪN file chứ không nhét base64 vào message (modal tải qua /media/)",
@@ -1331,7 +1331,7 @@ js_b4 = Path(__file__).resolve().parent.joinpath("grid_frontend", "index.html").
 check("P15b lưới có viên pill thứ 5: ô B4 cùng hàng B0-B3, cột đủ rộng cho 5 pill và có tab modal riêng",
       'const GRID_STEPS = ["b0", "b1", "b2", "b3", "b4"];' in js_b4
       and 'label: "B0 B1 B2 B3 B4", w: 198, min: 192' in js_b4
-      and '["b4", "B4 video"]' in js_b4)
+      and '["b4", "B4"]' in js_b4)  # P20: nhãn tab chỉ còn tên B
 check("P15b state ô B4 lấy từ row.b4 (state riêng như B0), bấm một lần là mở modal chứ không copy",
       'if (step === "b0" || step === "b4") return String(row[step] || "pending");' in js_b4
       and 'const preview = step === "b0" || step === "b2" || step === "b4";' in js_b4)
@@ -1342,7 +1342,8 @@ check("P15b sig pill + sig modal tính cả b4/b4meta/video/video_max — vá ô
       and "video_max: Number(args.video_max || 0)," in js_b4 and "video_max: MODEL.video_max," in js_b4)
 check("P15b modal B4 nói thẳng đường tải: lưới chỉ gửi id, bytes đi qua widget native (không qua iframe)",
       'send({ source: "b4_pick", id: row.id })' in js_b4
-      and "🎬 Chọn bài này để tải video" in js_b4 and "if (tab === \"b4\") {" in js_b4
+      and "🎬 Chọn bài này để tải video" in js_b4 and 'if (ref.tab === "b4") {' in js_b4
+      and 'if (tab === "b4") return [videoCard(row)];' in js_b4  # P20: B4 = một thẻ mô tả file, không xin nội dung
       and "tabField(tab) === \"b4\"" not in js_b4  # không có nội dung nào xin từ Python cho B4
       and '"b4"' not in str(fbgrid.READ_SOURCES))  # event sửa session_state -> vẽ lại cả trang, không phải tick rẻ
 check("P15b b4_pick được lưới bắt ở cấp app (video_form đứng NGOÀI fragment nên phải rerun cả trang)",
@@ -2300,16 +2301,17 @@ def _p17_fn(name):
     return _p17_js[i:_p17_js.index("\n}", i)]
 
 
-check("P17a modal dựng khối prompt NGAY DƯỚI kết quả, và chỉ cho tab có mặt trong bảng spec",
-      "promptBlock(row, ref.tab)" in _p17_fn("modalNode")
-      and _p17_js.index("modal.appendChild(modalBody") < _p17_js.index("const pb = promptBlock")
-      and "if (!spec) return null" in _p17_fn("promptBlock"))
+check("P17a thẻ prompt là MỘT THẺ đứng ngang thẻ kết quả (P20), và chỉ tab có mặt trong bảng spec mới được vẽ",
+      "promptCard(row, tab)" in _p17_fn("modalBody") and "promptBlock" not in _p17_js
+      and _p17_fn("modalBody").index("resultCards(row, tab, key).forEach")
+      < _p17_fn("modalBody").index("const pb = promptCard")
+      and "if (!spec) return null" in _p17_fn("promptCard"))
 check("P17a khóa cache prompt gắn thêm tên preset — sửa preset xong modal xin lại, không hiện bản cũ",
       "|preset=" in _p17_fn("contentKey") and "PROMPT_BY_FIELD" in _p17_fn("contentKey")
       and "row.preset" in _p17_fn("modalSig"))
-check("P17a JS dịch LẠI đúng bảng của Python (step + tên trường + open/copy) — thêm một B là sửa một bảng",
-      all('{step: "%s", field: "%s", open: %s, copy: %s}'
-          % (s["step"], s["field"], str(s["open"]).lower(), str(s["copy"]).lower()) in _p17_js
+check("P17a JS dịch LẠI đúng bảng của Python (step + tên trường + copy) — thêm một B là sửa một bảng",
+      all('{step: "%s", field: "%s", copy: %s}'
+          % (s["step"], s["field"], str(s["copy"]).lower()) in _p17_js
           for s in ga.PROMPT_SPECS)
       and [s["step"] for s in ga.PROMPT_SPECS] == ["b1", "b2", "b3"]
       and set(ga.PROMPT_FIELDS) == {s["field"] for s in ga.PROMPT_SPECS})
@@ -2435,8 +2437,9 @@ try:
           and "if src is None and refs:" not in _p17c_src
           and "--output-last-message" in _p17c_src)
     check("P17c modal B2 cũng in nguyên nhân thật (Ghi chú) — mở bài lên thấy vì sao ô đỏ, không thấy khoảng trống",
-          'const note = String((row.detail || {}).b2 || "");' in _p17_js
-          and _p17_js.count('if (note) body.appendChild(el("div", "muted", "Ghi chú: " + note));') >= 2)
+          'const detail = String((row.detail || {}).b2 || "");' in _p17_js
+          and "detail: detail" in _p17_js
+          and _p17_js.count('body.push(el("div", "muted", "Ghi chú: " ') >= 3)  # thẻ ảnh (2 nhánh) + thẻ video
 
     class _P17cResp:
         status_code = 400
@@ -2604,10 +2607,10 @@ def _p18_fn(name):
 check("P18a modal chỉ xin MỘT lần cho cả tab: ensureTab đứng đầu modalNode, không còn đường xin lẻ",
       "ensureTab(row, ref.tab)" in _p18_fn("modalNode") and "ensureContent" not in _p18_js
       and "ensurePrompt" not in _p18_js and "requestModal(row, ask)" in _p18_fn("ensureTab"))
-check("P18a phần vẽ body/prompt KHÔNG được gửi event — đó là chỗ từng làm mất request thứ hai",
-      "send(" not in _p18_fn("modalBody") + _p18_fn("promptBlock")
-      and "requestContent" not in _p18_fn("modalBody") + _p18_fn("promptBlock")
-      and "promptKey(row, tab)" in _p18_fn("promptBlock"))
+check("P18a phần vẽ thẻ kết quả/thẻ prompt KHÔNG được gửi event — đó là chỗ từng làm mất request thứ hai",
+      "send(" not in _p18_fn("modalBody") + _p18_fn("promptCard") + _p18_fn("resultCards")
+      and "requestContent" not in _p18_fn("modalBody") + _p18_fn("promptCard")
+      and "promptKey(row, tab)" in _p18_fn("promptCard"))
 check("P18a JS dịch lại đúng bảng của Python: mỗi tab B xin kết quả + prompt của chính B đó",
       'if (tab === "link") return []' in _p18_fn("tabFields")
       and "if (field) out.push(field);" in _p18_fn("tabFields")
@@ -2690,8 +2693,10 @@ check("P18c ← → trong modal KHÔNG cướp phím của ô chữ đang gõ (g
       and 'e.key === "ArrowRight"' in _keys_p18c[_p18c_arrow:_p18c_arrow + 60])
 check("P18c bài vừa mở bằng ← → cũng trở thành hàng đang chọn — ↑ ↓ bấm tiếp đi từ đúng chỗ anh đang xem",
       "CURSOR = String(target.id);" in _nav_p18c and "paintCursor();" in _nav_p18c)
-check("P18c chữ gợi ý của lưới + chân modal nói đủ phím ← → (biết là khỏi đoán)",
-      "← → trong modal đổi bài" in _js_p18c and "sang bài trước/kế trong đúng danh sách đang hiện, giữ nguyên tab" in _js_p18c)
+check("P18c chữ gợi ý của lưới + dấu ? đầu modal nói đủ phím ← → (biết là khỏi đoán)",
+      "← → trong modal đổi bài" in _js_p18c
+      and "sang bài trước/kế TRONG ĐÚNG danh sách đang hiện, giữ nguyên tab" in _js_p18c
+      and "helpChip([\"Cách dùng modal" in _js_p18c)  # P20: hướng dẫn dài rút vào ?, không còn footer
 
 # --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
 
@@ -2793,9 +2798,14 @@ check("P13b thẻ là một node pointer-events:none, z-index cao, ẩn hiện t
       and 'document.addEventListener("pointerout"' in js_p13
       and 'document.addEventListener("scroll", hideTip, true)' in js_p13
       and 'document.addEventListener("pointerdown", hideTip, true)' in js_p13)
-check("P13b thẻ không hiện khi modal đang mở và không che ô (lật về trái/ngửa khi chạm mép)",
-      "if (!raw || modalRef())" in js_p13 and "x - t.offsetWidth - 15" in js_p13
+check("P13b pill LƯỚI im khi modal mở (P20: dấu ? trong modal vẫn hiện — modal che pill nên thẻ vô ích) "
+      "và không che ô (lật về trái/ngửa khi chạm mép)",
+      'if (!raw || (modalRef() && !pill.closest(".modal")))' in js_p13 and "x - t.offsetWidth - 15" in js_p13
       and "y - t.offsetHeight - 17" in js_p13)
+check("P20 một cơ chế hover duy nhất: pill lưới lẫn dấu ? đều chỉ mang data-tip, không thêm listener riêng",
+      'function pillUnder(node) { return node && node.closest ? node.closest("[data-tip]") : null; }' in js_p13
+      and "pill.dataset.tip" in js_p13 and 'q.dataset.tip = lines.filter(Boolean).join("\\n")' in js_p13
+      and js_p13.count('addEventListener("pointerover"') == 1)
 check("P13b ô lỗi/treo/mất file thì thẻ đổi viền + màu chữ cảnh báo",
       'const SQ_WARN = ["error", "stale", "missing"];' in js_p13
       and 't.classList.toggle("warn", SQ_WARN.indexOf(pill.dataset.tipk) >= 0)' in js_p13)
@@ -3515,7 +3525,7 @@ try:
           and "chưa có mô tả" in _p19_rows[_p19_sid_cdx]["b2ref"])
     _js_p19 = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
     _sig_p19 = _js_p19[_js_p19.index("function modalSig"):_js_p19.index("\n}", _js_p19.index("function modalSig"))]
-    _blk_p19 = _js_p19[_js_p19.index("function promptBlock"):_js_p19.index("\n}", _js_p19.index("function promptBlock"))]
+    _blk_p19 = _js_p19[_js_p19.index("function promptCard"):_js_p19.index("\n}", _js_p19.index("function promptCard"))]
     check("P19a note refs vào chữ ký modal (cache đổi là vẽ lại) + chỉ vẽ ở tab B2, dùng textContent (không innerHTML)",
           "row.b2ref" in _sig_p19 and 'if (tab === "b2" && row.b2ref)' in _blk_p19
           and "note.textContent" in _blk_p19 and "innerHTML" not in _blk_p19)
@@ -3634,8 +3644,9 @@ check("P18d xóa trắng ô link rồi Lưu = xóa link thật trong story.json,
 _js18d = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
 _f18d = _js18d[_js18d.index("function linkBar"):_js18d.index("\n}", _js18d.index("function linkBar"))]
 _n18d = _js18d[_js18d.index("Object.keys(LINK_BARS)"):_js18d.index("modal.appendChild(modalBody")]
-check("P18d tab nào có ô link là do BẢNG LINK_BARS khai báo; modalNode chỉ duyệt bảng — không rải if theo tên tab",
-      'tabs: ["input", "b1", "b2", "b3", "link"]' in _js18d and 'tabs: ["b4"]' in _js18d
+check("P18d tab nào có ô link là do BẢNG LINK_BARS khai báo; modalNode chỉ duyệt bảng — không rải if theo tên tab "
+      "(P20: tab Input bị bỏ nên bar nằm ở b1/b2/b3/link)",
+      'tabs: ["b1", "b2", "b3", "link"]' in _js18d and 'tabs: ["b4"]' in _js18d
       and 'LINK_BARS[kind].tabs.indexOf(ref.tab) >= 0) modal.appendChild(linkBar(row, kind))' in _n18d)
 check("P18d một lối ghi duy nhất cho mỗi link: link đã đăng -> link_save (dùng lại của cột Link), "
       "link video -> b4_link_save, JS không tự đoán chỗ lưu",
@@ -3652,13 +3663,79 @@ check("P18d chữ link vào DOM bằng value/textContent, không innerHTML — l
 check("P18d b4link vào chữ ký modal (lưu xong ô phải hiện lại chữ mới) + có style riêng .mlink, không vẽ trần",
       "row.b4link" in _js18d[_js18d.index("function modalSig"):_js18d.index("\n}", _js18d.index("function modalSig"))]
       and ".mlink {" in _js18d)
-check("P18d tab Link thành bản tóm tắt đủ bốn thứ (đã đăng / nguồn / link video / file video) thay vì một chữ trơ",
-      '"Đã đăng: " + (row.link' in _js18d and '"Nguồn (B0): " + (row.source' in _js18d
-      and '"Link video (B4): " + (row.b4link' in _js18d and '"File video trong folder: " + (row.b4meta' in _js18d
-      and 'bấm ✎ ở cột Link để nhập' not in _js18d)
+check("P18d tab Link thành bản tóm tắt đủ bốn thứ (đã đăng / nguồn / link video / file video) — P20: mỗi thứ MỘT THẺ",
+      'linkCard("🔗 Đã đăng", row.link' in _js18d and 'linkCard("🧭 Nguồn (B0)", row.source' in _js18d
+      and 'linkCard("🎬 Link video (B4)", row.b4link' in _js18d
+      and 'linkCard("📁 File video trong folder", row.b4meta' in _js18d
+      and 'bấm ✎ ở cột Link để nhập' not in _js18d
+      and "if (tab === \"link\") return linkCards(row);" in _js18d)
 _p18d_conn.close()
 shutil.rmtree(_p18d_box, ignore_errors=True)
 # --- hết P18d ---
+
+# --- P20: modal = các THẺ + hướng dẫn trong dấu "?" (hover) + copy bằng icon, bỏ tab Input ---
+_js20 = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_css20 = _js20[_js20.index("<style>"):_js20.index("</style>")]
+_js20 = _js20[_js20.index("<script>"):]
+
+
+def _f20(name):
+    i = _js20.index("function " + name)
+    return _js20[i:_js20.index("\n}", i)]
+
+
+check("P20 nhãn tab chỉ còn TÊN B (B0 B1 B2 B3 B4 Link) — không còn 'Input', không lặp chữ viên pill đã nói",
+      'const TABS = [["b0", "B0"], ["b1", "B1"], ["b2", "B2"], ["b3", "B3"], ["b4", "B4"], ["link", "Link"]];' in _js20
+      and '["input"' not in _js20 and '"Input"' not in _f20("modalNode")
+      and not re.search(r'\["b[0-4]", "[A-Z0-9] .*"\]', _js20))
+check("P20 localStorage của anh còn ghi {\"tab\":\"input\"} từ bản cũ -> modalRef về B1, không hỏi Python trường không ai vẽ",
+      'const known = TABS.some(pair => pair[0] === tab);' in _f20("modalRef")
+      and 'tab: known ? tab : "b1"' in _f20("modalRef"))
+check("P20 một thẻ = một thứ: dispatcher tab -> danh sách thẻ, prompt là thẻ NGANG hàng chứ không phải khối dưới đáy",
+      'if (tab === "link") return linkCards(row);' in _f20("resultCards")
+      and 'if (tab === "b0") return b0Cards(row, key);' in _f20("resultCards")
+      and 'if (tab === "b2") return [b2Card(row, key)];' in _f20("resultCards")
+      and 'if (tab === "b4") return [videoCard(row)];' in _f20("resultCards")
+      and "promptCard(row, tab)" in _f20("modalBody") and "promptBlock" not in _js20)
+check("P20 B0 có HAI thẻ (caption + ảnh tham chiếu) — trước đây hai thứ này trộn trong một khối scroll",
+      _f20("b0Cards").count("card({") == 2 and "return [caption, refs];" in _f20("b0Cards")
+      and 'title: "🖊 Caption · input.txt"' in _f20("b0Cards")
+      and 'title: "🖼 Ảnh tham chiếu · refs/"' in _f20("b0Cards"))
+check("P20 hướng dẫn dài KHÔNG còn nằm trong mình modal: hết footer .mfoot, hết <details> prompt, chữ dồn vào data-tip",
+      "mfoot" not in _js20 and "details.prompt" not in _css20 and "<details>" not in _js20
+      and 'q.dataset.tip = lines.filter(Boolean).join("\\n")' in _f20("helpChip")
+      and "if (opts.help) hd.appendChild(helpChip(opts.help, opts.warn));" in _f20("card"))
+check("P20 dấu ? đi chung cơ chế hover của viên pill (P13b): không thêm listener, không poll riêng",
+      _js20.count('addEventListener("pointerover"') == 1 and "pillUnder" in _js20
+      and "helpChip([" in _f20("modalNode"))
+check("P20 'không scroll' nằm ở CSS chứ không phải chữ hứa: hàng thẻ bị chia theo chiều cao modal, chữ dài cuộn TRONG thẻ",
+      ".mbody.mcards { display:grid;" in _css20 and "grid-auto-rows:minmax(0,1fr)" in _css20
+      and "flex:1 1 auto; min-height:0; overflow:hidden; }" in _css20
+      and ".mcard .cbd {" in _css20 and "overflow:auto" in _css20[_css20.index(".mcard .cbd {"):_css20.index(".mcard textarea.ta")]
+      and "max-height:calc(100vh - 40px); display:flex; flex-direction:column;" in _css20)
+check("P20 copy trong thẻ là ICON (📋/↗/🔤) — hành động vẫn đúng một việc, chữ giải thích đi title + data-tip",
+      'button("📋", tip, bb => copyField(row, field, bb, flashId, true), "ico")' in _f20("copyIcon")
+      and 'el("a", "link ico open", "↗")' in _f20("openIcon")
+      and 'title: "📝 Prompt "' in _f20("promptCard") and "actions: actions" in _f20("promptCard"))
+check("P20 icon copy nhỏ đủ để hai thẻ nằm ngang không bị nuốt: button.b.ico thắng button.b (khai báo sau cùng lớp)",
+      "button.b.ico {" in _css20 and "a.link.ico {" in _css20 and ".qhelp {" in _css20)
+check("P20 chữ đã có sẵn trong hàng lưới (link/nguồn/file) copy TẠI CHỖ, không xin Python một lượt đọc vô ích",
+      "copyTextIcon(raw, " in _f20("linkCard") and "copyField" not in _f20("linkCard")
+      and "send(" not in _f20("linkCard") + _f20("linkCards") + _f20("videoCard"))
+check("P20 modal không còn hàng nút dài: thanh công cụ chỉ giữ ▶/provider/🎬 và chỉ vẽ khi thật có việc",
+      "if (tools.children.length) modal.appendChild(tools);" in _f20("modalNode")
+      and "modal.appendChild(modalBody" in _f20("modalNode")
+      and "Object.keys(LINK_BARS).forEach" in _f20("modalNode")
+      and "copyField" not in _f20("modalNode") and "copyIcon" not in _f20("modalNode"))
+check("P20 thẻ vẫn là DOM thật: chữ từ file/AI vào bằng textContent, không innerHTML trong đường vẽ thẻ",
+      "innerHTML" not in _f20("card") + _f20("textCard") + _f20("imageCard") + _f20("linkCard")
+      + _f20("b0Cards") + _f20("b2Card") + _f20("videoCard") + _f20("promptCard"))
+check("P20 vẽ lại vẫn giữ chỗ cuộn + con trỏ: modalBody giữ lớp .mbody (keepView soi .scroll,.mbody), "
+      "nháp B1/B3/B0 keyed theo nội dung chứ không mất khi đổi sang thẻ khác",
+      'const body = el("div", "mbody mcards");' in _f20("modalBody")
+      and 'document.querySelectorAll(".scroll,.mbody")' in _js20
+      and "DRAFT.has(key)" in _f20("textEditor"))
+# --- hết P20 ---
 
 # cleanup test rows
 c = db.connect()

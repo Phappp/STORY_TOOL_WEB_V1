@@ -66,7 +66,8 @@
   /* modal result của bước — mở bằng click đúp ô B1/B2/B3 */
   .overlay { position:fixed; inset:0; z-index:40; background:rgba(4,8,14,.66);
     display:flex; align-items:flex-start; justify-content:center; padding:20px 12px; }
-  .modal { background:var(--bg); border:1px solid var(--border); border-radius:10px; width:min(880px,100%);
+  /* P20: bản rộng hơn để hai thẻ nằm NGANG vừa chỗ — 880px chỉ đủ một cột nên ảnh + prompt thành hai màn cuộn */
+  .modal { background:var(--bg); border:1px solid var(--border); border-radius:10px; width:min(1120px,100%);
     max-height:calc(100vh - 40px); display:flex; flex-direction:column; box-shadow:0 14px 34px rgba(0,0,0,.5); }
   .mhead { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
   .mhead .mid { font-family:ui-monospace,Consolas,monospace; font-weight:600; }
@@ -97,17 +98,40 @@
   .save .upnote { color:var(--muted); font-size:12px; }
   .mbody img.photo { max-width:100%; border-radius:8px; border:1px solid var(--border); }
   .mbody .loading, .mbody .none { color:var(--muted); }
+  /* P20: modal chia THÀNH THẺ — mỗi thứ một ô (ảnh | prompt | link | file), hai ô nằm ngang nên thấy
+     cùng lúc hết mà không phải cuộn; chữ hướng dẫn rút khỏi mình modal, dồn vào dấu "?" ở góc từng thẻ.
+     `grid-auto-rows:minmax(0,1fr)` + `min-height:0` là chỗ "không scroll" nằm: các hàng bị chia đều
+     chiều cao còn lại của modal, thẻ nào chữ dài thì cuộn TRONG thẻ (.cbd), modal không bao giờ dài ra. */
+  .mbody.mcards { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+    grid-auto-rows:minmax(0,1fr); gap:10px; flex:1 1 auto; min-height:0; overflow:hidden; }
+  .mcard { display:flex; flex-direction:column; min-width:0; min-height:0; max-height:100%;
+    border:1px solid var(--border); border-radius:10px; background:var(--panel); }
+  .mcard.wide { grid-column:1 / -1; }
+  .mcard .chd { display:flex; gap:5px; align-items:center; padding:5px 7px; background:var(--header);
+    border-bottom:1px solid var(--border); border-radius:10px 10px 0 0; }
+  .mcard .chd .t { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    font-size:12px; font-weight:650; }
+  .mcard .chd .chip { flex:0 0 auto; }
+  .mcard .cbd { display:flex; flex-direction:column; gap:6px; padding:8px 9px; min-height:0; overflow:auto;
+    scrollbar-color:#3b4c63 var(--panel); }
+  .mcard textarea.ta { flex:1 1 auto; min-height:120px; }
+  .mcard img.photo { max-height:min(46vh,420px); object-fit:contain; align-self:center; }
+  .mcard .cbd pre.doc { max-height:100%; }
+  /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
+  button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
+  a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
+    flex:0 0 auto; border:1px solid var(--border); border-radius:6px; background:var(--btn); font-size:12px; }
+  a.link.ico:hover { background:var(--btn-h); text-decoration:none; }
+  /* Dấu "?" dẫn chữ: đi đúng đường thẻ hover của viên pill (P13b) — nó mang data-tip nên
+     delegated handler bắt được, không cần thêm listener riêng cho modal. */
+  .qhelp { flex:0 0 auto; width:19px; height:19px; border-radius:50%; border:1px solid var(--border);
+    background:var(--field); color:var(--muted); font-size:11px; font-weight:700; text-align:center;
+    line-height:18px; cursor:help; user-select:none; }
+  .qhelp:hover { color:var(--text); border-color:var(--accent); }
   .md p { margin:.45em 0; line-height:1.55; }
   .md h1, .md h2, .md h3, .md h4 { margin:.7em 0 .3em; font-size:15px; }
   .md ul, .md ol { margin:.4em 0 .4em 1.3em; padding:0; }
   .md code { background:var(--btn); border-radius:4px; padding:0 4px; }
-  .mfoot { padding:7px 10px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; background:var(--panel); }
-  details.prompt { border-top:1px solid var(--border); background:var(--panel); }
-  details.prompt > summary { cursor:pointer; padding:7px 12px; color:var(--muted); font-size:12px; list-style:none; }
-  details.prompt > summary::-webkit-details-marker { display:none; }
-  details.prompt .pbody { padding:0 12px 10px; display:flex; flex-direction:column; gap:6px; }
-  details.prompt .pbody pre.doc { margin:0; white-space:pre-wrap; word-break:break-word; font:inherit; line-height:1.5;
-    background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px 9px; max-height:320px; overflow:auto; }
   .chip { display:inline-block; min-width:52px; text-align:center; padding:2px 6px; border-radius:999px;
     font-size:11px; font-weight:650; background:var(--pending); color:var(--pending-t); cursor:default;
     border:1px solid var(--pending-b); }
@@ -214,15 +238,17 @@ const REF_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 // Bấm 1 lần ở ô B3 = copy bản ĐÃ RENDER (chữ sạch, hết ## và **) — thứ anh nhìn thấy trong modal,
 // không phải nguyên văn seo.md; muốn markdown thì mở modal, tắt chế độ render rồi bấm Copy ở đó.
 const STEP_FIELD = { b1: "Caption", b3: "Bài SEO (render)" };
-const TABS = [["b0", "B0 trích"], ["input", "Input"], ["b1", "B1 caption"], ["b2", "B2 ảnh"], ["b3", "B3 SEO"], ["b4", "B4 video"], ["link", "Link"]];
-const TAB_FIELD = { b0: "B0 preview", input: "Input", b1: "Caption", b3: "Bài SEO" };  // nội dung xin từ Python cho từng tab
-const TAB_COPY = { b0: "Input", input: "Input", b1: "Caption", b3: "Bài SEO" };        // tab B0 copy đúng caption trong input.txt
+// P20: nhãn tab chỉ còn TÊN B — "B0 trích"/"B1 caption" lặp lại đúng cái viên pill đã nói, còn tab
+// "Input" là bản sao read-only của input.txt mà tab B0 đã sửa được tại chỗ -> bỏ, khỏi hai chỗ một thứ.
+const TABS = [["b0", "B0"], ["b1", "B1"], ["b2", "B2"], ["b3", "B3"], ["b4", "B4"], ["link", "Link"]];
+const TAB_FIELD = { b0: "B0 preview", b1: "Caption", b3: "Bài SEO" };  // nội dung xin từ Python cho từng tab
+const TAB_COPY = { b0: "Input", b1: "Caption", b3: "Bài SEO" };        // tab B0 copy đúng caption trong input.txt
 /** Bảng MỘT SỐ của khối prompt trong modal — ĐÚNG bảng Python phát (grid_actions.PROMPT_SPECS):
     thêm một B là sửa bảng này, không phải rải tên chuỗi hay đoán theo tiền tố "Prompt".
-    Python là nơi định nghĩa; check P17a bắt JS dịch lại đúng step/field/open/copy đó. */
-const PROMPT_SPECS = [{step: "b1", field: "Prompt B1", open: true, copy: true},
-                      {step: "b2", field: "Prompt B2", open: false, copy: true},
-                      {step: "b3", field: "Prompt B3", open: false, copy: true}];
+    Python là nơi định nghĩa; check P17a bắt JS dịch lại đúng step/field/copy đó. */
+const PROMPT_SPECS = [{step: "b1", field: "Prompt B1", copy: true},
+                      {step: "b2", field: "Prompt B2", copy: true},
+                      {step: "b3", field: "Prompt B3", copy: true}];
 const PROMPT_FIELD = {};     // tab -> tên trường xin Python (prompt không có file nào — dựng lại từ preset+chữ)
 const PROMPT_BY_FIELD = {};  // ngược lại: trường -> spec, để contentKey clipboard biết là prompt mà không so tên
 PROMPT_SPECS.forEach(s => { PROMPT_FIELD[s.step] = s.field; PROMPT_BY_FIELD[s.field] = s; });
@@ -232,12 +258,11 @@ const LINK_DRAFT = new Map();  // "id|link" -> chữ đang gõ ở ô Link (P18d
                                // batch chạy làm updated_at đổi liên tục, nháp link đang gõ dở mà mất là lỗi.
 const IMAGES = new Map();   // "id|Ảnh|dấu_mốc_file" -> data URL
 const NOTES = new Map();    // "id|field|dấu_mốc_file" -> dòng giải thích (trống/chưa có ảnh) — chặn xin lại vòng vô hạn
-const WAITING = new Map();  // request_id -> {keys|key, fields|field, id, mode, flash, at} — chờ response về
+const WAITING = new Map();  // request_id -> {keys|key, fields|field, id, mode, flash, short, at} — chờ response về
 const WAIT_EXPIRE_MS = 6000;  // response lạc (Streamlit chỉ chuyển 1 event/lượt) -> quá hạn thì xin lại, đừng để modal kẹt "đang đọc"
 let FLASH = null;           // {sel, label, cls, at} — nút vừa vẽ xong sẽ nhận nhãn "đã copy"
-let COPY_NOW = null;        // {text, flash} — response xin copy vừa về, ghi vào clipboard sau khi DOM vẽ xong
+let COPY_NOW = null;        // {text, flash, short} — response xin copy vừa về, ghi vào clipboard sau khi DOM vẽ xong
 let SHOW_MD = true;         // tab B3: hiển thị markdown đã render hay để nguyên chữ
-let PROMPT_OPEN = {};       // tab -> khối prompt đang gập hay mở (mặc định theo spec.open) — modal dựng lại vẫn giữ chỗ anh đang xem
 let LAST_ARGS = "";         // chữ ký payload lần vẽ trước — tick nào không có gì đổi thì bỏ qua, khỏi vẽ lại
 let LAST_H = 0;             // chiều cao iframe vừa xin Streamlit lần gần nhất (0 = chưa xin)
 // Bộ nhớ cho lối vẽ "vá tại chỗ" (P8i, học từ grid status legacy FX97): giữ lại cây lưới đang có và
@@ -424,12 +449,13 @@ function findRow(id) { return rows().find(r => String(r.id) === String(id)) || n
 function tabField(tab) { return tab === "b2" ? "Ảnh" : (TAB_FIELD[tab] || ""); }
 
 // Xin nội dung/ảnh từ Python (component không tự đọc file) — ghi cache theo dấu mốc của folder story.
-function requestContent(row, field, mode, flashId) {
+// `short` = nút copy chỉ là một ICON: nhãn báo phải gọn một ký tự, dài là méo đầu thẻ.
+function requestContent(row, field, mode, flashId, short) {
   const rid = eventId();
   const key = contentKey(row, field);
   NOTES.delete(key);
   WAITING.set(rid, { keys: [key], key: key, fields: [field], field: field,
-                     id: String(row.id), mode: mode, flash: flashId || "", at: Date.now() });
+                     id: String(row.id), mode: mode, flash: flashId || "", short: !!short, at: Date.now() });
   const source = mode === "copy" ? "copy_request"
     : (field === "Ảnh" ? "image_request" : (field === TAB_FIELD.b0 ? "b0_request" : "content_request"));
   send({ source: source, id: row.id, field: field, request_id: rid });
@@ -489,8 +515,8 @@ function ingestResponse() {
   if (mode !== "copy") return;
   if (r.copyable === false) return;  // Python nói trường này không ra clipboard được thì thôi, JS không tự đoán theo tên
   const text = String(r.text || "");
-  if (!text.trim()) { flashSel(wait ? wait.flash : "", "trống", "bad"); return; }
-  COPY_NOW = { text: text, flash: (wait && wait.flash) || "" };
+  if (!text.trim()) { flashSel(wait ? wait.flash : "", wait && wait.short ? "✕" : "trống", "bad"); return; }
+  COPY_NOW = { text: text, flash: (wait && wait.flash) || "", short: !!(wait && wait.short) };
 }
 
 // Lô modal: {items:[{field,...}]} — mỗi phần tử một trường đã đọc được, hoặc lý do không đọc được.
@@ -531,7 +557,10 @@ function finishCopy() {
   const job = COPY_NOW;
   if (!job) return;
   COPY_NOW = null;
-  copyToClipboard(job.text, ok => flashSel(job.flash, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad"));
+  // Nhãn báo trên ICON chỉ được một ký tự, dài là méo đầu thẻ — chữ giải thích đã có ở title và thẻ "?".
+  const yes = job.short ? "✓" : "✓ đã copy";
+  const no = job.short ? "✕" : "không copy được";
+  copyToClipboard(job.text, ok => flashSel(job.flash, ok ? yes : no, ok ? "ok" : "bad"));
 }
 
 // Bấm 1 lần = copy (không có gì để copy thì nói rõ), bấm 2 lần = mở modal xem kết quả.
@@ -542,12 +571,36 @@ function splitClick(single, double) {
     timer = setTimeout(() => { timer = null; single(b); }, DUBBLE_MS);
   };
 }
-function copyField(row, field, b, flashId) {
+function copyField(row, field, b, flashId, short) {
+  const yes = short ? "✓" : "✓ đã copy", no = short ? "✕" : "không copy được";
   const cached = CONTENT.get(contentKey(row, field));
-  if (cached != null) { copyToClipboard(String(cached), ok => flash(b, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad")); return; }
-  if (row.copyable && row.copyable[field] === false) { flash(b, "trống", "bad"); return; }
-  requestContent(row, field, "copy", flashId);
+  if (cached != null) { copyToClipboard(String(cached), ok => flash(b, ok ? yes : no, ok ? "ok" : "bad")); return; }
+  if (row.copyable && row.copyable[field] === false) { flash(b, short ? "✕" : "trống", "bad"); return; }
+  requestContent(row, field, "copy", flashId, short);
   flash(b, "…", "");
+}
+
+// P20: copy trong đầu thẻ là ICON 📋 một mình — chữ "Copy prompt" dài chiếm hết chỗ của thẻ bên cạnh,
+// mà công việc vẫn đúng một việc: lấy nguyên văn thứ đang hiện. Giải thích đã có ở title và dấu "?".
+function copyIcon(row, field, flashId, tip) {
+  const b = button("📋", tip, bb => copyField(row, field, bb, flashId, true), "ico");
+  b.dataset.flash = flashId;
+  return b;
+}
+// Chữ đã nằm sẵn trong hàng lưới (link, nguồn) thì copy tại chỗ, KHÔNG xin Python một lượt.
+function copyTextIcon(value, flashId, tip) {
+  const b = button("📋", tip, bb => copyToClipboard(String(value), ok => flash(bb, ok ? "✓" : "✕", ok ? "ok" : "bad")), "ico");
+  b.dataset.flash = flashId;
+  return b;
+}
+function openIcon(url, tip) {
+  const a = el("a", "link ico open", "↗");
+  a.href = String(url);
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.title = tip;
+  a.addEventListener("click", e => e.stopPropagation());
+  return a;
 }
 
 function stateOf(row, step) {
@@ -608,7 +661,12 @@ function stepsCell(row) {
 function modalRef() {
   let raw = null;
   try { raw = JSON.parse(lsGet(MODAL_KEY) || "null"); } catch (_) { raw = null; }
-  return raw && raw.id ? { id: String(raw.id), tab: String(raw.tab || "b1") } : null;
+  if (!raw || !raw.id) return null;
+  // P20: tab "input" đã bỏ, nhưng localStorage của anh vẫn có thể đang ghi {"tab":"input"} từ lần
+  // trước — tab không còn trong TABS thì về B1, không phải để modal hỏi một trường không ai vẽ.
+  const tab = String(raw.tab || "b1");
+  const known = TABS.some(pair => pair[0] === tab);
+  return { id: String(raw.id), tab: known ? tab : "b1" };
 }
 function setModal(ref) { lsSet(MODAL_KEY, ref ? JSON.stringify(ref) : ""); }
 function openModal(id, tab) { setModal({ id: String(id), tab: tab || "b1" }); repaint(); }
@@ -700,48 +758,144 @@ function clearTabCache(row, tab, keepDraft) {
   });
 }
 
+// ---- P20: thẻ trong modal. Một thẻ = MỘT thứ (chữ | ảnh | prompt | file | link). ----
+// Đầu thẻ mang tên + trạng thái + icon hành động + dấu "?" dẫn chữ; nội dung cuộn TRONG thẻ,
+// nên hai thẻ nằm ngang thấy hết cùng lúc mà modal không phải kéo lên kéo xuống.
+function helpChip(lines, warn) {
+  const q = el("span", "qhelp", "?");
+  q.dataset.tip = lines.filter(Boolean).join("\n");  // đúng khuôn thẻ của viên pill (P13b): dòng đầu là tiêu đề
+  q.setAttribute("aria-label", String(lines[0] || "hướng dẫn"));
+  if (warn) q.dataset.tipk = warn;  // lỗi/treo/mất file -> thẻ viền đỏ như ngoài lưới
+  return q;
+}
+function card(opts) {
+  const box = el("div", "mcard" + (opts.wide ? " wide" : ""));
+  const hd = el("div", "chd");
+  hd.appendChild(el("span", "t", opts.title));
+  if (opts.state) hd.appendChild(el("span", "chip " + opts.state, STATE_LABEL[opts.state] || opts.state));
+  (opts.actions || []).forEach(n => { if (n) hd.appendChild(n); });
+  if (opts.help) hd.appendChild(helpChip(opts.help, opts.warn));
+  box.appendChild(hd);
+  const body = el("div", "cbd");
+  (opts.body || []).forEach(n => { if (n) body.appendChild(n); });
+  box.appendChild(body);
+  return box;
+}
+function imgNode(src, alt) {
+  const img = document.createElement("img");
+  img.className = "photo";
+  img.alt = alt;
+  img.src = src;
+  return img;
+}
+function toggleMdIcon() {
+  return button("🔤", SHOW_MD ? "Đang hiện BẢN ĐÃ RENDER — bấm để xem nguyên văn markdown trong seo.md"
+    : "Đang hiện MARKDOWN GỐC — bấm để xem bản đã render (chữ sạch)", () => { SHOW_MD = !SHOW_MD; repaint(); }, "ico");
+}
+
 // Prompt không nằm trong folder bài: Python ghép lại đúng chuỗi sẽ gửi AI (steps.step_prompt), nên
 // mở tab là xin một lần theo preset đang áp dụng — anh copy nguyên khối dán sang ChatGPT web được.
 // Xin là việc của ensureTab (một request cho cả tab); ở đây chỉ tính khóa để đọc cache.
-function promptSpec(tab) { return PROMPT_BY_FIELD[PROMPT_FIELD[tab]] || null; }  // tab không có prompt -> null, khỏi vẽ khối rỗng
+function promptSpec(tab) { return PROMPT_BY_FIELD[PROMPT_FIELD[tab]] || null; }  // tab không có prompt -> null, khỏi vẽ thẻ rỗng
 function promptKey(row, tab) {
   const spec = promptSpec(tab);
   return spec ? contentKey(row, spec.field) : "";
 }
 
-function promptBlock(row, tab) {
+function promptCard(row, tab) {
   const spec = promptSpec(tab);
-  if (!spec) return null;  // tab B0/Input/Link/B4 không có prompt — đừng vẽ khối rỗng
+  if (!spec) return null;  // tab B0/Link/B4 không có prompt — đừng vẽ thẻ rỗng
   const field = spec.field;
   const key = promptKey(row, tab);
-  const box = el("details", "prompt");
-  box.open = PROMPT_OPEN[tab] === undefined ? spec.open : PROMPT_OPEN[tab];
-  box.addEventListener("toggle", () => { PROMPT_OPEN[tab] = box.open; });  // modal dựng lại thì vẫn giữ đúng chỗ anh đang xem
-  box.appendChild(el("summary", null, "📝 Prompt " + (STEP_TITLE[tab] || tab) + " — nguyên khối sẽ gửi AI, copy dán sang ChatGPT web"));
-  const inner = el("div", "pbody");
   const text = CONTENT.get(key);
+  const body = [];
   if (text == null) {
-    inner.appendChild(el("div", "loading", NOTES.get(key) || "… đang ghép prompt từ preset + chữ trong folder bài"));
+    body.push(el("div", "loading", NOTES.get(key) || "… đang ghép prompt từ preset + chữ trong folder bài"));
   } else {
-    if (spec.copy) {  // bảng Python nói trường nào được phép ra clipboard — JS chỉ tuân, không đoán theo tên
-      const cp = button("📋 Copy prompt", "Copy đúng nguyên văn prompt " + (STEP_TITLE[tab] || tab)
-        + " — gồm cả khối dữ liệu đã thay <TOKEN>, không có gì thêm/bớt",
-        b => copyField(row, field, b, "modal:prompt"), "act");
-      cp.dataset.flash = "modal:prompt";
-      inner.appendChild(cp);
-    }
-    inner.appendChild(el("pre", "doc", String(text)));
     if (tab === "b2" && row.b2ref) {  // P19a: cho biết ảnh refs của bài nằm ở đâu trong bức tranh —
       // thiếu dòng này thì anh thấy prompt không có gì về ảnh gốc mà không biết bộ có nhìn ảnh hay không
       const note = el("div", "muted");
       note.textContent = "🔎 Ảnh tham chiếu: " + String(row.b2ref);
-      inner.appendChild(note);
+      body.push(note);
     }
-    inner.appendChild(el("div", "muted", "Prompt này do tool ghép lại từ preset đang áp dụng ("
-      + (String(row.preset || "") || "preset của bài") + ") + nội dung trong folder — không phải chữ đã lưu lúc chạy."));
+    body.push(el("pre", "doc", String(text)));
   }
-  box.appendChild(inner);
-  return box;
+  const actions = [];
+  if (spec.copy && text != null) {  // bảng Python nói trường nào được phép ra clipboard — JS chỉ tuân, không đoán theo tên
+    actions.push(copyIcon(row, field, "modal:prompt", "Copy đúng nguyên văn prompt " + (STEP_TITLE[tab] || tab)
+      + " — gồm cả khối dữ liệu đã thay <TOKEN>, không có gì thêm/bớt"));
+  }
+  return card({
+    title: "📝 Prompt " + tab.toUpperCase(),
+    actions: actions,
+    help: ["Prompt " + (STEP_TITLE[tab] || tab) + " — nguyên khối sẽ gửi AI",
+      "Tool GHÉP LẠI từ preset đang áp dụng (" + (String(row.preset || "") || "preset của bài")
+        + ") + chữ đang có trong folder bài, KHÔNG phải chữ đã lưu lúc chạy trước.",
+      "Copy rồi dán sang ChatGPT web là ra kết quả như bấm ▶ Chạy bước này."],
+    body: body,
+  });
+}
+
+// B1/B3: một thẻ chữ sửa được tại chỗ + (nếu có) prompt đứng cạnh.
+function textCard(row, tab, key) {
+  const cfg = EDITORS[tab];
+  const field = tabField(tab);
+  const state = stateOf(row, tab);
+  const detail = String((row.detail || {})[tab] || "");
+  const flow = flowNote(row, tab);
+  const text = CONTENT.get(key);
+  const body = [];
+  if (text == null) {
+    // file trống thì Python không trả payload nào — B1/B3 vẫn phải mở được ô chữ để gõ từ đầu
+    if (cfg && row.copyable && row.copyable[field] === false) body.push(textEditor(row, key, tab, ""));
+    else body.push(el("div", "loading", NOTES.get(key) || "… đang đọc nội dung từ folder story"));
+  } else if (tab === "b3" && SHOW_MD) {
+    const md = el("div");
+    renderMarkdown(String(text), md);
+    body.push(md);
+  } else if (cfg) body.push(textEditor(row, key, tab, String(text)));
+  else body.push(el("pre", "doc", String(text)));
+  const copyName = (tab === "b3" && SHOW_MD) ? "Bài SEO (render)" : (TAB_COPY[tab] || field);
+  const actions = [];
+  if (text != null && copyName) {
+    actions.push(copyIcon(row, copyName, "modal:copy:" + tab, tab === "b3"
+      ? "Copy " + (SHOW_MD ? "bản đã render — chữ sạch, hết ## và **" : "nguyên văn markdown") + " đang hiện trong thẻ này"
+      : "Copy nguyên văn " + (STEP_TITLE[tab] || tab) + " đang hiện trong thẻ này"));
+  }
+  if (tab === "b3") {
+    actions.push(copyIcon(row, "Bài SEO (Facebook)", "modal:fb",
+      "Copy bản in đậm unicode (không còn dấu ** và ##) — dán thẳng lên Facebook"));
+    actions.push(toggleMdIcon());
+  }
+  return card({
+    title: (STEP_TITLE[tab] || tab) + (cfg ? " · " + cfg.file : "")
+      + (tab === "b3" ? " — " + (SHOW_MD ? "đang render" : "markdown gốc") : ""),
+    state: state,
+    actions: actions,
+    warn: SQ_WARN.indexOf(state) >= 0 ? state : "",
+    help: [(STEP_TITLE[tab] || tab) + " · " + (cfg ? cfg.file : "folder bài"),
+      cfg ? "Sửa tay rồi bấm “" + cfg.label + "” — ghi thẳng vào " + cfg.file + " của " + row.id + "; " + cfg.over + "." : "",
+      "Bấm 1 lần ở ô " + tab.toUpperCase() + " ngoài lưới copy " + (tab === "b3" ? "bản đã render (chữ sạch)" : "đúng thứ đang hiện") + ".",
+      flow ? "Luồng nền: " + flow : "",
+      detail ? "Đang lỗi/thiếu: " + detail : "",
+      String((row.hint || {})[tab] || "")].filter(Boolean),
+    body: body,
+  });
+}
+
+// Ảnh B2 + ảnh refs B0 dùng chung một thẻ: ảnh thật, hoặc lý do chưa có ảnh.
+function imageCard(row, key, o) {
+  const src = IMAGES.get(key);
+  const body = [];
+  if (!src) {
+    body.push(el("div", "loading", NOTES.get(key) || o.loading));
+    if (o.detail) body.push(el("div", "muted", "Ghi chú: " + o.detail));
+  } else {
+    body.push(imgNode(src, o.alt));
+    if (o.detail) body.push(el("div", "muted", "Ghi chú: " + o.detail));
+  }
+  if (o.extra) body.push(o.extra);
+  return card({ title: o.title, state: o.state, actions: o.actions || [], warn: SQ_WARN.indexOf(o.state) >= 0 ? o.state : "", help: o.help, body: body });
 }
 
 function mdInline(node, text) {
@@ -762,7 +916,7 @@ function mdInline(node, text) {
 }
 // B3 trả về markdown: chỉ dựng node thật (không innerHTML) nên chữ AI sinh không chèn được script.
 function renderMarkdown(text, box) {
-  box.classList.add("md");  // giữ luôn lớp mbody (padding + cuộn) của khung nội dung
+  box.classList.add("md");  // thẻ .cbd mới là chỗ cuộn; khối này chỉ mang kiểu chữ markdown
   let list = null;
   String(text || "").split(/\r?\n/).forEach(line => {
     const t = line.trim();
@@ -794,7 +948,7 @@ const EDITORS = {
 // rồi bấm ✎ ở cột); link video chỉ hiện ở tab B4 vì nó không phải thứ cần nhìn khi xem chữ.
 const LINK_BARS = {
   link: { label: "🔗 Link đã đăng", source: "link_save", stored: "story.json · link",
-          tabs: ["input", "b1", "b2", "b3", "link"],
+          tabs: ["b1", "b2", "b3", "link"],
           help: "Link bài của bạn đã đăng — Enter để lưu, lưới và cột Link đổi theo" },
   b4link: { label: "🎬 Link video", source: "b4_link_save", stored: "story.json · b4.link",
           tabs: ["b4"],
@@ -859,7 +1013,6 @@ function textEditor(row, key, tab, loaded) {
   ta.addEventListener("input", () => { DRAFT.set(key, ta.value); sync(); });
   ta.addEventListener("click", e => e.stopPropagation());
   bar.appendChild(save);
-  if (tab === "b0") bar.appendChild(refPicker(row, note));
   bar.appendChild(note);
   sync();
   box.appendChild(bar);
@@ -920,86 +1073,126 @@ function linkBar(row, kind) {
   return bar;
 }
 
+// P20: modal = ĐẦU MỘT BÀI + các thanh sửa nhanh + CÁC THẺ nội dung. Hướng dẫn dài rút hết
+// vào dấu "?" ở góc thẻ, footer chữ văng vẳng cuối modal cũng bỏ luôn —modal ngắn đi một nửa.
+function mib(bytes, dflt) { return Math.round(Number(bytes || 0) / 1048576) || dflt; }
+
+function b2Card(row, key) {
+  const detail = String((row.detail || {}).b2 || "");
+  return imageCard(row, key, {
+    title: "🖼 Ảnh B2 · image.png",
+    state: stateOf(row, "b2"),
+    alt: "Ảnh B2 của " + row.id,
+    detail: detail,
+    loading: "… đang đọc ảnh từ folder story",
+    help: ["Ảnh B2 · image.png trong folder bài",
+      "Ô chỉ lên xanh khi file image.png thật sự có trong folder — xóa file ngoài ổ đĩa thì ô về cam “mất file”.",
+      detail ? "Bộ tạo ảnh báo: " + detail : "",
+      "Ảnh lớn quá trần " + mib(MODEL.image_max, 2) + " MB thì modal không mở được — xem trực tiếp trong folder bài."],
+  });
+}
+
+function b0Cards(row, key) {
+  const cap = CONTENT.get(key);
+  const shown = cap == null ? "" : String(cap);
+  const loading = cap == null && !IMAGES.get(key);  // chưa xin được gì về -> còn "đang đọc", chưa bảo file trống
+  const detail = String((row.detail || {}).b0 || "");
+  const state = stateOf(row, "b0");
+  const note = el("div", "muted");
+  const src = IMAGES.get(key);
+  const caption = card({
+    title: "🖊 Caption · input.txt", state: state,
+    warn: SQ_WARN.indexOf(state) >= 0 ? state : "",
+    actions: [copyIcon(row, TAB_COPY.b0, "modal:b0cap",
+      "Copy caption đang có trong input.txt — bản nháp chưa lưu thì bấm “💾 Lưu caption” trước")],
+    help: ["Caption B0 · input.txt của " + row.id,
+      row.b0meta || "",
+      "Sửa tay rồi bấm “💾 Lưu caption” — B0 KHÔNG đè bản sửa tay; muốn trích lại từ link thì xóa input.txt trước.",
+      cap != null && !shown.trim() ? "input.txt đang trống — gõ caption tay, hoặc bấm “▶ Trích lại B0” ở thanh trên để lấy từ link." : "",
+      detail ? "Đang lỗi/thiếu: " + detail : ""],
+    body: loading ? [el("div", "loading", "… đang đọc caption + ảnh từ folder story")]
+      : [textEditor(row, key, "b0", shown)],
+  });
+  const refs = card({
+    title: "🖼 Ảnh tham chiếu · refs/",
+    help: ["Ảnh tham chiếu của B0 nằm trong " + row.id + "\\refs\\ (tên bắt đầu “ref_”)",
+      "Muốn thêm tại chỗ thì bấm ô chọn file — ảnh đi base64 qua lưới, trần " + mib(MAX_UPLOAD, 4) + " MB/ảnh.",
+      "Ảnh có vào được prompt B2 hay không là chuyện của tab B2: xem thẻ 📝 Prompt B2 (mô tả Vision nếu bộ API được phép nhìn ảnh)."],
+    body: loading ? [el("div", "loading", "… đang đọc caption + ảnh từ folder story")]
+      : [src ? imgNode(src, "Ảnh tham chiếu B0 của " + row.id)
+        : el("div", "muted", "chưa có ảnh tham chiếu — hoặc bấm ô chọn file, hoặc chép thẳng vào " + row.id + "\\refs\\"),
+        refPicker(row, note), note],
+  });
+  return [caption, refs];
+}
+
+function videoCard(row) {
+  const state = stateOf(row, "b4");
+  const detail = String((row.detail || {}).b4 || "");
+  const body = [el("div", null, row.b4meta ? "Video đang có: " + row.b4meta
+    : "Bài này chưa có video trong folder.")];
+  if (detail) body.push(el("div", "muted", "Ghi chú: " + detail));
+  return card({
+    title: "🎬 Video trong folder · video.*", state: state,
+    warn: SQ_WARN.indexOf(state) >= 0 ? state : "",
+    help: ["B4 là bước tải tay — không có AI, không vào hàng đợi, không ảnh hưởng ⚡",
+      "1. Bấm “🎬 Chọn bài này để tải video” ở thanh trên, mục “🎬 B4 · Video” ngay phía trên lưới sẽ mở sẵn " + row.id + ".",
+      "2. Chọn file từ ổ đĩa rồi bấm Lưu — file ghi vào folder bài thành `video.<đuôi>`; một bài giữ MỘT video nên tải file mới là ghi đè.",
+      "Ô B4 chỉ lên xanh khi folder THẬT SỰ có file. Ô 🎬 Link video dưới đầu modal chỉ là chữ trong story.json — nó không đổi màu ô.",
+      "Trần của ô tải lên: " + mib(MODEL.video_max, 200) + " MB — video lớn hơn thì chép thẳng vào folder bài.",
+      "Lưới không phát video (file quá lớn để gửi qua iframe) — muốn xem thì mở folder bài."],
+    body: body,
+  });
+}
+
+function linkCard(title, value, missing, canOpen, help) {
+  const raw = String(value || "");
+  const actions = [];
+  if (raw) {
+    actions.push(copyTextIcon(raw, "modal:link:" + title, "Copy nguyên chữ này — khỏi mở, khỏi xóa chữ trong ô"));
+    if (canOpen) actions.push(openIcon(raw, "Mở " + raw));
+  }
+  return card({ title: title, actions: actions, help: help,
+    body: [raw ? el("div", null, raw) : el("div", "muted", missing)] });
+}
+
+function linkCards(row) {
+  return [
+    linkCard("🔗 Đã đăng", row.link, "(chưa có — gõ ở ô 🔗 phía trên rồi Enter)", true,
+      ["Link bài của bạn đã đăng — storage: story.json · link",
+       "Sửa tại chỗ: gõ ở ô 🔗 ngay dưới đầu modal, Enter là lưu, lưới và cột Link đổi theo.",
+       "📋 = copy nguyên link, ↗ = mở đúng bài."]),
+    linkCard("🧭 Nguồn (B0)", row.source, "(chưa có — bài chưa import link)", true,
+      ["Link nguồn mà B0 đọc để lấy caption + ảnh refs/ — do B0 ghi, không sửa tay ở đây.",
+       "Đổi nguồn: import lại link ở đầu lưới."]),
+    linkCard("🎬 Link video (B4)", row.b4link, "(chưa có — mở tab B4 rồi gõ ở ô 🎬)", true,
+      ["Chỉ là CHỮ trong story.json · b4.link — video nằm nơi khác (YouTube, Drive…) thì ghi link ở đây.",
+       "Không đổi màu ô B4: ô đó luôn nói về FILE `video.*` trong folder."]),
+    linkCard("📁 File video trong folder", row.b4meta, "(chưa có — tải bằng mục “🎬 B4 · Video” phía trên lưới)", false,
+      ["File thật trong folder bài: tên · dung lượng · tải lúc nào.",
+       "Xóa file ngoài ổ thì ô B4 về cam “mất file”."]),
+  ];
+}
+
+function resultCards(row, tab, key) {
+  if (tab === "link") return linkCards(row);
+  if (tab === "b0") return b0Cards(row, key);
+  if (tab === "b2") return [b2Card(row, key)];
+  if (tab === "b4") return [videoCard(row)];
+  return [textCard(row, tab, key)];  // b1 / b3
+}
+
 function modalBody(row, tab, key) {
-  const body = el("div", "mbody");
-  if (tab === "link") {
-    // Tab Link = tóm tắt đủ mọi link của bài; thứ sửa được là ô 🔗 ngay dưới hàng tab (P18d),
-    // không còn bắt đóng modal rồi tìm ✎ ở cột Link.
-    body.appendChild(el("pre", "doc", [
-      "Đã đăng: " + (row.link || "(chưa có)"),
-      "Nguồn (B0): " + (row.source || "(chưa có — bài chưa import link)"),
-      "Link video (B4): " + (row.b4link || "(chưa có)"),
-      "File video trong folder: " + (row.b4meta || "(chưa có)"),
-    ].join("\n")));
-    body.appendChild(el("div", "muted", "Sửa link: gõ ở ô 🔗 ngay trên rồi Enter (hoặc bấm 💾 Lưu) · "
-      + "bấm 📋 trong ô đó copy nguyên link, ↗ mở đúng bài."));
-    return body;
-  }
-  if (tab === "b0") {  // một response mang cả caption (input.txt) lẫn ảnh tham chiếu đầu tiên (refs/)
-    if (row.b0meta) body.appendChild(el("div", "muted", row.b0meta));
-    const src = IMAGES.get(key);
-    if (src) {
-      const img = document.createElement("img");
-      img.className = "photo";
-      img.alt = "Ảnh tham chiếu B0 của " + row.id;
-      img.src = src;
-      body.appendChild(img);
-    }
-    const cap = CONTENT.get(key);
-    if (cap == null && !src) { body.appendChild(el("div", "loading", "… đang đọc caption + ảnh từ folder story")); return body; }
-    const shown = cap == null ? "" : String(cap);
-    if (!shown.trim() && !src) body.appendChild(el("div", "muted", "input.txt đang trống — gõ caption tay rồi bấm “💾 Lưu caption”, hoặc bấm “▶ Trích lại B0” để lấy từ link."));
-    body.appendChild(textEditor(row, key, "b0", shown));
-    return body;
-  }
-  if (tab === "b2") {
-    const src = IMAGES.get(key);
-    // dòng "Ghi chú" là nguyên nhân THẬT bộ tạo ảnh báo (P17c) — modal phải nói được vì sao ô đỏ,
-    // không chỉ vẽ một khoảng trống chờ ảnh
-    const note = String((row.detail || {}).b2 || "");
-    if (!src) {
-      body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc ảnh từ folder story"));
-      if (note) body.appendChild(el("div", "muted", "Ghi chú: " + note));
-      return body;
-    }
-    const img = document.createElement("img");
-    img.className = "photo";
-    img.alt = "Ảnh B2 của " + row.id;
-    img.src = src;
-    body.appendChild(img);
-    if (note) body.appendChild(el("div", "muted", "Ghi chú: " + note));
-    return body;
-  }
-  if (tab === "b4") {
-    // Bytes của video cố ý không đi qua iframe (200 MB base64 trong WebSocket) -> lưới chỉ tô màu và nói tên file.
-    body.appendChild(el("div", "muted", row.b4meta ? "Video đang có: " + row.b4meta
-      : "Bài này chưa có video trong folder."));
-    body.appendChild(el("pre", "doc",
-      "B4 là bước tải tay — không có AI, không vào hàng đợi, không ảnh hưởng ⚡:\n"
-      + "1. Bấm “🎬 Chọn bài này để tải video” ở trên, mục “🎬 B4 · Video” ngay phía trên lưới sẽ mở đúng bài " + row.id + ".\n"
-      + "2. Chọn file video từ ổ đĩa ở đó rồi bấm Lưu — file được ghi vào folder bài thành `video.<đuôi>` (tên khác đi qua lưới).\n"
-      + "Ô B4 lên xanh lá khi folder thật sự có file; một bài giữ MỘT video nên tải file mới là ghi đè.\n"
-      + "Trần của ô tải lên: " + (Math.round(Number(MODEL.video_max || 0) / 1048576) || 200) + " MB — video lớn hơn thì chép thẳng vào folder bài.\n"
-      + "Lưới không phát video (file quá lớn để gửi qua iframe) — muốn xem thì mở folder bài.\n"
-      + "Bài chỉ có video nằm nơi khác (YouTube, Drive…)? Gõ link ở ô 🎬 phía trên — nó chỉ là chữ trong story.json, "
-      + "không đổi màu ô B4 vì ô đó luôn nói về FILE trong folder."));
-    if (row.detail && row.detail.b4) body.appendChild(el("div", "muted", "Ghi chú: " + row.detail.b4));
-    return body;
-  }
-  const text = CONTENT.get(key);
-  if (text == null) {
-    // file trống thì Python không trả payload nào — với B1/B3 vẫn phải mở được ô chữ để gõ từ đầu
-    if (EDITORS[tab] && row.copyable && row.copyable[tabField(tab)] === false) {
-      body.appendChild(textEditor(row, key, tab, ""));
-      return body;
-    }
-    body.appendChild(el("div", "loading", NOTES.get(key) || "… đang đọc nội dung từ folder story"));
-    return body;
-  }
-  if (tab === "b3" && SHOW_MD) { renderMarkdown(String(text), body); return body; }
-  if (EDITORS[tab]) { body.appendChild(textEditor(row, key, tab, String(text))); return body; }
-  body.appendChild(el("pre", "doc", String(text)));
+  const body = el("div", "mbody mcards");
+  resultCards(row, tab, key).forEach(c => { if (c) body.appendChild(c); });
+  const pb = promptCard(row, tab);
+  if (pb) body.appendChild(pb);  // thẻ prompt đứng NGANG thẻ kết quả — ảnh + prompt thấy cùng một màn
   return body;
+}
+
+function tabLabel(tab) {
+  const pair = TABS.find(p => p[0] === tab);
+  return pair ? pair[1] : String(tab).toUpperCase();
 }
 
 function modalNode() {
@@ -1027,9 +1220,19 @@ function modalNode() {
   head.appendChild(navButton("←", "Bài trước", nb, -1));
   head.appendChild(el("span", "mpos", nb.at >= 0 ? (nb.at + 1) + "/" + nb.total : "— / " + nb.total));
   head.appendChild(navButton("→", "Bài kế", nb, 1));
+  // P20: quy ước chung của cả modal nằm ở dấu "?" này thay cho cái footer 7 mệnh đề dưới đáy.
+  head.appendChild(helpChip(["Cách dùng modal — " + tabLabel(ref.tab) + " của " + row.id,
+    "Mỗi thẻ là MỘT thứ (chữ | ảnh | prompt | file | link); rê chuột vào dấu ? ở đầu thẻ để đọc hướng dẫn của riêng nó.",
+    "Bấm 1 lần ở ô B1/B3 ngoài lưới = copy (B3 copy BẢN ĐÃ RENDER, chữ sạch hết ## và **), bấm đúp = mở modal này.",
+    "← → hoặc hai nút đầu modal: sang bài trước/kế TRONG ĐÚNG danh sách đang hiện, giữ nguyên tab.",
+    "Sửa chữ trong modal là ghi thẳng vào file trong folder bài — file vẫn là nguồn thật; xóa file ngoài ổ thì ô về cam “mất file”.",
+    "Ô 🔗/🎬 ngay dưới đầu modal sửa link (Enter = lưu, 📋 = copy nguyên link, ↗ = mở).",
+    "Dropdown trong thanh dưới là provider riêng cho bước này của bài này, ghi vào story.json — để trống là theo workspace/preset.",
+    "Ảnh B2 mở trong modal tới " + mib(MODEL.image_max, 2) + " MB; video không đi qua iframe nên B4 chỉ nhập link."]));
   head.appendChild(button("✕", "Đóng (Esc)", () => closeModal()));
   modal.appendChild(head);
 
+  // Thanh hành động: chỉ việc GIAO VIỆC còn giữ nút chữ; copy/chuyển kiểu đã thành icon trong đầu thẻ.
   const tools = el("div", "mtools");
   if (ref.tab === "b0") {
     const b0flow = flowNote(row, "b0");
@@ -1056,8 +1259,6 @@ function modalNode() {
       }, "play");
     if (stepflow) b.disabled = true;
     tools.appendChild(b);
-  }
-  if (["b1", "b2", "b3"].indexOf(ref.tab) >= 0) {
     // provider riêng cho bước này của bài này — chọn tay thì ghi vào story.json, ưu tiên trên mặc định đầu grid
     const names = MODEL.providers || [];
     const pick = String((row.prov || {})[ref.tab] || "");
@@ -1082,52 +1283,13 @@ function modalNode() {
       "Mở mục “🎬 B4 · Video” phía trên lưới với sẵn " + row.id + " — chọn file từ ổ đĩa ở đó rồi bấm Lưu",
       bb => { bb.disabled = true; send({ source: "b4_pick", id: row.id }); }, "act"));
   }
-  if (ref.tab !== "b2") {
-    // B3 copy đúng thứ ĐANG HIỆN: bản chữ sạch khi modal đang render, markdown gốc khi anh để nguyên chữ
-    const field = (ref.tab === "b3" && SHOW_MD) ? "Bài SEO (render)" : (TAB_COPY[ref.tab] || "");
-    if (field) {
-      const manual = ref.tab === "b0";  // tab B0 có ô sửa tay -> copy luôn lấy bản đã lưu trong file, không lấy bản nháp
-      const sameAsPill = STEP_FIELD[ref.tab] === field;  // ô vuông bấm 1 lần có copy đúng trường này không
-      const cp = button(manual ? "📋 Copy caption"
-        : "📋 Copy " + (ref.tab === "b3" ? (SHOW_MD ? "bản đã render" : "markdown") : field), manual
-        ? "Copy caption đang có trong input.txt — bản nháp chưa lưu thì bấm “💾 Lưu caption” trước"
-        : "Copy đúng chữ đang hiện" + (sameAsPill
-          ? " (bấm 1 lần ở ô " + (STEP_TITLE[ref.tab] || ref.tab) + " cũng ra bản này)"
-          : " (modal đang để nguyên chữ, còn bấm 1 lần ở ô " + (STEP_TITLE[ref.tab] || ref.tab) + " copy bản đã render)"),
-        b => copyField(row, field, b, "modal:" + ref.tab), "act");
-      cp.dataset.flash = "modal:" + ref.tab;
-      tools.appendChild(cp);
-    }
-    if (ref.tab === "b3") {
-      const fb = button("📋 Copy bản dán Facebook", "Copy bản in đậm unicode (không còn dấu ** và ##) — dán thẳng lên Facebook",
-        b => { requestContent(row, "Bài SEO (Facebook)", "copy", "modal:fb"); flash(b, "…", ""); }, "act");
-      fb.dataset.flash = "modal:fb";
-      tools.appendChild(fb);
-      tools.appendChild(button(SHOW_MD ? "🅰 Hiện markdown" : "🅱 Hiện bản đã render",
-        "Bài SEO trả về có Heading/đậm — xem như chữ gốc hay như trang viết", () => { SHOW_MD = !SHOW_MD; repaint(); }, "act"));
-    }
-  }
-  tools.appendChild(el("span", "muted", ref.tab === "b2" ? "ảnh đọc từ image.png trong folder story"
-    : ref.tab === "b4" ? "B4 không có bước AI — lưới chỉ nhìn file `video.*` trong folder bài " + row.id
-    : ref.tab === "b0" ? "caption đọc từ input.txt và sửa tay được · ảnh tham chiếu đọc từ refs/ của " + row.id
-      : "chữ đọc từ " + (EDITORS[ref.tab] ? EDITORS[ref.tab].file : "folder story") +
-      " của " + row.id + (EDITORS[ref.tab] ? " — sửa tay rồi bấm lưu, file vẫn là nguồn thật" : "")));
-  modal.appendChild(tools);
+  if (tools.children.length) modal.appendChild(tools);  // tab không có việc giao nào (Link) thì khỏi hở một thanh rỗng
   // P18d: ô link ngay dưới đầu modal. Tab nào có ô là do LINK_BARS quyết định — thêm chỗ cần ô link
   // là sửa bảng đó, không phải rải thêm if.
   Object.keys(LINK_BARS).forEach(kind => {
     if (LINK_BARS[kind].tabs.indexOf(ref.tab) >= 0) modal.appendChild(linkBar(row, kind));
   });
-  modal.appendChild(modalBody(row, ref.tab, key));
-  const pb = promptBlock(row, ref.tab);
-  if (pb) modal.appendChild(pb);  // B1/B2/B3: prompt nằm DƯỚI kết quả, cần copy thì mở ra xem
-  modal.appendChild(el("div", "mfoot",
-    "click 1 lần ở ô B1 = copy caption, ở ô B3 = copy bản đã render (chữ sạch, hết ## và **) bất kể modal đang hiện gì"
-    + " — muốn markdown gốc thì bấm Copy ngay trong modal · click đúp (hoặc bấm ô B0/B2/B4) = mở modal này · Esc hoặc ✕ để đóng · "
-    + "← → (hoặc hai nút đầu modal) sang bài trước/kế trong đúng danh sách đang hiện, giữ nguyên tab · "
-    + "danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · sửa chữ trong modal là ghi thẳng vào file "
-    + "· ô 🔗/🎬 dưới đầu modal sửa link (Enter = lưu, 📋 = copy nguyên link) · "
-    + "ảnh B2 mở trong modal tới " + (Math.round(Number(MODEL.image_max || 0) / 1048576) || 2) + " MB"));
+  modal.appendChild(modalBody(row, ref.tab, key));  // các THẺ nội dung (kèm thẻ prompt) — P18a: chỉ đọc cache, không gửi gì
 
   overlay.addEventListener("click", e => { if (e.target === overlay) closeModal(); });
   overlay.appendChild(modal);
@@ -1843,7 +2005,9 @@ function tipNode() {
   }
   return t;
 }
-function pillUnder(node) { return node && node.closest ? node.closest("button.sq") : null; }
+// Bất kỳ node nào mang data-tip đều được thẻ hover bắt — viên pill ngoài lưới (P13b) và dấu "?"
+// trong đầu thẻ modal (P20) đi chung một đường, không thêm listener riêng.
+function pillUnder(node) { return node && node.closest ? node.closest("[data-tip]") : null; }
 function placeTip(x, y) {
   const t = tipNode();
   let left = x + 15, top = y + 17;  // legacy: lệch nhẹ khỏi con trỏ để nó không che mất ô đang xem
@@ -1855,7 +2019,9 @@ function placeTip(x, y) {
 function showTip(pill, x, y) {
   const t = tipNode();
   const raw = String(pill.dataset.tip || "");
-  if (!raw || modalRef()) { t.hidden = true; return; }  // modal đã che nửa lưới thì khỏi đè thêm thẻ
+  // Modal che nửa lưới nên thẻ bật từ viên pill đứng sau nó vô ích; ngược lại dấu "?" của
+  // chính thẻ trong modal PHẢI hiện được — P20 chuyển hướng dẫn vào đó nên đây là đường đọc duy nhất.
+  if (!raw || (modalRef() && !pill.closest(".modal"))) { t.hidden = true; return; }
   const lines = raw.split("\n");
   t.textContent = "";
   t.appendChild(el("strong", "", lines[0]));
