@@ -115,6 +115,18 @@
      ô sáng-tối 1,15 giây một lần trông đúng như lỗi, mà mỗi lần lưới vẽ lại nó còn nhảy về đầu pha. */
   button.sq.flow-waiting { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); border-style:dashed; }
   button.sq.flow-running { background:var(--running); color:var(--running-t); border-color:var(--running-b); font-weight:750; }
+  /* Thẻ hover của ô B0-B3 (đồ họa legacy FX114311): rê chuột là thấy ngay trạng thái chi tiết,
+     không chờ mở modal. pointer-events:none nên nó không cướp click; position:fixed trong iframe
+     nên nó chỉ quanh quẩn trong vùng lưới — đủ vì ô nào cũng nằm trong lưới. */
+  .sqtip { position:fixed; z-index:2147483500; pointer-events:none; min-width:200px;
+    max-width:min(590px, calc(100vw - 24px)); max-height:min(60vh, 420px); overflow-y:auto;
+    padding:11px 13px; background:var(--panel); color:var(--text); border:1px solid var(--accent);
+    border-radius:10px; box-shadow:0 10px 32px rgba(0,0,0,.38); font-size:12px; line-height:1.55; }
+  .sqtip strong { display:block; font-size:13px; font-weight:750; color:#f5f9ff; margin-bottom:4px; }
+  .sqtip div { word-break:break-word; }
+  .sqtip.warn { border-color:var(--error-b); }
+  .sqtip.warn strong { color:#ffcf84; }
+  .sqtip[hidden] { display:none; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none!important; transition:none!important; } }
   button.q { min-width:28px; padding:0; }
   button.q.on { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); font-weight:700; }
@@ -453,8 +465,18 @@ function stepsCell(row) {
     const preview = step === "b0" || step === "b2";  // 2 bước này không có gì để copy — bấm là mở modal xem
     const how = preview ? "bấm để mở modal xem " + (step === "b0" ? "caption + ảnh trích được, sửa caption hoặc thêm ảnh tay ở đó" : "ảnh")
       : "bấm 1 lần để copy, bấm đúp để mở modal";
-    b.title = STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state) + (detail ? " · " + detail : "")
-      + (step === "b0" && row.b0meta ? " · " + row.b0meta : "") + (flow ? " · " + flow : "") + " — " + how;
+    // KHÔNG đặt b.title: tooltip mặc định của trình duyệt hiện trễ ~1 giây, chữ nhỏ và không
+    // nói được provider/model/lúc chạy. Dữ liệu thẻ hover đi theo viên pill nên patchCells
+    // đổi ô nào là thẻ đổi theo ô đó, không phải tra lại hàng.
+    const head = STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state);
+    b.setAttribute("aria-label", head + (detail ? " · " + detail : ""));
+    b.dataset.tip = [head,
+      flow ? "Luồng nền: " + flow : "",
+      detail ? "Ghi chú: " + detail : "",
+      step === "b0" && row.b0meta ? "B0: " + row.b0meta : "",
+      String((row.hint || {})[step] || ""),
+      "Cách dùng: " + how].filter(Boolean).join("\n");
+    b.dataset.tipk = state;  // lỗi / treo / mất file -> thẻ đổi viền và màu chữ để cảnh báo
     const single = preview ? () => openModal(row.id, step)
       : () => copyField(row, STEP_FIELD[step], b, b.dataset.flash);
     const onClick = splitClick(single, () => openModal(row.id, step));  // 1 closure/ô: bấm đúp mới tính
@@ -982,7 +1004,7 @@ function cellSig(row, key) {
     case "pick": return PICKED.has(String(row.id)) ? "1" : "0";
     case "id": return String(row.topic || "");
     case "src": return String(row.source || "");
-    case "steps": return JSON.stringify([row.b0, row.states, row.detail, row.b0meta, row.flow]);
+    case "steps": return JSON.stringify([row.b0, row.states, row.detail, row.b0meta, row.flow, row.hint]);
     case "img": return String(row.image || "");
     case "status": return String(row.status || "");
     case "link": return String(row.link || "") + (EDITING && String(EDITING.id) === String(row.id) ? "|#" + EDITING.value : "");
@@ -1443,6 +1465,56 @@ document.addEventListener("keydown", e => {
     send({ source: row.queued ? "queue_remove" : "queue_add", id: row.id });
   }
 });
+// --- P13b: thẻ hover của ô B0-B3, port cách làm của legacy FX114311 (con trỏ báo trạng thái chi tiết) ---
+const SQ_TIP_ID = "sqtip";
+const SQ_WARN = ["error", "stale", "missing"];  // ba trạng thái phải nhìn ra ngay, không phải đọc chữ
+function tipNode() {
+  let t = document.getElementById(SQ_TIP_ID);
+  if (!t) {
+    t = el("div", "sqtip");
+    t.id = SQ_TIP_ID;
+    t.hidden = true;
+    document.body.appendChild(t);
+  }
+  return t;
+}
+function pillUnder(node) { return node && node.closest ? node.closest("button.sq") : null; }
+function placeTip(x, y) {
+  const t = tipNode();
+  let left = x + 15, top = y + 17;  // legacy: lệch nhẹ khỏi con trỏ để nó không che mất ô đang xem
+  if (left + t.offsetWidth > innerWidth - 8) left = Math.max(8, x - t.offsetWidth - 15);
+  if (top + t.offsetHeight > innerHeight - 8) top = Math.max(8, y - t.offsetHeight - 17);
+  t.style.left = left + "px";
+  t.style.top = top + "px";
+}
+function showTip(pill, x, y) {
+  const t = tipNode();
+  const raw = String(pill.dataset.tip || "");
+  if (!raw || modalRef()) { t.hidden = true; return; }  // modal đã che nửa lưới thì khỏi đè thêm thẻ
+  const lines = raw.split("\n");
+  t.textContent = "";
+  t.appendChild(el("strong", "", lines[0]));
+  lines.slice(1).forEach(line => t.appendChild(el("div", "", line)));
+  t.classList.toggle("warn", SQ_WARN.indexOf(pill.dataset.tipk) >= 0);
+  t.hidden = false;
+  placeTip(x, y);
+}
+function hideTip() {
+  const t = document.getElementById(SQ_TIP_ID);
+  if (t) t.hidden = true;
+}
+document.addEventListener("pointerover", e => {
+  const p = pillUnder(e.target);
+  if (p) showTip(p, e.clientX, e.clientY); else hideTip();
+});
+document.addEventListener("pointermove", e => {
+  const t = document.getElementById(SQ_TIP_ID);
+  if (t && !t.hidden) { if (pillUnder(e.target)) placeTip(e.clientX, e.clientY); else hideTip(); }
+});
+document.addEventListener("pointerout", e => { if (!pillUnder(e.relatedTarget)) hideTip(); });
+document.addEventListener("pointerdown", hideTip, true);  // bấm thì thẻ dẹp ngay, nhường chỗ cho copy/modal
+document.addEventListener("scroll", hideTip, true);       // cuộn thì ẩn, kẻo thẻ treo lơ lửng trên ô khác
+window.addEventListener("keydown", e => { if (e.key === "Escape") hideTip(); });
 sendMessage(COMPONENT_READY, { apiVersion: 1 });
 window.addEventListener("load", () => setTimeout(setFrameHeight, 0));
 </script>

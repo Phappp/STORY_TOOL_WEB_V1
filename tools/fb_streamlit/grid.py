@@ -169,6 +169,21 @@ def _when(ts: float) -> str:
     return datetime.fromtimestamp(ts).strftime("%d/%m %H:%M") if ts else ""
 
 
+def step_hint(story: dict, step: str) -> str:
+    """Dấu vết lần chạy gần nhất của một bước cho thẻ hover: ai làm, model nào, làm kiểu gì, lúc nào.
+
+    Lấy từ block step trong story.json nên rỗng khi bước chưa chạy lần nào — điều anh cần thấy
+    khi rê vào ô mà không phải mở modal.
+    """
+    block = story.get(step) or {}
+    parts = [f"{label}: {block[key]}" for label, key in
+             (("Provider", "provider"), ("Model", "model"), ("Cách", "method")) if block.get(key)]
+    at = _when(float(block.get("updated_at") or 0))
+    if at:
+        parts.append("Lúc: " + at)
+    return " · ".join(parts)
+
+
 def rows_for(ctx: ga.Ctx) -> list[dict]:
     """Chỉ đủ dữ liệu cho ô grid; state qua ga.display_states nên 'treo >15 phút' hiện đúng là stale.
 
@@ -194,6 +209,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "has_input": summary["has_input"],
             "image": summary["image"],
             "detail": detail,
+            "hint": {step: step_hint(story, step) for step in ("b0",) + ga.ALL_STEPS},
             "states": states,
             "b0": ga.b0_state(ctx.root, sid, story=story),  # B0 có state riêng, không nằm trong states/bucket
             "b0meta": ga.b0_meta(story),

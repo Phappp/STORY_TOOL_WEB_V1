@@ -476,11 +476,14 @@ check("rows_for liệt kê đúng danh sách story còn trong workspace",
       sorted(r["id"] for r in rows_grid) == stories.list_story_ids(ga_root) and rows_grid)
 r_ok = next(r for r in rows_grid if r["id"] == sid_ok)
 check("rows_for mang đủ ô cho grid",
-      {"id", "topic", "status", "link", "has_input", "image", "detail", "states", "updated"} <= set(r_ok))
+      {"id", "topic", "status", "link", "has_input", "image", "detail", "hint", "states", "updated"} <= set(r_ok))
 check("rows_for báo state + ảnh + status thật của bài",
       r_ok["states"] == {"b1": "done", "b2": "done", "b3": "done"} and r_ok["image"] == "image.png"
       and r_ok["status"] == "posted" and r_ok["has_input"] and r_ok["updated"])
 r_empty = next(r for r in rows_grid if r["id"] == sid_empty)
+check("rows_for mang hint cho đủ B0-B3 mọi bài — thẻ hover đọc ngay từ dữ liệu lưới, khỏi xin thêm lượt đọc file",
+      all(set(r["hint"]) == {"b0", "b1", "b2", "b3"} for r in rows_grid)
+      and all(v == "" for v in r_empty["hint"].values()))  # bài chưa chạy gì thì dấu vết phải trống
 check("rows_for bài chưa có input: pending hết, không có ảnh",
       not r_empty["has_input"] and list(r_empty["states"].values()) == ["pending"] * 3 and r_empty["image"] == "")
 check("rows_for báo ô copy theo nội dung thật",
@@ -1725,6 +1728,35 @@ try:
           stub13.session_state[fbgrid.LOG_KEY]["lines"] == ["C: copy caption"])
 finally:
     fbgrid.st = _real_st13
+
+# --- P13b: hover ô B0-B3 mở thẻ trạng thái chi tiết (kiểu legacy), bỏ tooltip mặc định ---
+js_p13 = Path(__file__).resolve().parent.joinpath("grid_frontend", "index.html").read_text(encoding="utf-8")
+check("P13b viên pill B0-B3 không còn gán title — hết tooltip mặc định trễ nải của trình duyệt",
+      "b.title = STEP_TITLE[step]" not in js_p13
+      and re.search(r"b\.dataset\.tip = \[head,", js_p13) and 'b.setAttribute("aria-label", head' in js_p13)
+check("P13b thẻ hover mang đủ dữ liệu legacy-style: trạng thái + ghi chú + provider/model/cách/lúc + cách dùng",
+      'Luồng nền: ' in js_p13 and 'Ghi chú: ' in js_p13 and "(row.hint || {})[step]" in js_p13
+      and 'Cách dùng: ' in js_p13)
+check("P13b sig ô steps tính cả hint — sửa pill là nội dung thẻ đổi theo, không phải đợi dựng lại lưới",
+      "row.detail, row.b0meta, row.flow, row.hint]);" in js_p13)
+check("P13b thẻ là một node pointer-events:none, z-index cao, ẩn hiện theo con trỏ (không rerender lưới)",
+      ".sqtip { position:fixed; z-index:2147483500; pointer-events:none;" in js_p13
+      and 'document.addEventListener("pointerover"' in js_p13
+      and 'document.addEventListener("pointermove"' in js_p13
+      and 'document.addEventListener("pointerout"' in js_p13
+      and 'document.addEventListener("scroll", hideTip, true)' in js_p13
+      and 'document.addEventListener("pointerdown", hideTip, true)' in js_p13)
+check("P13b thẻ không hiện khi modal đang mở và không che ô (lật về trái/ngửa khi chạm mép)",
+      "if (!raw || modalRef())" in js_p13 and "x - t.offsetWidth - 15" in js_p13
+      and "y - t.offsetHeight - 17" in js_p13)
+check("P13b ô lỗi/treo/mất file thì thẻ đổi viền + màu chữ cảnh báo",
+      'const SQ_WARN = ["error", "stale", "missing"];' in js_p13
+      and 't.classList.toggle("warn", SQ_WARN.indexOf(pill.dataset.tipk) >= 0)' in js_p13)
+check("P13b step_hint nói dấu vết lần chạy (provider · model · cách · lúc) và im lặng khi chưa chạy",
+      fbgrid.step_hint({"b3": {"provider": "TTA_1", "model": "DeepSeek-V4-Pro", "method": "AI",
+                               "updated_at": 1793800000.0}}, "b3")
+      == "Provider: TTA_1 · Model: DeepSeek-V4-Pro · Cách: AI · Lúc: " + fbgrid._when(1793800000.0)
+      and fbgrid.step_hint({}, "b1") == "" and fbgrid.step_hint({"b0": {"method": "thủ công"}}, "b0") == "Cách: thủ công")
 
 # --- unit: stories.py — story folder là nguồn sự thật ---
 import stories
