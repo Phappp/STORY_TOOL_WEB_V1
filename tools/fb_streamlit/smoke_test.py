@@ -1427,6 +1427,30 @@ check("P15b bài bấm 🎬 trong modal B4 được seed vào selectbox TRƯỚC
 check("P15b mở mục B4 không sửa file nào (chỉ vẽ form)", not at4.exception
       and not list((smoke_root / _picked).glob("video.*"))
       and "b4" not in stories.load_story(smoke_root, _picked))
+b4_up = next((f for f in at4.file_uploader if f.key == fbgrid.B4_FILE_KEY), None)
+check("P15b ô tải file B4 vẫn còn ở lượt vẽ sau (không bị fragment làm mất widget)",
+      b4_up is not None and not at4.exception)
+if b4_up is not None:  # thiếu widget thì FAIL đã nói ở trên; để traceback giết cả suite thì mất hết check sau
+    b4_up.set_value(("clip quay tay.mp4", b"FAKE-VIDEO-BYTES", "video/mp4")).run()
+    save_b4 = next((b for b in at4.button if b.key == "grid_b4_save"), None)
+    check("P15b chọn file xong mới hiện nút Lưu, nhãn nói thẳng file nào sẽ thành gì cho bài nào",
+          save_b4 is not None and not at4.exception
+          and f"→ {_picked}/video.mp4" in save_b4.label and "clip quay tay.mp4" in save_b4.label)
+    if save_b4 is not None:
+        save_b4.click().run()
+    check("P15b bấm 🎬 Lưu: bytes từ widget native vào thẳng folder bài, tên gốc không thành đường dẫn",
+          not at4.exception and (smoke_root / _picked / "video.mp4").read_bytes() == b"FAKE-VIDEO-BYTES"
+          and not (smoke_root / _picked / "clip quay tay.mp4").exists()
+          and stories.load_story(smoke_root, _picked)["b4"]["state"] == stories.DONE
+          and not list((smoke_root / _picked).glob(".*")))
+    check("P15b lưu xong có dòng log của chính request đó trong lưới (lần tải đầu tiên nói tên file + MB)",
+          any("video.mp4" in line and "xanh lá" in line
+              for line in at4.session_state.get(fbgrid.LOG_KEY, {}).get("lines", [])))
+    _at_row = next(r for r in fbgrid.rows_for(ga.build_ctx(db.connect(), smoke_root)) if r["id"] == _picked)
+    check("P15b ô B4 của bài trong lưới lên xanh lá ngay lượt đọc folder kế tiếp",
+          _at_row["b4"] == stories.DONE and _at_row["video"] == "video.mp4"
+          and _at_row["bucket"] != "error")
+    (smoke_root / _picked / "video.mp4").unlink()
 
 # --- P2c AppTest: Grid native + event từ component đi qua dispatcher ---
 grid_sid = stories.create_story(smoke_root, "Grid smoke", input_text="")["id"]
