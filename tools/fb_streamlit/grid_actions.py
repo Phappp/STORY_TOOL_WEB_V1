@@ -36,6 +36,10 @@ B0_PREVIEW_FIELD = "B0 preview"
 MANUAL_METHOD = "thủ công"  # method ghi vào block khi anh sửa chữ tay trong modal — B0 phân biệt với og-tags/yt-dlp, B1/B3 phân biệt với chữ AI
 B0_UPLOAD_MAX = 4 * 1024 * 1024  # ảnh tay gửi base64 qua event, để message từ component không phình vô hạn
 REF_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+# B4 video: KHÔNG đi base64 qua iframe (một file 200 MB thành chuỗi ~270 MB trong delta). Bytes
+# vào bằng widget native st.file_uploader của Grid, event chỉ chọn bài nhận file.
+B4_VIDEO_MAX = 200 * 1024 * 1024
+VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".wmv", ".flv", ".3gp")
 
 COPY_FIELDS = ("Caption", "Bài SEO", "Input", "Link", "Bài SEO (Facebook)")
 STEP_NAMES = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
@@ -648,6 +652,37 @@ def add_b0_ref(ctx: Ctx, sid: str, data: str, name: str) -> list[str]:
     return [f"{sid}: đã thêm {added.name} vào refs/ ({len(refs)} ảnh tham chiếu)."]
 
 
+def _size_of(src) -> int:
+    """Kích thước file đang mở: UploadedFile của Streamlit có .size, object file thì đo bằng cách seek."""
+    size = getattr(src, "size", None)
+    if size is not None:
+        return int(size)
+    here = src.tell()
+    end = src.seek(0, os.SEEK_END)
+    src.seek(here)
+    return int(end)
+
+
+def save_video(ctx: Ctx, sid: str, src, name: str = "") -> list[str]:
+    """B4: stream file video anh chọn vào `<story>/video.<đuôi>` — không AI, không luồng nền.
+
+    `name` chỉ để lấy ĐUÔI; đường dẫn thật luôn do server ghép, nên trình duyệt không quyết định
+    được file nào bị ghi. Một bài giữ đúng MỘT video, tải file mới là ghi đè (luật của image.png).
+    """
+    suffix = Path(str(name or "")).suffix.lower()
+    if suffix not in VIDEO_SUFFIXES:
+        return [f"{sid}: “{name or '(không tên)'}” không phải video — chỉ nhận {'/'.join(VIDEO_SUFFIXES)}."]
+    size = _size_of(src)
+    if not size:
+        return [f"{sid}: file rỗng (0 MB), không ghi video trống vào bài."]
+    if size > B4_VIDEO_MAX:
+        return [f"{sid}: video {round(size / 1048576, 1)} MB vượt trần {B4_VIDEO_MAX // 1048576} MB "
+                f"của ô tải lên — chưa ghi gì cả."]
+    src.seek(0)
+    block = stories.save_video(ctx.root, sid, src, suffix=suffix, method=MANUAL_METHOD)
+    return [f"{sid}: đã lưu {block['file']} ({round(block['bytes'] / 1048576, 1)} MB) vào folder bài — ô B4 lên xanh lá."]
+
+
 def batch_ids(raw) -> tuple[list[str], str]:
     """Chính sách batch dùng chung: tối đa MAX_BATCH bài/lần, phần còn lại nói rõ chứ không âm thầm bỏ."""
     all_ids = [str(i) for i in raw if str(i)] if isinstance(raw, (list, tuple)) else []
@@ -780,6 +815,10 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             out.lines = [note] if note else []
         elif source == "open":
             out.select, out.nav = sid, "Tạo bài"
+        elif source == "b4_pick":
+            # Cú bấm trong modal B4 chỉ CHỌN bài sẽ nhận video; bytes vào bằng widget native, không qua event.
+            stories.load_story(ctx.root, sid)
+            out.lines = [f"{sid}: đã chọn để nhận video — mở mục “🎬 B4 · Video” phía trên lưới để chọn file từ ổ đĩa."]
         else:
             out.lines = [f"Event không hợp lệ: {source or '(trống)'}"]
     except (stories.WorkspaceError, prov.ProviderError) as exc:

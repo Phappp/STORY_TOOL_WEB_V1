@@ -24,10 +24,13 @@ INPUT_FILE = "input.txt"
 CAPTION_FILE = "caption.txt"
 SEO_FILE = "seo.md"
 IMAGE_FILE = "image.png"
+VIDEO_BASE = "video"  # B4: giữ đúng 1 video, đuôi theo file anh tải lên -> video.mp4 / video.mov / …
 REFS_DIR = "refs"
 
 STEPS = ("b1", "b2", "b3")
 STEP_FILE = {"b1": CAPTION_FILE, "b3": SEO_FILE, "b2": IMAGE_FILE}
+# B4 (video) cố ý KHÔNG nằm trong STEPS: nó không có bước AI nào để luồng nền giao, không vào
+# hàng đợi, không tính vào bucket — chỉ là file anh tải lên. State đi đường riêng (video_state).
 
 PENDING = "pending"
 RUNNING = "running"
@@ -357,6 +360,54 @@ def _image_file(folder: Path) -> Path | None:
     return found[0] if found else None
 
 
+def video_file(folder: Path) -> Path | None:
+    """File video của một bài: quy ước `video.<đuôi>` giống hệt ảnh — không có bảng nào giữ đường dẫn."""
+    found = sorted(p for p in folder.glob(VIDEO_BASE + ".*") if p.is_file())
+    return found[0] if found else None
+
+
+def video_of(root: Path, sid: str) -> Path | None:
+    return video_file(story_dir(root, sid))
+
+
+def video_state(story: dict, folder: Path) -> str:
+    """State ô B4 — chỉ có ba khả năng vì không có luồng nào chạy video: chưa có / xong / mất file."""
+    state = str((story.get("b4") or {}).get("state") or PENDING)
+    video = video_file(folder)
+    if video is not None and video.stat().st_size > 0:
+        return DONE
+    return MISSING if state == DONE else PENDING
+
+
+@serialized
+def save_video(root: Path, sid: str, src, suffix: str = ".mp4", method: str = "thủ công") -> dict:
+    """B4 giữ đúng 1 video: ghi đè `video.<đuôi>`, video đuôi khác bị xóa — y luật của image.png.
+
+    Ghi qua `.video.tmp` rồi rename: anh tắt máy giữa cú copy 200 MB cũng không để lại
+    `video_half.mp4` mà ô B4 sẽ nhận là xong.
+    """
+    folder = story_dir(root, sid)
+    old = video_file(folder)
+    tmp = folder / ".video.tmp"
+    try:
+        with open(tmp, "wb") as out:
+            shutil.copyfileobj(src, out, 1024 * 256)
+        size = tmp.stat().st_size
+        target = folder / f"{VIDEO_BASE}{suffix}"
+        if old is not None and old != target:
+            old.unlink()
+        os.replace(tmp, target)
+    finally:
+        # video cũ đang mở trong trình phát thì unlink báo lỗi: dọn file tạm 200 MB, đừng bỏ lại trong folder
+        if tmp.exists():
+            tmp.unlink()
+    story = load_story(root, sid)
+    story["b4"] = {"state": DONE, "detail": "", "method": method, "file": target.name,
+                   "bytes": size, "updated_at": time.time()}
+    save_story(root, sid, story)
+    return story["b4"]
+
+
 @serialized
 def save_image(root: Path, sid: str, src, method: str = "", refs: list[str] | None = None, keywords: list[str] | None = None, source_url: str = "") -> dict:
     """B2 giữ đúng 1 ảnh: luôn là image.png, ảnh cũ bị xóa khi ghi đè."""
@@ -496,6 +547,7 @@ def story_summary(root: Path, sid: str, story: dict | None = None) -> dict:
     story = story if story is not None else load_story(root, sid)
     folder = Path(story["folder"]) if story.get("folder") is not None else story_dir(root, sid)
     image = _image_file(folder)
+    video = video_file(folder)
     out = {
         "id": sid,
         "topic": str(story.get("topic") or ""),
@@ -504,11 +556,13 @@ def story_summary(root: Path, sid: str, story: dict | None = None) -> dict:
         "preset_id": story.get("preset_id"),
         "updated_at": float(story.get("updated_at") or 0),
         "image": image.name if image else "",
+        "video": video.name if video else "",
         "detail": {step: str((story.get(step) or {}).get("detail") or "") for step in STEPS},
         "has_input": bool((folder / INPUT_FILE).is_file()),
     }
     for step in STEPS:
         out[step] = step_state(story, folder, step)
+    out["b4"] = video_state(story, folder)
     return out
 
 

@@ -505,8 +505,8 @@ check("rows_for báo state + ảnh + status thật của bài",
       r_ok["states"] == {"b1": "done", "b2": "done", "b3": "done"} and r_ok["image"] == "image.png"
       and r_ok["status"] == "posted" and r_ok["has_input"] and r_ok["updated"])
 r_empty = next(r for r in rows_grid if r["id"] == sid_empty)
-check("rows_for mang hint cho đủ B0-B3 mọi bài — thẻ hover đọc ngay từ dữ liệu lưới, khỏi xin thêm lượt đọc file",
-      all(set(r["hint"]) == {"b0", "b1", "b2", "b3"} for r in rows_grid)
+check("rows_for mang hint cho đủ B0-B4 mọi bài — thẻ hover đọc ngay từ dữ liệu lưới, khỏi xin thêm lượt đọc file",
+      all(set(r["hint"]) == {"b0", "b1", "b2", "b3", "b4"} for r in rows_grid)
       and all(v == "" for v in r_empty["hint"].values()))  # bài chưa chạy gì thì dấu vết phải trống
 check("rows_for bài chưa có input: pending hết, không có ảnh",
       not r_empty["has_input"] and list(r_empty["states"].values()) == ["pending"] * 3 and r_empty["image"] == "")
@@ -1132,6 +1132,115 @@ check("P15a ▶ của modal thật sự chiếm một bộ và chạy — bài �
       wait_flow(runner_15b) and ran_par == [f"{s15_all}/b1"])
 runner_15b.stop()
 
+# --- P15b: B4 · Video — file anh tải tay vào folder bài, lưới chỉ tô màu, KHÔNG có bước AI ---
+import io
+
+p15b_root = stories.validate_root(box_p5b / "ws_b4")
+s_b4 = stories.create_story(p15b_root, "Bài có video", input_text="nội dung B4")["id"]
+b4_ctx = ga.build_ctx(gconn, p15b_root)
+row_b4 = next(r for r in fbgrid.rows_for(b4_ctx) if r["id"] == s_b4)
+check("P15b bài chưa tải video: ô B4 'chưa chạy', không có tên file, hint vẫn đủ 5 ô B0-B4",
+      row_b4["b4"] == stories.PENDING and row_b4["video"] == "" and row_b4["b4meta"] == ""
+      and set(row_b4["hint"]) == {"b0", "b1", "b2", "b3", "b4"}
+      and row_b4["bucket"] == "waiting")  # B4 trống KHÔNG được biến bài thành việc phải xử lý
+check("P15b từ chối file không phải video, nói rõ nhận đuôi nào, không ghi gì vào folder bài",
+      "không phải video" in ga.save_video(b4_ctx, s_b4, io.BytesIO(b"abc"), name="clip.txt")[0]
+      and ".mp4" in ga.save_video(b4_ctx, s_b4, io.BytesIO(b"abc"), name="clip.txt")[0]
+      and not list((p15b_root / s_b4).glob("video.*")))
+check("P15b từ chối video rỗng và video vượt trần — chưa ghi gì cả",
+      "file rỗng" in ga.save_video(b4_ctx, s_b4, io.BytesIO(b""), name="clip.mp4")[0]
+      and not list((p15b_root / s_b4).glob("video.*")))
+_ceiling = ga.B4_VIDEO_MAX
+ga.B4_VIDEO_MAX = 10  # hạ trần tạm để test đường từ chối khỏi phải ghi file 200 MB
+_over = ga.save_video(b4_ctx, s_b4, io.BytesIO(b"x" * 20), name="clip.mp4")
+ga.B4_VIDEO_MAX = _ceiling
+check("P15b video vượt trần bị chặn kèm dung lượng tính bằng MB, folder bài còn nguyên",
+      "vượt trần" in _over[0] and "MB" in _over[0] and not list((p15b_root / s_b4).glob("video.*")))
+check("P15b từ chối xong vẫn chưa có file video nào", not list((p15b_root / s_b4).glob("video.*")))
+lines = ga.save_video(b4_ctx, s_b4, io.BytesIO(b"MP4-BYTES-DE-MO"), name="quay-manh.mp4")
+row_b4 = next(r for r in fbgrid.rows_for(b4_ctx) if r["id"] == s_b4)
+block = stories.load_story(p15b_root, s_b4)["b4"]
+check("P15b tải file -> video.<đuôi> trong folder bài, tên file gốc KHÔNG bao giờ thành đường dẫn",
+      (p15b_root / s_b4 / "video.mp4").read_bytes() == b"MP4-BYTES-DE-MO"
+      and not (p15b_root / s_b4 / "quay-manh.mp4").exists()
+      and block["file"] == "video.mp4" and block["state"] == stories.DONE
+      and block["method"] == ga.MANUAL_METHOD and block["bytes"] == 15
+      and "đã lưu video.mp4" in lines[0] and "xanh lá" in lines[0])
+check("P15b ô B4 lên xanh lá + hover thấy tên file/MB/giờ, trong khi states+bucket vẫn chỉ nói B1-B3",
+      row_b4["b4"] == stories.DONE and row_b4["video"] == "video.mp4"
+      and row_b4["b4meta"].startswith("video.mp4 · 0.0 MB · ")
+      and row_b4["hint"]["b4"].startswith("Cách: thủ công")
+      and row_b4["states"] == {"b1": "pending", "b2": "pending", "b3": "pending"}
+      and row_b4["bucket"] == "waiting" and row_b4["detail"].get("b4", "") == "")
+check("P15b story.json của B4 không chứa đường dẫn tuyệt đối (copy folder sang máy khác vẫn đọc được)",
+      str(p15b_root) not in (p15b_root / s_b4 / "story.json").read_text(encoding="utf-8"))
+ga.save_video(b4_ctx, s_b4, io.BytesIO(b"MOV-BYTES-KHAC"), name="dang khac.mov")
+row_b4 = next(r for r in fbgrid.rows_for(b4_ctx) if r["id"] == s_b4)
+check("P15b tải file mới = ghi đè và đổi đuôi: một bài giữ ĐÚNG MỘT video, không sót file ẩn/.tmp",
+      sorted(p.name for p in (p15b_root / s_b4).glob("video.*")) == ["video.mov"]
+      and not [p.name for p in (p15b_root / s_b4).glob(".*")]
+      and row_b4["video"] == "video.mov" and row_b4["b4"] == stories.DONE)
+_lock = open(p15b_root / s_b4 / "video.mov", "rb")  # Windows khóa file đang mở: unlink sẽ PermissionError
+_fail = False
+try:
+    stories.save_video(p15b_root, s_b4, io.BytesIO(b"KHONG-GHI-DUOC"), suffix=".mp4")
+except OSError:
+    _fail = True
+_lock.close()
+check("P15b video cũ đang bị khóa (mở trong trình phát) -> báo lỗi OS, KHÔNG để lại .video.tmp 200 MB trong folder",
+      _fail and not list((p15b_root / s_b4).glob(".*"))
+      and sorted(p.name for p in (p15b_root / s_b4).glob("video.*")) == ["video.mov"])
+(p15b_root / s_b4 / "video.mov").unlink()
+row_b4 = next(r for r in fbgrid.rows_for(b4_ctx) if r["id"] == s_b4)
+check("P15b story.json ghi đã có video mà folder hết file -> 'mất file' + lý do trong bảng chẩn đoán",
+      row_b4["b4"] == stories.MISSING and "video.*" in row_b4["detail"]["b4"]
+      and "B4 mất file" in fbgrid.row_label(row_b4)
+      and "B4 mất file" in fbgrid.diagnostic_text(row_b4))
+check("P15b state chỉ có ba đường: chưa có / xong / mất file — không bao giờ running hay lỗi",
+      stories.video_state({}, p15b_root / s_b4) == stories.PENDING
+      and stories.video_state({"b4": {"state": stories.DONE}}, p15b_root / s_b4) == stories.MISSING)
+out = ga.apply_event(b4_ctx, {"source": "b4_pick", "id": s_b4})
+check("P15b bấm ô B4 chỉ CHỌN bài: log trỏ lên mục native, không sửa file, không touched (khỏi đọc lại workspace)",
+      "🎬 B4 · Video" in out.lines[0] and not out.touched and not out.copy
+      and stories.load_story(p15b_root, s_b4)["b4"]["state"] == stories.DONE
+      and not list((p15b_root / s_b4).glob("video.*")))
+check("P15b bài không có trong workspace thì event B4 nói rõ lỗi, không tạo folder lạ",
+      "story_999" in ga.apply_event(b4_ctx, {"source": "b4_pick", "id": "story_999"}).lines[0]
+      and not (p15b_root / "story_999").exists())
+j_b4, _ = gr.job_for({"source": "run_all", "id": s_b4}, p15b_root)
+ga.apply_event(b4_ctx, {"source": "queue_add", "id": s_b4})
+row_b4 = next(r for r in fbgrid.rows_for(b4_ctx) if r["id"] == s_b4)
+check("P15b B4 KHÔNG bao giờ là việc của luồng nền: ⚡ chỉ giao b1/b2/b3, hàng đợi vẫn đếm 1 bài 3 B",
+      [t.step for t in gr.tasks_for(j_b4[0])] == ["b1", "b2", "b3"]
+      and row_b4["queued"] and row_b4["queue_pos"] == 1
+      and ga.count_buckets(fbgrid.rows_for(b4_ctx))["queued"] == 1)
+js_b4 = Path(__file__).resolve().parent.joinpath("grid_frontend", "index.html").read_text(encoding="utf-8")
+check("P15b lưới có viên pill thứ 5: ô B4 cùng hàng B0-B3, cột đủ rộng cho 5 pill và có tab modal riêng",
+      'const GRID_STEPS = ["b0", "b1", "b2", "b3", "b4"];' in js_b4
+      and 'label: "B0 B1 B2 B3 B4", w: 198, min: 192' in js_b4
+      and '["b4", "B4 video"]' in js_b4)
+check("P15b state ô B4 lấy từ row.b4 (state riêng như B0), bấm một lần là mở modal chứ không copy",
+      'if (step === "b0" || step === "b4") return String(row[step] || "pending");' in js_b4
+      and 'const preview = step === "b0" || step === "b2" || step === "b4";' in js_b4)
+check("P15b sig pill + sig modal tính cả b4/b4meta/video/video_max — vá ô là thẻ hover đổi theo",
+      "row.b0, row.b4, row.states, row.detail, row.b0meta, row.b4meta" in js_b4
+      and "row.b0meta, row.b4, row.b4meta," in js_b4
+      and "String(MODEL.video_max || 0)]);" in js_b4
+      and "video_max: Number(args.video_max || 0)," in js_b4 and "video_max: MODEL.video_max," in js_b4)
+check("P15b modal B4 nói thẳng đường tải: lưới chỉ gửi id, bytes đi qua widget native (không qua iframe)",
+      'send({ source: "b4_pick", id: row.id })' in js_b4
+      and "🎬 Chọn bài này để tải video" in js_b4 and "if (tab === \"b4\") {" in js_b4
+      and "tabField(tab) === \"b4\"" not in js_b4  # không có nội dung nào xin từ Python cho B4
+      and '"b4"' not in str(fbgrid.READ_SOURCES))  # event sửa session_state -> vẽ lại cả trang, không phải tick rẻ
+check("P15b b4_pick được lưới bắt ở cấp app (video_form đứng NGOÀI fragment nên phải rerun cả trang)",
+      '== "b4_pick"' in inspect.getsource(fbgrid._body) and "B4_TARGET_KEY" in inspect.getsource(fbgrid._body)
+      and "video_form(ctx)" in inspect.getsource(fbgrid.render))
+check("P15b trần video 200 MB + đuôi phổ biến, lưới và form native cùng lấy từ grid_actions (một sự thật)",
+      ga.B4_VIDEO_MAX == 200 * 1024 * 1024 and ".mp4" in ga.VIDEO_SUFFIXES and ".mkv" in ga.VIDEO_SUFFIXES
+      and "video_max=ga.B4_VIDEO_MAX" in inspect.getsource(fbgrid.render_component)
+      and fbgrid.VIDEO_TYPES == [s.lstrip(".") for s in ga.VIDEO_SUFFIXES]
+      and "max_upload_size=ga.B4_VIDEO_MAX" in inspect.getsource(fbgrid.video_form))
+
 # --- P6c: phanh luồng nền + một bài chỉ có MỘT nơi chạy ---
 started_c: list[str] = []
 hold_c = threading.Event()
@@ -1296,6 +1405,28 @@ at4 = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=3
 at4.session_state["nav_page"] = "Grid"
 at4.run()
 check("page Grid runs (chế độ component mặc định)", not at4.exception and any("Grid story" in (h.value or "") for h in at4.subheader))
+b4_sb = next((s for s in at4.selectbox if s.key == fbgrid.B4_KEY), None)
+check("P15b trang Grid có mục B4 native: selectbox id bài + ô tải file, không có nút chạy AI nào",
+      b4_sb is not None and b4_sb.label == "Bài sẽ nhận video"
+      and any(f.key == fbgrid.B4_FILE_KEY for f in at4.file_uploader)
+      and not any("🎬 Lưu" in b.label for b in at4.button))  # chưa chọn file thì chưa có nút ghi
+check("P15b nhãn selectbox B4 là id THUẦN và ổn định qua hai lượt vẽ (không lấy chủ đề từ cache fragment — AppTest sụp vì 'value not in options')",
+      b4_sb is not None and b4_sb.options == stories.list_story_ids(smoke_root)
+      and not any("·" in str(o) for o in b4_sb.options))
+at4.run()
+b4_sb2 = next((s for s in at4.selectbox if s.key == fbgrid.B4_KEY), None)
+check("P15b lượt vẽ thứ hai vẫn cùng một danh sách + giá trị (không tự đổi nhãn khi cache fragment được điền)",
+      b4_sb2 is not None and not at4.exception
+      and b4_sb2.options == (b4_sb.options if b4_sb else []) and b4_sb2.value == b4_sb2.options[0])
+_picked = stories.list_story_ids(smoke_root)[-1]
+at4.session_state[fbgrid.B4_TARGET_KEY] = _picked
+at4.run()
+check("P15b bài bấm 🎬 trong modal B4 được seed vào selectbox TRƯỚC khi widget sinh ra (luật P9b) rồi xóa mốc",
+      any(s.key == fbgrid.B4_KEY and s.value == _picked for s in at4.selectbox)
+      and fbgrid.B4_TARGET_KEY not in at4.session_state)
+check("P15b mở mục B4 không sửa file nào (chỉ vẽ form)", not at4.exception
+      and not list((smoke_root / _picked).glob("video.*"))
+      and "b4" not in stories.load_story(smoke_root, _picked))
 
 # --- P2c AppTest: Grid native + event từ component đi qua dispatcher ---
 grid_sid = stories.create_story(smoke_root, "Grid smoke", input_text="")["id"]
@@ -1988,7 +2119,7 @@ check("P13b thẻ hover mang đủ dữ liệu legacy-style: trạng thái + ghi
       'Luồng nền: ' in js_p13 and 'Ghi chú: ' in js_p13 and "(row.hint || {})[step]" in js_p13
       and 'Cách dùng: ' in js_p13)
 check("P13b sig ô steps tính cả hint — sửa pill là nội dung thẻ đổi theo, không phải đợi dựng lại lưới",
-      "row.detail, row.b0meta, row.flow, row.hint]);" in js_p13)
+      "row.detail, row.b0meta, row.b4meta, row.flow, row.hint]);" in js_p13)
 check("P13b thẻ là một node pointer-events:none, z-index cao, ẩn hiện theo con trỏ (không rerender lưới)",
       ".sqtip { position:fixed; z-index:2147483500; pointer-events:none;" in js_p13
       and 'document.addEventListener("pointerover"' in js_p13
@@ -2148,8 +2279,8 @@ check("P8i bỏ qua ô đang nhận con trỏ gõ khi vá, nhưng vẫn giữ đ
       "isTypingIn(a, old)" in js_p8i and "function leave() { if (document.activeElement === input) input.blur(); }" in js_p8i)
 
 # P8ii: lưới mặc theo phong cách grid status legacy FX97 — nền tối, mỗi trạng thái có viền riêng,
-# ô bước là pill 32x24. Cột steps phải đủ rộng cho 4 pill (32*4 + kẽ 3*4 + đệm ô 16 = 156px),
-# min chặn không cho kéo nhỏ hơn vì prefs cũ (128px) sẽ cắt chữ B3.
+# ô bước là pill 32x24. Cột steps phải đủ rộng cho pill (32 each + 3 kẽ mỗi viên + đệm ô 16),
+# min chặn không cho kéo nhỏ hơn vì prefs cũ sẽ cắt chữ viên cuối hàng.
 check("P8ii :root là bảng tối legacy, không còn token sáng",
       "--bg:#101821" in js_p8i and "--header:#1b2838" in js_p8i and "--border:#2d3b4f" in js_p8i
       and "#fff" not in js_p8i and "#fbfbfc" not in js_p8i and "#f2f3f5" not in js_p8i)
@@ -2157,8 +2288,8 @@ check("P8ii mỗi trạng thái có viền --x-b và ô bước là pill cùng c
       "--running-b:#3679b9" in js_p8i and "--done-b:#236d58" in js_p8i
       and "border:1px solid var(--pending-b)" in js_p8i
       and "button.sq { min-width:32px; height:24px" in js_p8i and "border-radius:6px" in js_p8i)
-check("P8ii cột steps đủ chỗ cho 4 pill, prefs cũ không cắt chữ",
-      'key: "steps"' in js_p8i and "w: 160, min: 156" in js_p8i)
+check("P8ii cột steps đủ chỗ cho 5 pill (B0-B4), prefs cũ không cắt chữ",
+      'key: "steps"' in js_p8i and "w: 198, min: 192" in js_p8i)
 check("P8ii phông lót khi mở rộng cũng tối — lưới tối mà lót trắng thì loé trắng giữa hai lần vẽ",
       js_p8i.count("background:#101821") == 2)
 
@@ -2291,9 +2422,11 @@ check("P8iv chữ đổi số dòng (trạng thái luồng + log + chú thích l
       "Streamlit không thay node, hết dựng lại iframe sau ＋/⚡/▶",
       src_body.count("with st.container():") == 1 and 0 < i_slot < i_comp
       and not before_slot and not outside)
-check("P8iv nút phanh đổi trạng thái trong on_click — grid khỏi cần vẽ lại lượt nào nữa",
+check("P8iv nút phanh đổi trạng thái trong on_click — grid khỏi cần vẽ lại lượt nào nữa (2 lần "
+      "rerun còn lại là bước nhảy CÓ CHỦ ĐÍCH ra khỏi fragment: ↗ sang trang Tạo bài, 🎬 B4 xuống form native)",
       "on_click=lambda: _flow_switch" in src_flow and "st.rerun" not in src_flow
-      and src_body.count("st.rerun(") == 1 and 'st.rerun(scope="app")' in src_body)
+      and src_body.count("st.rerun(") == 2 and src_body.count('st.rerun(scope="app")') == 2
+      and '== "b4_pick"' in src_body)
 # --- P9a: đứng yên cũng không còn nhấp nháy ---
 # Fragment 2s đánh dấu element của nó bằng data-stale + class có `opacity:.33` kèm
 # `transition: opacity 1s ease-in .5s` -> lưới mờ rồi hiện liên tục dù chẳng chạy gì.

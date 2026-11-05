@@ -166,8 +166,8 @@ const COMPONENT_READY = "streamlit:componentReady";
 const SET_FRAME_HEIGHT = "streamlit:setFrameHeight";
 
 const STATE_LABEL = { pending: "chưa chạy", queued: "đợi", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
-const STEP_TITLE = { b0: "B0 trích từ link", b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO" };
-const GRID_STEPS = ["b0", "b1", "b2", "b3"];
+const STEP_TITLE = { b0: "B0 trích từ link", b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO", b4: "B4 video" };
+const GRID_STEPS = ["b0", "b1", "b2", "b3", "b4"];
 const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy · xanh dương đang chạy · xanh lá xong · đỏ lỗi · đỏ nét đứt treo >15 phút · cam mất file";
 // Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
 const COLS = [
@@ -175,8 +175,8 @@ const COLS = [
   { key: "pick", label: "", w: 30, min: 26 },
   { key: "id", label: "story", w: 92, min: 64 },
   { key: "src", label: "nguồn", w: 210, min: 80 },
-  // 4 viên pill 32px + kẽ 3px + đệm ô 8+8 = 156px; min chặn để prefs cũ (128) không cắt chữ B3
-  { key: "steps", label: "B0 B1 B2 B3", w: 160, min: 156, align: "c" },
+  // 5 viên pill 32px + kẽ 3px mỗi viên + đệm ô 8+8 = 191px; min chặn để prefs cũ (156) không cắt chữ B4
+  { key: "steps", label: "B0 B1 B2 B3 B4", w: 198, min: 192, align: "c" },
   { key: "img", label: "ảnh", w: 48, min: 40, align: "c" },
   { key: "status", label: "status", w: 66, min: 50, align: "c" },
   { key: "link", label: "Link", w: 220, min: 90 },
@@ -193,7 +193,7 @@ const DUBBLE_MS = 260;
 const MAX_UPLOAD = 4 * 1024 * 1024;  // khớp B0_UPLOAD_MAX trong grid_actions — ảnh tay đi base64 qua event
 const REF_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
 const STEP_FIELD = { b1: "Caption", b3: "Bài SEO" };
-const TABS = [["b0", "B0 trích"], ["input", "Input"], ["b1", "B1 caption"], ["b2", "B2 ảnh"], ["b3", "B3 SEO"], ["link", "Link"]];
+const TABS = [["b0", "B0 trích"], ["input", "Input"], ["b1", "B1 caption"], ["b2", "B2 ảnh"], ["b3", "B3 SEO"], ["b4", "B4 video"], ["link", "Link"]];
 const TAB_FIELD = { b0: "B0 preview", input: "Input", b1: "Caption", b3: "Bài SEO" };  // nội dung xin từ Python cho từng tab
 const TAB_COPY = { b0: "Input", input: "Input", b1: "Caption", b3: "Bài SEO" };        // tab B0 copy đúng caption trong input.txt
 const CONTENT = new Map();  // "id|field|dấu_mốc_file" -> chữ, chỉ sống tới khi file đổi
@@ -441,7 +441,9 @@ function copyField(row, field, b, flashId) {
 }
 
 function stateOf(row, step) {
-  return String(step === "b0" ? (row.b0 || "pending") : ((row.states || {})[step] || "pending"));
+  // B0 và B4 có state riêng trong row (không phải bước AI nên không nằm trong row.states)
+  if (step === "b0" || step === "b4") return String(row[step] || "pending");
+  return String((row.states || {})[step] || "pending");
 }
 
 function flowNote(row, step) {
@@ -461,8 +463,9 @@ function stepsCell(row) {
     b.dataset.id = String(row.id);
     b.dataset.step = step;
     b.dataset.flash = "sq:" + row.id + ":" + step;
-    const preview = step === "b0" || step === "b2";  // 2 bước này không có gì để copy — bấm là mở modal xem
-    const how = preview ? "bấm để mở modal xem " + (step === "b0" ? "caption + ảnh trích được, sửa caption hoặc thêm ảnh tay ở đó" : "ảnh")
+    const preview = step === "b0" || step === "b2" || step === "b4";  // mấy bước này không có gì để copy — bấm là mở modal xem
+    const how = preview ? "bấm để mở modal xem " + (step === "b0" ? "caption + ảnh trích được, sửa caption hoặc thêm ảnh tay ở đó"
+      : step === "b4" ? "video đang nằm trong folder và chọn bài này để tải file từ ổ đĩa" : "ảnh")
       : "bấm 1 lần để copy, bấm đúp để mở modal";
     // KHÔNG đặt b.title: tooltip mặc định của trình duyệt hiện trễ ~1 giây, chữ nhỏ và không
     // nói được provider/model/lúc chạy. Dữ liệu thẻ hover đi theo viên pill nên patchCells
@@ -473,6 +476,7 @@ function stepsCell(row) {
       flow ? "Luồng nền: " + flow : "",
       detail ? "Ghi chú: " + detail : "",
       step === "b0" && row.b0meta ? "B0: " + row.b0meta : "",
+      step === "b4" && row.b4meta ? "B4: " + row.b4meta : "",
       String((row.hint || {})[step] || ""),
       "Cách dùng: " + how].filter(Boolean).join("\n");
     b.dataset.tipk = state;  // lỗi / treo / mất file -> thẻ đổi viền và màu chữ để cảnh báo
@@ -662,6 +666,20 @@ function modalBody(row, tab, key) {
     body.appendChild(img);
     return body;
   }
+  if (tab === "b4") {
+    // Bytes của video cố ý không đi qua iframe (200 MB base64 trong WebSocket) -> lưới chỉ tô màu và nói tên file.
+    body.appendChild(el("div", "muted", row.b4meta ? "Video đang có: " + row.b4meta
+      : "Bài này chưa có video trong folder."));
+    body.appendChild(el("pre", "doc",
+      "B4 là bước tải tay — không có AI, không vào hàng đợi, không ảnh hưởng ⚡:\n"
+      + "1. Bấm “🎬 Chọn bài này để tải video” ở trên, mục “🎬 B4 · Video” ngay phía trên lưới sẽ mở đúng bài " + row.id + ".\n"
+      + "2. Chọn file video từ ổ đĩa ở đó rồi bấm Lưu — file được ghi vào folder bài thành `video.<đuôi>` (tên khác đi qua lưới).\n"
+      + "Ô B4 lên xanh lá khi folder thật sự có file; một bài giữ MỘT video nên tải file mới là ghi đè.\n"
+      + "Trần của ô tải lên: " + (Math.round(Number(MODEL.video_max || 0) / 1048576) || 200) + " MB — video lớn hơn thì chép thẳng vào folder bài.\n"
+      + "Lưới không phát video (file quá lớn để gửi qua iframe) — muốn xem thì mở folder bài."));
+    if (row.detail && row.detail.b4) body.appendChild(el("div", "muted", "Ghi chú: " + row.detail.b4));
+    return body;
+  }
   const text = CONTENT.get(key);
   if (text == null) {
     // file trống thì Python không trả payload nào — với B1/B3 vẫn phải mở được ô chữ để gõ từ đầu
@@ -748,6 +766,12 @@ function modalNode() {
     sel.addEventListener("change", () => send({ source: "set_provider", id: row.id, step: ref.tab, provider: sel.value }));
     tools.appendChild(sel);
   }
+  if (ref.tab === "b4") {
+    // chỉ CHỌN bài (id đi qua event, bytes không đi): file Uploader native đứng ngoài lưới mới nhận được video
+    tools.appendChild(button("🎬 Chọn bài này để tải video",
+      "Mở mục “🎬 B4 · Video” phía trên lưới với sẵn " + row.id + " — chọn file từ ổ đĩa ở đó rồi bấm Lưu",
+      bb => { bb.disabled = true; send({ source: "b4_pick", id: row.id }); }, "act"));
+  }
   if (ref.tab !== "b2") {
     const field = TAB_COPY[ref.tab] || "";
     if (field) {
@@ -769,13 +793,14 @@ function modalNode() {
     }
   }
   tools.appendChild(el("span", "muted", ref.tab === "b2" ? "ảnh đọc từ image.png trong folder story"
+    : ref.tab === "b4" ? "B4 không có bước AI — lưới chỉ nhìn file `video.*` trong folder bài " + row.id
     : ref.tab === "b0" ? "caption đọc từ input.txt và sửa tay được · ảnh tham chiếu đọc từ refs/ của " + row.id
       : "chữ đọc từ " + (EDITORS[ref.tab] ? EDITORS[ref.tab].file : "folder story") +
       " của " + row.id + (EDITORS[ref.tab] ? " — sửa tay rồi bấm lưu, file vẫn là nguồn thật" : "")));
   modal.appendChild(tools);
   modal.appendChild(modalBody(row, ref.tab, key));
   modal.appendChild(el("div", "mfoot",
-    "click 1 lần ở ô B1/B3 = copy · click đúp (hoặc bấm ô B0/B2) = mở modal này · Esc hoặc ✕ để đóng · "
+    "click 1 lần ở ô B1/B3 = copy · click đúp (hoặc bấm ô B0/B2/B4) = mở modal này · Esc hoặc ✕ để đóng · "
     + "danh sách provider ở thanh trên là chọn riêng cho bài này, ghi vào story.json · sửa chữ trong modal là ghi thẳng vào file "
     + "· ảnh B2 mở trong modal tới " + (Math.round(Number(MODEL.image_max || 0) / 1048576) || 2) + " MB"));
 
@@ -801,6 +826,7 @@ function repaint() {
   // Vẽ lại theo trạng thái cục bộ (mở modal, đổi tab, thu/mở rộng, sửa link, tìm kiếm): payload giữ
   // nguyên nên phải ép render, nếu không chữ ký ở trên sẽ bỏ qua.
   render({ rows: MODEL.rows, workspace: MODEL.workspace, image_max: MODEL.image_max,
+           video_max: MODEL.video_max,
            copy_response: MODEL.copy_response, summary: MODEL.summary, queue_ids: MODEL.queue_ids,
            error_ids: MODEL.error_ids, providers: MODEL.providers, defaults: MODEL.defaults, cols: MODEL.cols }, true);
 }
@@ -1005,7 +1031,7 @@ function cellSig(row, key) {
     case "pick": return PICKED.has(String(row.id)) ? "1" : "0";
     case "id": return String(row.topic || "");
     case "src": return String(row.source || "");
-    case "steps": return JSON.stringify([row.b0, row.states, row.detail, row.b0meta, row.flow, row.hint]);
+    case "steps": return JSON.stringify([row.b0, row.b4, row.states, row.detail, row.b0meta, row.b4meta, row.flow, row.hint]);
     case "img": return String(row.image || "");
     case "status": return String(row.status || "");
     case "link": return String(row.link || "") + (EDITING && String(EDITING.id) === String(row.id) ? "|#" + EDITING.value : "");
@@ -1193,9 +1219,10 @@ function modalSig() {
   if (!ref) return "";
   const row = findRow(ref.id);
   if (!row) return "gone";
-  return JSON.stringify([ref.id, ref.tab, stampOf(row), row.flow, row.prov, row.b0meta, row.image, row.link,
+  return JSON.stringify([ref.id, ref.tab, stampOf(row), row.flow, row.prov, row.b0meta, row.b4, row.b4meta,
+    row.video, row.image, row.link,
     row.copyable, SHOW_MD, (MODEL.copy_response || {}).request_id || "", (MODEL.providers || []).join("|"),
-    String(MODEL.image_max || 0)]);
+    String(MODEL.image_max || 0), String(MODEL.video_max || 0)]);
 }
 
 function syncModal() {
@@ -1294,6 +1321,7 @@ function render(args, force) {
     rows: Array.isArray(args.rows) ? args.rows : [],
     workspace: String(args.workspace || ""),
     image_max: Number(args.image_max || 0),
+    video_max: Number(args.video_max || 0),
     copy_response: args.copy_response && typeof args.copy_response === "object" ? args.copy_response : {},
     summary: args.summary && typeof args.summary === "object" ? args.summary : {},
     queue_ids: Array.isArray(args.queue_ids) ? args.queue_ids : [],

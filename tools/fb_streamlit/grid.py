@@ -45,9 +45,13 @@ CSV_DONE_KEY = "grid_import_done"  # dấu vân tay file vừa import — chặn
 IMPORT_TYPES = ["csv", "txt", "xlsx", "xls", "xlsm"]
 SKIPPED_SHOWN = 5
 
-GRID_STEPS = ("b0", "b1", "b2", "b3")
+GRID_STEPS = ("b0", "b1", "b2", "b3", "b4")
 
-STEP_LABELS = {"b0": "▶ B0", "b1": "▶ B1", "b2": "▶ B2", "b3": "▶ B3"}
+STEP_LABELS = {"b0": "▶ B0", "b1": "▶ B1", "b2": "▶ B2", "b3": "▶ B3", "b4": "B4"}
+B4_KEY = "grid_b4_story"    # selectbox native: bài sẽ nhận video
+B4_TARGET_KEY = "grid_b4_target"  # bài vừa bấm trong modal B4 -> seed cho selectbox ở lượt vẽ cả trang
+B4_FILE_KEY = "grid_b4_file"
+VIDEO_TYPES = [s.lstrip(".") for s in ga.VIDEO_SUFFIXES]
 STATE_LABELS = {stories.PENDING: "chưa chạy", ga.QUEUED: "đợi", stories.DONE: "xong", stories.RUNNING: "đang chạy",
                 stories.ERROR: "lỗi", stories.MISSING: "mất file", ga.STALE: "treo"}
 # Bảng chẩn đoán (native) không tô màu được từng ô như component, nên dùng ký hiệu + chú giải.
@@ -186,6 +190,16 @@ def step_hint(story: dict, step: str) -> str:
     return " · ".join(parts)
 
 
+def video_meta(story: dict, folder: Path) -> str:
+    """Chữ nhỏ cho ô/modal B4: tên file · dung lượng · tải lúc nào — rỗng khi chưa có video."""
+    video = stories.video_file(folder)
+    if video is None:
+        return ""
+    block = story.get("b4") or {}
+    return (f"{video.name} · {round(video.stat().st_size / 1048576, 1)} MB"
+            + (f" · {_when(float(block.get('updated_at') or 0))}" if block.get("updated_at") else ""))
+
+
 def rows_for(ctx: ga.Ctx) -> list[dict]:
     """Chỉ đủ dữ liệu cho ô grid; state qua ga.display_states nên 'treo >15 phút' hiện đúng là stale.
 
@@ -197,8 +211,12 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
         story = stories.load_story(ctx.root, sid)
         summary = stories.story_summary(ctx.root, sid, story=story)
         states = ga.display_states(ctx.root, sid, story=story)
+        folder = ga._folder(story, ctx.root, sid)
         detail = dict(summary["detail"])
         detail["b0"] = str((story.get("b0") or {}).get("detail") or "")
+        b4 = stories.video_state(story, folder)
+        if b4 == stories.MISSING:
+            detail["b4"] = "story.json ghi đã có video nhưng folder không còn file `video.*`"
         corrupt = str(story.get("_corrupt") or "")
         if corrupt:
             detail["b0"] = "story.json hỏng, đọc không được — coi như bài chưa chạy gì; lần lưu tới sẽ dời file cũ sang story.bad-…"
@@ -210,11 +228,14 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "source": str(story.get("source") or ""),
             "has_input": summary["has_input"],
             "image": summary["image"],
+            "video": summary["video"],
             "detail": detail,
-            "hint": {step: step_hint(story, step) for step in ("b0",) + ga.ALL_STEPS},
+            "hint": {step: step_hint(story, step) for step in ("b0", "b4") + ga.ALL_STEPS},
             "states": states,
             "b0": ga.b0_state(ctx.root, sid, story=story),  # B0 có state riêng, không nằm trong states/bucket
             "b0meta": ga.b0_meta(story),
+            "b4": b4,  # B4 cũng riêng: không có bước AI nào chạy video nên nó không vào states/bucket/hàng đợi
+            "b4meta": video_meta(story, folder),
             "bucket": "error" if corrupt else ga.bucket(states),  # bài không đọc được story.json là việc phải xử lý, không phải "chờ"
             "queued": bool(story.get("queued")),
             "queued_at": float(story.get("queued_at") or 0),
@@ -498,6 +519,7 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
         resp = st.session_state.pop("grid_copy_response", None) or {}
         component()(rows=rows, workspace=str(ctx.root),
                     image_max=ga.B2_IMAGE_MAX,
+                    video_max=ga.B4_VIDEO_MAX,
                     summary=ga.count_buckets(all_rows),
                     queue_ids=ga.queue_ids(all_rows),
                     error_ids=ga.error_ids(all_rows),
@@ -516,12 +538,15 @@ def row_label(row: dict) -> str:
     s = row["states"]
     return (f"{row['id']} · {(row['topic'] or '(chưa đặt chủ đề)')[:40]} · "
             f"B0 {STATE_LABELS.get(row['b0'], row['b0'])} · "
-            f"B1 {STATE_LABELS.get(s['b1'], s['b1'])} · B2 {STATE_LABELS.get(s['b2'], s['b2'])} · B3 {STATE_LABELS.get(s['b3'], s['b3'])}")
+            f"B1 {STATE_LABELS.get(s['b1'], s['b1'])} · B2 {STATE_LABELS.get(s['b2'], s['b2'])} · "
+            f"B3 {STATE_LABELS.get(s['b3'], s['b3'])} · B4 {STATE_LABELS.get(row['b4'], row['b4'])}")
 
 
 def state_of(row: dict, step: str) -> str:
-    """B0 có state riêng (row['b0']) vì nó không phải bước AI nên không nằm trong row['states']."""
-    return str(row["b0"] if step == "b0" else row["states"][step])
+    """B0 và B4 có state riêng (row['b0'], row['b4']) vì không phải bước AI nên không nằm trong row['states']."""
+    if step in ("b0", "b4"):
+        return str(row[step])
+    return str(row["states"][step])
 
 
 def _short_link(link: str) -> str:
@@ -561,8 +586,8 @@ def render_native(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict] | None = N
         return
     st.dataframe(
         [{"#": r["queue_pos"] or "", "story": r["id"], "nguồn": _short_link(r["source"]) or "—",
-          "B0 B1 B2 B3": " ".join(f"{step.upper()} {STATE_GLYPH.get(state_of(r, step), '?')}" for step in GRID_STEPS),
-          "ảnh": "có" if r["image"] else "—", "status": r["status"],
+          "B0 B1 B2 B3 B4": " ".join(f"{step.upper()} {STATE_GLYPH.get(state_of(r, step), '?')}" for step in GRID_STEPS),
+          "ảnh": "có" if r["image"] else "—", "video": r["video"] or "—", "status": r["status"],
           "Link": _short_link(r["link"]) or "—"}
          for r in rows],
         width="stretch", hide_index=True,
@@ -662,6 +687,10 @@ def _body(ctx: ga.Ctx) -> None:
     st.session_state["grid_flow_busy"] = snap["busy"]
     if outcome is not None and outcome.nav:
         st.rerun(scope="app")  # nút ↗: nhảy sang trang Tạo bài với bài vừa chọn
+    if event is not None and str(event.get("source") or "") == "b4_pick":
+        # ô B4 chỉ CHỌN bài; file video đi qua widget native đứng ngoài fragment nên phải vẽ lại cả trang
+        st.session_state[B4_TARGET_KEY] = str(event.get("id") or "")
+        st.rerun(scope="app")
     app_run = int(st.session_state.get(APP_RUN_KEY) or 0)
     cached = st.session_state.get(PAYLOAD_KEY)
     if cached and int(cached.get("run") or -1) != app_run:
@@ -691,6 +720,56 @@ def _body(ctx: ga.Ctx) -> None:
     render_native(ctx, rows, all_rows)
 
 
+def video_form(ctx: ga.Ctx) -> None:
+    """B4 · Video: mục native để tải file từ ổ đĩa vào folder bài — lưới chỉ tô màu và cho xem tên file.
+
+    Bytes cố ý KHÔNG đi qua component: một video 200 MB trong event là chuỗi base64 ~270 MB nằm
+    trong delta gửi qua WebSocket (bài học P5a với ảnh 4 MB và P7c với ảnh 100 MB). Widget native
+    nhận file thẳng vào server rồi stream sang `video.<đuôi>` trong folder bài.
+    """
+    ids = stories.list_story_ids(ctx.root)
+    target = str(st.session_state.pop(B4_TARGET_KEY, "") or "")  # bài anh vừa bấm trong modal B4
+    if target and target in ids:
+        st.session_state[B4_KEY] = target  # seed TRƯỚC khi widget sinh ra — luật P9b, không đối chiếu sau
+    with st.expander("🎬 B4 · Video — tải file từ ổ đĩa vào folder bài (không có AI, không vào hàng đợi)",
+                     expanded=bool(target)):
+        if not ids:
+            st.caption("Workspace này chưa có bài nào — tạo bài trước rồi tải video sau.")
+            return
+        # Danh sách CHỈ là id folder (stable): không tô chủ đề từ cache của fragment, vì cache đó
+        # được điền SAU khi mục này sinh ra -> nhãn selectbox sẽ đổi chữ giữa hai lượt vẽ, và một
+        # bài 150 folder phải đọc 150 file story.json chỉ để ra nhãn.
+        sid = st.selectbox("Bài sẽ nhận video", ids, key=B4_KEY,
+                           help="Đúng một bài mỗi lần tải — id này là tên folder trong workspace. "
+                                "Bấm ô B4 của bài trong lưới (tab B4 video ▸ 🎬 Chọn bài này để tải video) "
+                                "thì bài đó tự nhảy vào đây, khỏi tìm.")
+        story = stories.load_story(ctx.root, sid)
+        folder = ga._folder(story, ctx.root, sid)
+        state = stories.video_state(story, folder)
+        meta = video_meta(story, folder)
+        st.caption(f"**{sid}** · {(str(story.get('topic') or '(chưa đặt chủ đề)'))[:60]} — đang: "
+                   f"**{STATE_LABELS.get(state, state)}**"
+                   + (f" — {meta}" if meta else " — chưa có file `video.*` trong folder")
+                   + " · một bài giữ MỘT video, tải file mới là ghi đè (video cũ bị xóa).")
+        video = st.file_uploader("File video từ ổ đĩa", key=B4_FILE_KEY, type=VIDEO_TYPES,
+                                 max_upload_size=ga.B4_VIDEO_MAX // 1048576,
+                                 help=f"Chấp nhận {'/'.join(VIDEO_TYPES)} tới {ga.B4_VIDEO_MAX // 1048576} MB "
+                                      f"— muốn lớn hơn thì tăng `max_upload_size` khi chạy streamlit.")
+        if video is None:
+            st.caption("Chưa chọn file — chọn xong thì bấm nút Lưu bên dưới, file chưa vào folder đâu.")
+            return
+        suffix = Path(str(video.name)).suffix.lower()
+        if st.button(f"🎬 Lưu {video.name} → {sid}/video{suffix}", key="grid_b4_save",
+                     help=f"Copy thẳng {round(video.size / 1048576, 1)} MB vào folder bài (ghi đè video cũ nếu có). "
+                          "Ghi qua file tạm rồi rename nên tắt giữa chừng không để lại video dở."):
+            try:
+                lines = ga.save_video(ctx, sid, video, name=str(video.name))
+            except (stories.WorkspaceError, OSError) as exc:  # đường dẫn hỏng/dĩa đầy: nói rõ, đừng để ô treo
+                lines = [f"{sid}: không ghi được video — {exc}"]
+            _push(lines)
+            st.rerun(scope="app")  # folder vừa đổi: cả trang vẽ lại là lưới đọc mới, log cũng hiện luôn
+
+
 def render(ctx: ga.Ctx) -> None:
     st.subheader("Grid story")
     st.markdown(NO_DIM_CSS, unsafe_allow_html=True)
@@ -710,6 +789,7 @@ def render(ctx: ga.Ctx) -> None:
                           "bấm ＋ trước thì làm trước, bài mới xếp cuối.")
     workspace_bar(ctx)
     import_form(ctx)
+    video_form(ctx)  # B4 đứng NGOÀI fragment: file_uploader native phải nhận bytes thẳng vào server
     # Fragment luôn chạy đều: event từ lưới chỉ vẽ lại đúng nó, nên giao việc cho luồng nền
     # không cần vẽ lại cả trang nữa (đó chính là cú loé trắng sau khi bấm ⚡/▶).
     st.session_state[APP_RUN_KEY] = int(st.session_state.get(APP_RUN_KEY) or 0) + 1
