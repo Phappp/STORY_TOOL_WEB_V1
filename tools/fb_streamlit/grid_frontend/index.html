@@ -122,8 +122,27 @@
   .ioline { color:var(--muted); font-size:12px; line-height:1.45; word-break:break-word; }
   .ioline.bad { color:var(--error-t); }
   .ioline.ok { color:var(--done-t); }
-  .ioitem { font-size:12px; color:var(--muted); border-left:2px solid var(--border); padding-left:7px;
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* P22e: một bài = một thẻ nhỏ — ảnh thật bên trái, link + caption bên phải.
+     Preview phải nhìn RA được bài gì, không chỉ đếm dòng: 3 ảnh thumbnail và 420 ký tự
+     caption là đủ nhận ra chọn sai file mà vẫn nhẹ qua WebSocket. */
+  .ioitem { display:flex; gap:8px; align-items:flex-start; font-size:12px; color:var(--muted);
+    border-left:2px solid var(--border); padding:2px 0 2px 7px; min-width:0; }
+  .ioitem .ioph { display:flex; flex-wrap:wrap; gap:3px; width:84px; flex:0 0 auto; }
+  .ioitem .ioph img { width:39px; height:39px; object-fit:cover; border:1px solid var(--border);
+    border-radius:4px; background:var(--field); display:block; }
+  .ioitem .ioph a { display:block; flex:0 0 auto; line-height:0; }
+  .ioitem .ioimg { flex:0 0 auto; font-size:11px; color:var(--muted); opacity:.8; }
+  .ioitem .ioph .ph { width:39px; height:39px; border:1px dashed var(--border); border-radius:4px;
+    display:inline-flex; align-items:center; justify-content:center; font-size:10px; color:var(--muted); }
+  .ioitem .ioc { min-width:0; flex:1 1 auto; display:flex; flex-direction:column; gap:3px; }
+  .ioitem .ioux { display:flex; gap:5px; align-items:center; min-width:0; }
+  .ioitem .ioux a { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ioitem .iocap { line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere;
+    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .ioitem .iocap.full { -webkit-line-clamp:unset; display:block; }
+  .ioitem .iocap.none { font-style:italic; }
+  .iocap.tog { background:none; border:0; padding:0; color:var(--accent); font:inherit;
+    font-size:11px; cursor:pointer; align-self:flex-start; }
   .mcard .cbd input[type=file] { font:inherit; font-size:12px; color:var(--muted); max-width:100%; }
   /* P22c: TRÁI = hai ô thao tác (import trên, export dưới), PHẢI = ô XEM TRƯỚC nội dung thật.
      auto-fit để bảng hẹp thì preview tự xuống dưới, không bao giờ bị bóp mất chữ. */
@@ -1652,6 +1671,8 @@ let IO_BUSY = false;    // đã gửi một file, chờ lưới trả lời: ô 
                         // repaint() dựng lại input nên `pick.disabled = true` chỉ sống tới lượt vẽ kế.
 let IO_PASTE = "";      // chữ anh dán ở ô Import — sống ở module vì repaint() dựng lại textarea
                         // mỗi 2s khi luồng nền chạy; để mất chữ đang gõ giữa chừng thì không ai dùng nổi.
+const IO_CAPS = new Set();  // link nào đang MỞ caption đầy đủ — cùng lý do: bảng dựng lại mỗi tick,
+                            // trạng thái để trong DOM thì mất trước khi anh kịp đọc.
 
 function ioModel() { return MODEL.io && typeof MODEL.io === "object" ? MODEL.io : {}; }
 function ioCap() { return mib(ioModel().max_bytes, 8); }
@@ -1874,6 +1895,80 @@ function ioExportCard() {
 // chỉ là bản mới nhất — mở lại bảng là sạch.
 function ioPreviewSpec(fmt) { return IO_EXPORTS.find(s => s[0] === String(fmt || "")) || []; }
 
+// P22e: một bài trong ô Xem trước = ẢNH THẬT (đúng link trong file) + caption đọc được,
+// không còn một dòng đếm vô nghĩa. Ảnh do TRÌNH DUYỆT tải trực tiếp từ link ảnh — lưới không
+// xin Python lần nào (thêm một event mỗi bài là thêm một lượt chờ), nên link hết hạn/chặn referrer
+// thì ô đó tự nói "✕" chứ không im lặng thành ô trống; B0 vẫn tải được ảnh đó khi chạy.
+function ioThumb(url) {
+  const img = el("img");
+  img.src = String(url);
+  img.alt = "ảnh trong file";
+  img.loading = "lazy";
+  img.referrerPolicy = "no-referrer";
+  img.title = "Ảnh trong file import — bấm mở ra tab khác.\n" + String(url);
+  img.onerror = () => {
+    const bad = el("span", "ph", "✕");
+    bad.title = "Trình duyệt không tải được ảnh NÀY ở đây (link hết hạn hoặc Facebook chặn referrer).\n"
+      + "B0 vẫn tải ảnh khi chạy — ô này chỉ báo là xem trước không hiện được.";
+    if (img.parentNode) img.parentNode.replaceChild(bad, img);
+  };
+  return img;
+}
+
+function ioItemCard(item) {
+  const row = el("div", "ioitem");
+  const raw = String(item.url || "");
+  const urls = (Array.isArray(item.thumbs) ? item.thumbs : []).filter(u => String(u || "").trim());
+  const n = Number(item.imgs || 0);
+  if (urls.length || n) {
+    const strip = el("div", "ioph");
+    urls.forEach(u => {
+      const a = el("a", "link");
+      const img = ioThumb(u);
+      a.href = String(u);
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.appendChild(img);
+      strip.appendChild(a);
+    });
+    if (n > urls.length) {
+      const more = el("span", "ph", "+" + (n - urls.length));
+      more.title = "Còn " + (n - urls.length) + " ảnh nữa trong file — tạo bài rồi mở bài ở lưới để xem hết.";
+      strip.appendChild(more);
+    }
+    row.appendChild(strip);
+  }
+  const col = el("div", "ioc");
+  const line = el("div", "ioux");
+  if (raw) {
+    const a = el("a", "link", shortUrl(raw));
+    a.href = raw;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.title = "Mở bài gốc để đối chiếu — chưa tạo folder nào.";
+    line.appendChild(a);
+  } else line.appendChild(el("span", "iocap none", "(không link)"));
+  if (n) line.appendChild(el("span", "ioimg", n + " ảnh"));
+  col.appendChild(line);
+  const capText = String(item.caption || "").trim();
+  const cap = el("div", "iocap" + (IO_CAPS.has(raw) ? " full" : ""),
+    capText || "(chưa có chữ trong file — B0 sẽ trích từ link nguồn)");
+  if (!capText) cap.classList.add("none");
+  col.appendChild(cap);
+  if (item.clipped) {
+    const tog = el("button", "iocap tog", IO_CAPS.has(raw) ? "▴ gọn lại" : "▾ xem hết");
+    tog.type = "button";
+    tog.title = "File có chữ dài hơn " + capText.length + " ký tự — bấm để đọc hết tại đây (chưa cắt gì khi tạo folder).";
+    tog.addEventListener("click", () => {
+      if (IO_CAPS.has(raw)) IO_CAPS.delete(raw); else IO_CAPS.add(raw);
+      repaint();
+    });
+    col.appendChild(tog);
+  }
+  row.appendChild(col);
+  return row;
+}
+
 function ioPreviewCard() {
   const st = IO_STATE || {};
   const ex = IO_EXPORT || {};
@@ -1891,9 +1986,7 @@ function ioPreviewCard() {
     state = st.again ? "done" : Number(st.rows || 0) ? "queued" : "error";
     body.push(ioNote("📄 " + String(st.name || "") + " · " + String(st.line || "")));
     if ((st.items || []).length) body.push(ioNote("Sẽ vào " + Number(st.rows || 0) + " bài:"));
-    (st.items || []).forEach(item => body.push(el("div", "ioitem",
-      String(item.url || "(không link)") + " — " + item.head
-      + (Number(item.imgs) > 0 ? " · " + item.imgs + " ảnh trong file" : ""))));
+    (st.items || []).forEach(item => body.push(ioItemCard(item)));
     const hidden = Number(st.total || 0) - (st.items || []).length;
     if (hidden > 0) body.push(ioNote("· … còn " + hidden + " bài nữa trong file (bảng chỉ liệt kê " + (st.items || []).length + " dòng đầu)"));
     // Python đã viết sẵn "bỏ dòng …" / "bỏ link trùng …" — thêm chữ "bỏ" nữa là đọc trùng.
@@ -1920,7 +2013,7 @@ function ioPreviewCard() {
     + " Export — nội dung thật sẽ hiện ngay đây trước khi anh bấm Tạo / ⬇ Lưu."));
   return card({ title: "👁 Xem trước", state: state, body: body,
     help: ["Chữ lưới ĐỌC ĐƯỢC từ file/nội dung dán/vừa dựng, không phải chữ diễn giải — nên đây là chỗ phát hiện chọn sai file.",
-      "Import: mỗi dòng là một bài sẽ tạo (link — caption đầu bài · số ảnh trong file). Dòng bị bỏ hiện kèm lý do.",
+      "Import: mỗi bài là một thẻ — ảnh thật trong file (tối đa 3), link bài gốc, và caption đã đọc được. Dòng bị bỏ hiện kèm lý do.",
       "Export: xem trước đoạn ĐẦU của file (nội dung đầy đủ vẫn tải về bằng ⬇, kể cả khi ở đây bị cắt).",
       "Bảng này không phải hàng đợi: chưa bấm ➕ Tạo / ⬇ Lưu thì chưa có folder hay file nào."],
     actions: [ex.text ? copyTextIcon(ex.text, "ioprev",
@@ -2032,7 +2125,7 @@ function ingestIo() {
 function ioSig() {
   if (!IO_OPEN) return "";
   return JSON.stringify([(IO_FILE || {}).name || "", IO_SEQ, IO_BUSY, visible().length, rows().length,
-    Number(ioModel().b0_todo || 0), ioCap()]);
+    Number(ioModel().b0_todo || 0), ioCap(), Array.from(IO_CAPS).sort().join("|")]);
 }
 
 function syncIo() {

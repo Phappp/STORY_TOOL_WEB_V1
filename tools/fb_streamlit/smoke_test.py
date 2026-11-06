@@ -4050,14 +4050,46 @@ check("P22d JSON DÁN vào (không có file) đọc y hệt file chọn: 2 bài 
       _p22_paste["rows"] == 2 and _p22_paste["with_caption"] == 2
       and _p22_paste["name"] == "chữ-dán.json" and not _p22_paste.get("error")
       and _p22_paste["items"][0]["imgs"] == 1
-      and "JOSH ALLEN" in _p22_paste["items"][0]["head"])
+      and "JOSH ALLEN" in _p22_paste["items"][0]["caption"])
 check("P22d Xem trước chữ dán KHÔNG ghi folder nào — tạo thật vẫn đợi nút ➕ (preview chỉ đọc)",
       sorted(p.name for p in _p22_root.iterdir()) == _p22_before)
 _p22_ppaste = ga.io_preview("chữ-dán.txt", base64.b64encode(
     "https://www.facebook.com/permalink.php?story_fbid=pfbid0CCC&id=6155\n".encode("utf-8")).decode("ascii"))
 check("P22d dán DANH SÁCH LINK thì đọc theo cột A như file txt: 1 bài, caption trống nên B0 tự trích",
       _p22_ppaste["rows"] == 1 and _p22_ppaste["with_caption"] == 0
-      and "chưa có chữ" in _p22_ppaste["items"][0]["head"])
+      and _p22_ppaste["items"][0]["caption"] == "")
+# --- P22e: ô Xem trước phải NHÌN RA bài gì (caption dài + ảnh thật), không còn một dòng đếm ---
+check("P22e preview trả caption đầy đủ (tới 420 ký tự, dồn khoảng trắng) THAY cho 'head' 70 ký tự — ảnh là link THẬT trong file",
+      "head" not in _p22_paste["items"][0]
+      and _p22_paste["items"][0]["caption"].startswith("🏈 JOSH ALLEN IS STILL NO. 1!")
+      and "https://inside.link" in _p22_paste["items"][0]["caption"]
+      and "\n" not in _p22_paste["items"][0]["caption"]
+      and _p22_paste["items"][0]["thumbs"] == ["https://scontent/x1.jpg"]
+      and _p22_paste["items"][0]["clipped"] is False)
+check("P22e caption dài bị CẮT KÈM CỜ clipped — im lặng cắt thì anh tưởng bài chỉ có ngần này chữ",
+      ga.preview_caption("a" * (ga.PREVIEW_CAP_CHARS + 90))[1] is True
+      and len(ga.preview_caption("x".join(["  a  ", "b "]))) == 2
+      and ga.preview_caption("a" * ga.PREVIEW_CAP_CHARS)[1] is False)
+check("P22e trần số ảnh hiện ở preview (PREVIEW_IMGS) nhỏ hơn số bài: không gửi cả chục link cho một ô xem nhanh",
+      ga.PREVIEW_IMGS == 3 and ga.PREVIEW_ROWS == 6
+      and len(ga.io_preview("dán.json", base64.b64encode(json.dumps(
+          [{"url": "https://www.facebook.com/a", "text": "t",
+            "media": [{"photo_image": {"uri": f"https://scontent/{i}.jpg"}} for i in range(9)]}]).encode()).decode("ascii")
+          )["items"][0]["thumbs"]) == ga.PREVIEW_IMGS)
+check("P22e Python KHÔNG viết hộ chữ '(chưa có chữ…)' — caption trống trả '' để lưới quyết định lời, một chỗ nói",
+      _p22_ppaste["items"][0]["caption"] == "" and "chưa có chữ" not in str(_p22_ppaste["items"]))
+_p22_item_src = _p22_fe.split("function ioItemCard")[1].split("function ioPreviewCard")[0]
+check("P22e lưới vẽ thumbnail BẰNG ẢNH THẬT (img src = link trong file, lazy, mở ra tab) — không xin Python lần nào",
+      "img.src = String(url)" in _p22_fe.split("function ioThumb")[1].split("function ioItemCard")[0]
+      and 'img.loading = "lazy"' in _p22_fe and 'img.referrerPolicy = "no-referrer"' in _p22_fe
+      and "(st.items || []).forEach(item => body.push(ioItemCard(item)))" in _p22_fe
+      and "item.head" not in _p22_fe and "source:" not in _p22_item_src)
+check("P22e ảnh tải không được thì Ô TỰ NÓI ✕ Kèm lý do — im lặng thành ô trống là bắt anh đoán link hỏng hay tool hỏng",
+      "img.onerror" in _p22_fe.split("function ioThumb")[1].split("function ioItemCard")[0]
+      and 'el("span", "ph", "✕")' in _p22_fe and "B0 vẫn tải ảnh khi chạy" in _p22_fe)
+check("P22e trạng thái 'xem hết' caption SỐNG QUA LƯỢT VẼ (IO_CAPS ở module + có mặt trong ioSig) — để trong DOM thì tick 2s xóa sạch",
+      "const IO_CAPS = new Set()" in _p22_fe and "Array.from(IO_CAPS).sort().join" in _p22_fe.split("function ioSig")[1].split("function syncIo")[0]
+      and "IO_CAPS.add(raw)" in _p22_item_src and '"iocap" + (IO_CAPS.has(raw) ? " full" : "")' in _p22_item_src)
 _p22_paste_slice = _p22_fe.split("function ioPasteField")[1].split("function ioImportCard")[0]
 check("P22d ô dán nằm TRONG thẻ Import và gửi lại đúng import_read — không mở event 'import_paste' thứ hai",
       "body = [ioFilePicker(), ioPasteField()]" in _p22_fe

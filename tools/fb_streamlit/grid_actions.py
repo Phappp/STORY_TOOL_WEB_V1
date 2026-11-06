@@ -655,7 +655,19 @@ def export_name(ctx: Ctx, kind: str) -> str:
 
 PREVIEW_ROWS = 6  # modal chỉ liệt kê bấy nhiêu dòng đầu — đủ để thấy chọn sai file hay không
 PREVIEW_SKIPPED = 8  # số lý do bỏ dòng hiển thị trong modal (phần dư gom thành một dòng đếm)
+PREVIEW_IMGS = 3  # ảnh THẬT hiện mỗi bài — nhiều hơn là gửi cả chục link cho một ô xem nhanh
+PREVIEW_CAP_CHARS = 420  # chữ cắt ở đây chỉ để đọc tại chỗ; bản ghi vào folder vẫn nguyên văn
 EXPORT_KINDS = {"json": "JSON (import lại được)", "csv": "CSV 2 cột (link nguồn · link đã đăng)"}
+
+
+def preview_caption(caption) -> tuple[str, bool]:
+    """Caption cho ô Xem trước: dồn khoảng trắng (file scrape dư xuống dòng từng câu) + cắt trần.
+
+    Trả thêm `clipped` để lưới tự nói "còn N ký tự nữa" thay vì âm thầm cắt — anh cần biết chữ
+    thật dài hơn chứ không phải tin rằng bài chỉ có ngần này.
+    """
+    text = " ".join(str(caption or "").split())
+    return text[:PREVIEW_CAP_CHARS], len(text) > PREVIEW_CAP_CHARS
 
 
 def decode_upload(data) -> tuple[bytes, str]:
@@ -690,6 +702,12 @@ def io_preview(name, data, done: str = "") -> dict:
     shown = skipped[:PREVIEW_SKIPPED]
     with_caption = sum(1 for r in kept if str(r.get("caption") or "").strip())
     capped = max(0, len(rows) - len(kept))
+    items = []
+    for r in kept[:PREVIEW_ROWS]:
+        cap, clipped = preview_caption(r.get("caption"))
+        imgs = [str(u or "") for u in (r.get("images") or []) if str(u or "").strip()]
+        items.append({"url": str(r.get("url") or ""), "caption": cap, "clipped": clipped,
+                      "imgs": len(imgs), "thumbs": imgs[:PREVIEW_IMGS]})
     out.update({
         "digest": digest,
         "again": bool(done) and digest == done,
@@ -699,9 +717,7 @@ def io_preview(name, data, done: str = "") -> dict:
         "capped": capped,
         "skipped": shown,
         "skipped_more": max(0, len(skipped) - len(shown)),
-        "items": [{"url": str(r.get("url") or ""),
-                   "head": (str(r.get("caption") or "").strip() or "(chưa có chữ — B0 sẽ trích)")[:70],
-                   "imgs": len(r.get("images") or [])} for r in kept[:PREVIEW_ROWS]],
+        "items": items,
         "line": (f"Nhận {len(kept)} bài · bỏ {len(skipped)} dòng"
                  + (f" · {with_caption} bài có caption sẵn trong file (B0 chỉ tải ảnh)" if with_caption else "")
                  + (f" · {capped} dòng cuối vượt trần {MAX_IMPORT}/lần, chưa import" if capped else "")),

@@ -88,10 +88,10 @@ def test_non_development_mock_identity_configuration_is_rejected() -> None:
 @pytest.mark.parametrize(
     ("uri", "database", "environment", "expected"),
     [
-        ("mongodb://example.invalid:27018/?replicaSet=storytool-dev", "story_tool_web_dev", "development", "loopback"),
-        ("mongodb://127.0.0.1:27018/?replicaSet=other", "story_tool_web_dev", "development", "replica set"),
-        ("mongodb://127.0.0.1:27017/?replicaSet=storytool-dev", "production", "development", "MONGODB_DB"),
-        ("mongodb://127.0.0.1:27018/?replicaSet=storytool-dev", "story_tool_web_test_nothex00000", "test", "MONGODB_DB"),
+        ("mongodb://example.invalid:27017/?replicaSet=rs0", "story_tool_web_dev", "development", "loopback"),
+        ("mongodb://127.0.0.1:27017/?replicaSet=other", "story_tool_web_dev", "development", "replica set"),
+        ("mongodb://127.0.0.1:27017/?replicaSet=rs0", "production", "development", "MONGODB_DB"),
+        ("mongodb://127.0.0.1:27017/?replicaSet=rs0", "story_tool_web_test_nothex00000", "test", "MONGODB_DB"),
     ],
 )
 def test_mongo_adapter_rejects_non_development_targets(uri: str, database: str, environment: str, expected: str) -> None:
@@ -109,8 +109,8 @@ def test_mongo_adapter_rejects_uri_credentials() -> None:
     assert "credentials" in result.detail
 
 
-def test_development_mongo_default_uses_dedicated_port() -> None:
-    assert Settings(_env_file=None).mongodb_uri == "mongodb://127.0.0.1:27018/?replicaSet=storytool-dev"
+def test_development_mongo_default_uses_local_replica() -> None:
+    assert Settings(_env_file=None).mongodb_uri == "mongodb://127.0.0.1:27017/?replicaSet=rs0"
 
 
 def test_readiness_retries_connection_after_startup_outage(monkeypatch) -> None:
@@ -132,7 +132,7 @@ def test_readiness_retries_connection_after_startup_outage(monkeypatch) -> None:
 def test_readiness_rejects_secondary_replica(monkeypatch) -> None:
     class FakeAdmin:
         def command(self, _name):
-            return {"setName": "storytool-dev", "isWritablePrimary": False}
+                return {"setName": "rs0", "isWritablePrimary": False}
 
     class FakeClient:
         admin = FakeAdmin()

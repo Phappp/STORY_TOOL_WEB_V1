@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_host: str = "127.0.0.1"
     app_port: int = 8000
-    mongodb_uri: str = "mongodb://127.0.0.1:27018/?replicaSet=storytool-dev"
+    mongodb_uri: str = "mongodb://127.0.0.1:27017/?replicaSet=rs0"
     mongodb_db: str = "story_tool_web_dev"
     mongodb_timeout_ms: int = 750
     frontend_origin: str = "http://127.0.0.1:3000"
