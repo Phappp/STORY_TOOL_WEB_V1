@@ -3297,9 +3297,10 @@ check("P10a tooltip ＋ nói 'xếp CUỐI', hết câu hứa sai 'xếp trên c
       and "Bỏ khỏi hàng đợi" in js_p8i and "không cắt giữa lượt AI" in js_p8i)
 check("P10a tiêu đề cột # giải thích số đó là thứ tự làm, JS gắn tip từ COLS",
       'key: "q"' in js_p8i and "th.title = c.tip" in js_p8i and "# = thứ tự hàng đợi" in js_p8i)
-check("P14c tooltip ⚡/hàng đợi bỏ lời hứa chia '5 bài/lượt' — nói đúng: từng B, bộ nào rảnh là nhảy vào",
+check("P14c tooltip hàng đợi bỏ lời hứa chia '5 bài/lượt' — nói đúng: từng B, bộ nào rảnh là nhảy vào "
+      "(P21d: chữ này giờ chỉ còn ở ▶ hàng đợi, nút ⚡ theo ô batch đã bị bỏ)",
       "MAX_BATCH" not in js_p8i and "Math.ceil(n /" not in js_p8i
-      and "Bộ nào rảnh là việc nhảy vào" in js_p8i and "nhiều bài cùng lúc nếu có nhiều bộ rảnh" in js_p8i)
+      and "từng B một" in js_p8i and "nhiều bài cùng lúc nếu có nhiều bộ rảnh" in js_p8i)
 check("P10a tick vá chỉ hoãn Ô ĐANG NHẬN CHỮ (input/textarea/contenteditable), không hoãn mọi ô có focus",
       "function isTypingIn(node, cell)" in js_p8i and "node.isContentEditable" in js_p8i
       and "if (!old || isTypingIn(a, old)) return;" in js_p8i
@@ -4327,6 +4328,42 @@ check("P21i thẻ có trần chiều cao riêng (.videl max-height) — P20 'mod
       ".vidplay video.videl {" in _p22_fe)
 shutil.rmtree(_p21_box, ignore_errors=True)
 # --- hết P21c ---
+
+# --- P21d: bỏ hẳn kiểu "tick từng bài rồi chạy batch" — hàng đợi (＋ / ▶) là đường chọn bài duy nhất ---
+_p21d_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p21d_cols = _p21d_fe.split("const COLS = [")[1].split("\n];")[0]
+_p21d_bar = _p21d_fe.split('const bar = el("div", "bar");')[1].split("const cnt = el(")[0]
+_p21d_update = _p21d_fe.split("function updateBar")[1].split("\n}")[0]
+_p21d_act = _p21d_fe.split("function actCell")[1].split("\n}")[0]
+check("P21d cột pick biến mất khỏi COLS (còn 8 cột) và không còn CSS th.pick/td.pick nào",
+      '"pick"' not in _p21d_cols and _p21d_cols.count("{ key:") == 8
+      and "td.pick" not in _p21d_fe and "pickCell" not in _p21d_fe)
+check("P21d không còn MỘT dấu vết nào của bộ chọn: PICKED, boxes[], #pickall, 'chọn tất cả', batchButton, "
+      "'Chạy đã chọn' — để lại chữ lạc là grid hứa một nút không còn",
+      all(w not in _p21d_fe for w in ("PICKED", "boxes", "pickall", "chọn tất cả",
+                                      "batchButton", "Chạy đã chọn")))
+check("P21d cellNode/cellSig/rowNode/patchCells không còn nhánh 'pick' nào — chữ ký ô khớp đúng ô thật vẽ "
+      "(vá theo index cột mà chữ ký còn tính ô đã xóa là ô lệch hàng loạt)",
+      all(s not in _p21d_fe for s in ('if (key === "pick")', 'case "pick":', 'c.key === "pick"')))
+check("P21d ⚡ THEO DÒNG vẫn còn y nguyên (run_all cho riêng bài đó) — bỏ batch chứ không bỏ cửa chạy một bài",
+      'send({ source: "run_all", id: row.id })' in _p21d_act and '"⚡"' in _p21d_act)
+check("P21d ▶ hàng đợi vẫn là đường batch (batch_run) và là CHỖ DUY NHẤT gửi nó — Python không phải sửa gì",
+      _p21d_fe.count('send({ source: "batch_run", ids })') == 1
+      and 'send({ source: "batch_run", ids })' in _p21d_fe.split("function queueButton")[1].split("\n}")[0])
+check("P21d updateBar không còn early-return theo #batch — chữ ▶/⚠ phải cập nhật tiếp dù nút batch đã mất "
+      "(quên bỏ cái chốt này là hai nút còn lại đứng im mãi)",
+      '"#batch"' not in _p21d_update and 'getElementById("queuerun")' in _p21d_update
+      and 'getElementById("queueerr")' in _p21d_update and "return;" not in _p21d_update.split("if (q)")[0])
+check("P21d thanh nút còn đúng thứ tự tìm · import · ▶ · ⚠ · mở rộng · stats, không còn ô chọn tất cả chen giữa",
+      _p21d_bar.count("bar.appendChild(") == 6
+      and _p21d_bar.index("searchBox()") < _p21d_bar.index("ioButton()") < _p21d_bar.index("queueButton()")
+      < _p21d_bar.index("errorsButton()") < _p21d_bar.index("expandButton()")
+      < _p21d_bar.index("statsBar()"))
+check("P21d prefs cột cũ còn mang khóa 'pick' cũng vô hại: bề rộng dựng theo COLS (không phải theo file) "
+      "và tổng chiều ngang tính từ COLS — khóa lạc không được nở lưới ra một cột ma",
+      "COLS.forEach(c => { out[c.key] = Math.max(c.min, Number(saved[c.key]) || c.w); });" in _p21d_fe
+      and "const total = COLS.reduce((sum, c) => sum + Number(map[c.key]), 0) + 2;" in _p21d_fe)
+# --- hết P21d ---
 
 # cleanup test rows
 c = db.connect()

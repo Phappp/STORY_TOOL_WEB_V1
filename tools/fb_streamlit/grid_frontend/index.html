@@ -49,7 +49,7 @@
   tbody tr:hover td { background:var(--hover); }
   tbody tr.queued td { background:#241d3a; }  /* tím nhạt bản #2c2450 của legacy, đủ nhận ra hàng đang xếp */
   th.c, td.c { text-align:center; }
-  th.steps, td.steps, th.q, td.q, th.pick, td.pick, th.img, td.img, th.status, td.status { text-align:center; }
+  th.steps, td.steps, th.q, td.q, th.img, td.img, th.status, td.status { text-align:center; }
   th.id, td.id { font-family:ui-monospace,Consolas,monospace; }
   a.link { color:var(--accent); text-decoration:none; }
   a.link:hover { text-decoration:underline; }
@@ -268,7 +268,6 @@ const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy ·
 // Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
 const COLS = [
   { key: "q", label: "#", w: 40, min: 34, align: "c", tip: "# = thứ tự hàng đợi: bài bấm ＋ trước làm trước, bài mới xếp cuối. Bấm số đó để bỏ khỏi hàng đợi." },
-  { key: "pick", label: "", w: 30, min: 26 },
   { key: "id", label: "story", w: 92, min: 64 },
   { key: "src", label: "nguồn", w: 210, min: 80 },
   // 5 viên pill 32px + kẽ 3px mỗi viên + đệm ô 8+8 = 191px; min chặn để prefs cũ (156) không cắt chữ B4
@@ -400,8 +399,6 @@ function button(label, title, fn, cls) {
 }
 
 let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {} };
-const PICKED = new Set();
-let boxes = [];
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
 let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
@@ -1787,22 +1784,7 @@ function rowClasses(row) {
 }
 
 // Mỗi cột một hàm dựng ô, và ô nào cũng tự dựng lại được từ đúng (row, key) -> lần vẽ sau chỉ thay
-// ô có chữ ký đổi, không đụng phần còn lại. boxes[] phải giữ thứ tự theo hàng nên pickCell trả ô
-// chưa append; rowNode/patchCells mới ghi con trỏ checkbox vào boxes.
-function pickCell(row) {
-  const td = el("td", "pick");
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.checked = PICKED.has(String(row.id));
-  box.title = "Chọn để chạy batch";
-  box.addEventListener("change", () => {
-    if (box.checked) PICKED.add(String(row.id)); else PICKED.delete(String(row.id));
-    updateBar();
-  });
-  td.appendChild(box);
-  return td;
-}
-
+// ô có chữ ký đổi, không đụng phần còn lại.
 function idCell(row) {
   const td = el("td", "id", row.id);
   td.title = String(row.topic || row.id);
@@ -1832,7 +1814,6 @@ function actCell(row) {
 
 function cellNode(row, key) {
   if (key === "q") return queueCell(row);
-  if (key === "pick") return pickCell(row);
   if (key === "id") return idCell(row);
   if (key === "src") return sourceCell(row);
   if (key === "steps") return stepsCell(row);
@@ -1847,19 +1828,16 @@ function rowNode(row) {
   const tr = el("tr", rowClasses(row));
   tr.dataset.id = String(row.id);
   COLS.forEach(c => {
-    const td = cellNode(row, c.key);
-    if (c.key === "pick") boxes.push(td.querySelector("input"));
-    tr.appendChild(td);
+    tr.appendChild(cellNode(row, c.key));
   });
   return tr;
 }
 
 // Chữ ký của MỘT Ô: gộp đúng những chữ rowNode/cellNode đang hiển thị từ row đó.
-// Bỏ hẳn thứ không đổi (act) và thứ nằm ngoài payload (PICKED, EDITING).
+// Bỏ hẳn thứ không đổi (act) và thứ nằm ngoài payload (EDITING).
 function cellSig(row, key) {
   switch (key) {
     case "q": return (row.queued ? "1" : "0") + String(row.queue_pos || "");
-    case "pick": return PICKED.has(String(row.id)) ? "1" : "0";
     case "id": return String(row.topic || "");
     case "src": return String(row.source || "");
     case "steps": return JSON.stringify([row.b0, row.b4, row.states, row.detail, row.b0meta, row.b4meta, row.flow, row.hint]);
@@ -1894,28 +1872,17 @@ function patchCells(list) {
       const sig = cellSig(row, c.key);
       if (sigs[k] === sig) return;
       const old = tr.children[k];
-      // chỉ ô đang NHẬN CHỮ (Link sửa tay, checkbox vừa tick) mới để yên cho tick sau vá — kẻo anh
-      // gõ dở bị xóa giữa chữ. Bỏ qua mọi ô có focus thì sai: Chrome cho <button> nhận focus khi bấm
+      // chỉ ô đang NHẬN CHỮ (Link sửa tay) mới để yên cho tick sau vá — kẻo anh gõ dở bị xóa giữa
+      // chữ. Bỏ qua mọi ô có focus thì sai: Chrome cho <button> nhận focus khi bấm
       // nên ô ＋/# bị hoãn vô hạn, badge đứng yên dù server đã đổi.
       if (!old || isTypingIn(a, old)) return;
       const td = cellNode(row, c.key);
-      if (c.key === "pick") boxes[i] = td.querySelector("input");
       tr.replaceChild(td, old);
       sigs[k] = sig;
       touched++;
     });
   });
   return touched;
-}
-
-function batchButton() {
-  const b = button("⚡ Chạy đã chọn", "Chạy pipeline cho các bài đã chọn, tuần tự", () => {
-    const ids = Array.from(PICKED);
-    if (ids.length) send({ source: "batch_run", ids });
-  });
-  b.id = "batch";
-  b.disabled = true;
-  return b;
 }
 
 // ---- P22b: bảng Import/Export NGAY TRONG LƯỚI, đứng cạnh ô tìm kiếm --------------------
@@ -2573,13 +2540,6 @@ function syncStats() {
 }
 
 function updateBar() {
-  const b = document.getElementById("batch");
-  if (!b) return;
-  const n = PICKED.size;
-  b.disabled = n === 0;
-  b.textContent = "⚡ Chạy " + n + " bài đã chọn";
-  b.title = "Mỗi bài chạy B1 trước; B2/B3 được nhả ngay khi B1 của nó xong. Bộ nào rảnh là việc nhảy vào. "
-    + "B nào đã xanh lá (xong) được BỎ QUA — muốn chạy lại thì mở bài, bấm ▶ riêng ô đó.";
   const q = document.getElementById("queuerun");
   if (q) {
     const ids = queueIds();
@@ -2596,9 +2556,6 @@ function updateBar() {
     e.textContent = "⚠ Xếp " + n + " bài lỗi vào hàng đợi";
     e.title = n ? "Đánh dấu " + n + " bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt" : "Chưa có bài nào đang lỗi";
   }
-  const all = document.getElementById("pickall");
-  const shown = visible();
-  if (all) all.checked = shown.length > 0 && shown.every(r => PICKED.has(String(r.id)));
 }
 
 let drag = null;
@@ -2667,7 +2624,6 @@ function render(args, force) {
   ingestIo();        // tương tự cho bảng Import/Export — preview phải hiện ngay lượt vẽ này
   ingestVideo();     // và cho mẩu video vừa được server xác nhận (P21c)
   const alive = new Set(rows().map(r => String(r.id)));
-  Array.from(PICKED).forEach(id => { if (!alive.has(id)) PICKED.delete(id); });
   if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
   if (CURSOR && !alive.has(CURSOR)) CURSOR = "";
   const list = visible();
@@ -2694,7 +2650,6 @@ function render(args, force) {
     return;
   }
   closeMenu();  // menu ⋮ gắn ngoài cây lưới; hàng chủ của nó vừa bị vẽ lại nên để nó treo là sai
-  boxes = [];
 
   let tbody = null;
   let table = null;
@@ -2703,25 +2658,10 @@ function render(args, force) {
   const wrap = el("div", "wrap" + (expandedMode() ? " expanded" : ""));
 
   const bar = el("div", "bar");
-  const allWrap = el("label", "muted");
-  const all = document.createElement("input");
-  all.type = "checkbox";
-  all.id = "pickall";
-  all.title = "Chọn / bỏ chọn tất cả";
-  all.addEventListener("change", () => {
-    PICKED.clear();
-    if (all.checked) visible().forEach(r => PICKED.add(String(r.id)));
-    boxes.forEach((box, i) => { box.checked = all.checked; });
-    updateBar();
-  });
-  allWrap.appendChild(all);
-  allWrap.appendChild(el("span", "muted", " chọn tất cả"));
   bar.appendChild(searchBox());
   bar.appendChild(ioButton());  // P22b: import/export nằm cạnh ô tìm — không còn mục native nào nữa
-  bar.appendChild(batchButton());
   bar.appendChild(queueButton());
   bar.appendChild(errorsButton());
-  bar.appendChild(allWrap);
   bar.appendChild(expandButton());
   bar.appendChild(statsBar());
   const cnt = el("span", "count", countText());
