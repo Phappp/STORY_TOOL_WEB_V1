@@ -805,7 +805,14 @@ def _run_app():
     pending_page = st.session_state.pop("pending_nav", None)  # grid ✎ đổi trang: set TRƯỚC khi radio sinh ra
     if pending_page in NAV:
         st.session_state["nav_page"] = pending_page
+    elif "nav_page" not in st.session_state:
+        # F5 mở một session WebSocket MỚI nên session_state bốc hơi — URL là thứ duy nhất còn nhớ trang đang xem.
+        url_page = str(st.query_params.get("page") or "")
+        if url_page in NAV:
+            st.session_state["nav_page"] = url_page
     choice = st.sidebar.radio("Chức năng", list(NAV.keys()), key="nav_page")
+    if str(st.query_params.get("page") or "") != choice:
+        st.query_params["page"] = choice  # ghi khi khác thôi: cùng một URL thì khỏi gửi message thừa
     connection = conn()
     NAV[choice](connection)
     connection.close()

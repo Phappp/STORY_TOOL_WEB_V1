@@ -3779,6 +3779,58 @@ check("P21a chữ hướng dẫn nói đúng thứ anh nhận được (kèm Hea
 shutil.rmtree(_p21a_box, ignore_errors=True)
 # --- hết P21a ---
 
+# --- P21b: F5 không bị đá về trang "Tạo bài" — trang đang xem nằm trong URL ---
+# Lý do phải dùng URL: F5 mở một session WebSocket MỚI, session_state (nơi radio nav
+# sống) bốc hơi theo, nên chỉ st.query_params — thứ sống trong chính thanh địa chỉ —
+# còn nhớ anh đang đứng ở Grid.
+_p21b_box = Path(tempfile.mkdtemp(prefix="fbp21b_"))
+_p21b_rec0 = stories._recents_path
+_p21b_cur0 = stories.current()
+stories._recents_path = lambda: _p21b_box / "workspaces.json"
+stories.set_current(stories.validate_root(_p21b_box / "ws"))
+_p21b_app = str(Path(__file__).resolve().parent / "app.py")
+_p21b_src = (Path(__file__).resolve().parent / "app.py").read_text(encoding="utf-8")
+try:
+    _p21b_base = AppTest.from_file(_p21b_app, default_timeout=30).run()
+    check("P21b mọi lượt vẽ đều ghi trang đang xem vào URL — F5 mới có thứ mà đọc lại",
+          not _p21b_base.exception and _p21b_base.query_params.get("page") == "Tạo bài")
+    _p21b_grid = AppTest.from_file(_p21b_app, default_timeout=30)
+    _p21b_grid.query_params = {"page": "Grid"}  # giả định anh bấm F5 khi URL là ?page=Grid
+    _p21b_grid.run()
+    check("P21b F5 ở ?page=Grid vào THẲNG Grid, không về 'Tạo bài' (radio + nội dung trang cùng nói vậy)",
+          not _p21b_grid.exception and _p21b_grid.sidebar.radio[0].value == "Grid"
+          and any("Grid story" in (h.value or "") for h in _p21b_grid.subheader))
+    _p21b_vn = AppTest.from_file(_p21b_app, default_timeout=30)
+    _p21b_vn.query_params = {"page": "Cấu hình"}  # tên trang có dấu — phải sống sót encode/decode
+    _p21b_vn.run()
+    check("P21b tên trang TIẾNG VIỆT qua URL không gãy — ?page=Cấu hình vẫn đúng trang",
+          not _p21b_vn.exception and _p21b_vn.sidebar.radio[0].value == "Cấu hình"
+          and _p21b_vn.query_params.get("page") == "Cấu hình")
+    _p21b_bogus = AppTest.from_file(_p21b_app, default_timeout=30)
+    _p21b_bogus.query_params = {"page": "Xóa Workspace Và Chạy Bài"}  # URL cũ/đánh tay/món đã đổi tên
+    _p21b_bogus.run()
+    check("P21b URL lạ KHÔNG làm sập app cũng không chọn bừa trang — về mặc định, vẽ bình thường",
+          not _p21b_bogus.exception and _p21b_bogus.sidebar.radio[0].value == "Tạo bài")
+    _p21b_live = AppTest.from_file(_p21b_app, default_timeout=30).run()
+    _p21b_live.sidebar.radio[0].set_value("Cấu hình").run()
+    check("P21b phiên ĐANG sống tự quyết: đổi trang trong phiên thì URL đi theo, URL cũ không kéo về",
+          _p21b_live.sidebar.radio[0].value == "Cấu hình"
+          and _p21b_live.query_params.get("page") == "Cấu hình")
+    _p21b_nav = AppTest.from_file(_p21b_app, default_timeout=30)
+    _p21b_nav.query_params = {"page": "Grid"}
+    _p21b_nav.session_state["pending_nav"] = "Cấu hình"  # ✎ "mở trong Tạo bài" của lưới
+    _p21b_nav.run()
+    check("P21b lệnh đổi trang của lưới (pending_nav) thắng URL — URL chỉ là trí nhớ lúc mở trang",
+          not _p21b_nav.exception and _p21b_nav.sidebar.radio[0].value == "Cấu hình")
+    check("P21b URL chỉ được đọc khi phiên CHƯA có nav_page — nếu không, tab mới trong cùng trình duyệt "
+          "sẽ đè lên trang anh vừa chọn",
+          'elif "nav_page" not in st.session_state:' in _p21b_src)
+finally:
+    stories._recents_path = _p21b_rec0
+    stories.set_current(_p21b_cur0)
+    shutil.rmtree(_p21b_box, ignore_errors=True)
+# --- hết P21b ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")
