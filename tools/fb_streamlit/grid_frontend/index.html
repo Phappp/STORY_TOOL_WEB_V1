@@ -117,6 +117,14 @@
   .mcard textarea.ta { flex:1 1 auto; min-height:120px; }
   .mcard img.photo { max-height:min(46vh,420px); object-fit:contain; align-self:center; }
   .mcard .cbd pre.doc { max-height:100%; }
+  /* P22b: bảng Import/Export — chữ trạng thái nằm DƯỚI đúng nút nó nói về, lỗi đỏ/thành công xanh.
+     Dòng preview cắt bằng "…" vì link FB dài hơn bề rộng thẻ, mà đủ để nhận ra chọn sai file. */
+  .ioline { color:var(--muted); font-size:12px; line-height:1.45; word-break:break-word; }
+  .ioline.bad { color:var(--error-t); }
+  .ioline.ok { color:var(--done-t); }
+  .ioitem { font-size:12px; color:var(--muted); border-left:2px solid var(--border); padding-left:7px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .mcard .cbd input[type=file] { font:inherit; font-size:12px; color:var(--muted); max-width:100%; }
   /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
   button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
@@ -278,6 +286,7 @@ let LAST_EXPANDED = false;
 let LAST_WORKSPACE = "";
 let LAST_WIDTHS = "";
 let LAST_MODAL_SIG = "";
+let LAST_IO_SIG = "";         // chữ ký bảng Import/Export — giống modal bài, vá tại chỗ chứ không dựng lại
 let LAST_SUMMARY = "";
 
 function colsCacheKey() { return COLS_KEY + ":" + (MODEL.workspace || "default"); }
@@ -307,7 +316,7 @@ function setFrameHeight() {
   // grid đang mở rộng bị nhấp nháy theo từng tick làm mới.
   if (pinFrame()) LAST_H = 0;  // vừa đổi trạng thái ghim -> chiều cao cũ không còn đúng
   if (expandedMode()) { LAST_H = 0; return; }  // đang ghim: CSS inset:0 quyết định, khỏi xin chiều cao
-  const h = modalRef() ? Math.min(Math.max(outerHeight(), 360), 4000)
+  const h = (modalRef() || IO_OPEN) ? Math.min(Math.max(outerHeight(), 360), 4000)
     : Math.min(Math.max(document.documentElement.scrollHeight, 120), 640);
   if (Math.abs(h - LAST_H) < 4) return;  // legacy FX97: nhảy < 4 px coi như không đổi, khỏi co giãn iframe
   LAST_H = h;
@@ -344,7 +353,7 @@ function button(label, title, fn, cls) {
   return b;
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {} };
+let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {} };
 const PICKED = new Set();
 let boxes = [];
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
@@ -1349,7 +1358,8 @@ function repaint() {
   render({ rows: MODEL.rows, workspace: MODEL.workspace, image_max: MODEL.image_max,
            video_max: MODEL.video_max,
            copy_response: MODEL.copy_response, summary: MODEL.summary, queue_ids: MODEL.queue_ids,
-           error_ids: MODEL.error_ids, providers: MODEL.providers, defaults: MODEL.defaults, cols: MODEL.cols }, true);
+           error_ids: MODEL.error_ids, providers: MODEL.providers, defaults: MODEL.defaults, cols: MODEL.cols,
+           io: MODEL.io, io_response: {} }, true);  // io_response đã nạp rồi: vẽ lại cục bộ không được nạp lại lần hai
 }
 
 function linkEditor(row, td) {
@@ -1614,6 +1624,284 @@ function batchButton() {
   return b;
 }
 
+// ---- P22b: bảng Import/Export NGAY TRONG LƯỚI, đứng cạnh ô tìm kiếm --------------------
+// Mục native "📥 Import…" đầu trang biến mất vì một thao tác phải còn ĐÚNG MỘT chỗ (luật P6e).
+// File đi base64 trong event nên chọn file là MỘT event (đọc + đếm), bấm "Tạo bài" là event kế
+// tiếp (sinh folder) — Streamlit chỉ nhận đúng một event cho mỗi lượt vẽ. IO_FILE giữ đúng bytes
+// đã xem để commit gửi lại nguyên file, không có bản nháp nào sống ở server giữa hai lần mở bảng.
+let IO_OPEN = false;    // bảng đang mở? CỐ Ý không ghi localStorage: iframe dựng lại mà bảng vẫn
+//                      // "mở" thì nó mở ra với ô chọn file trống trơn — dễ tưởng đã chọn rồi.
+let IO_FILE = null;     // {name, data} — file vừa chọn ở lần vẽ này
+let IO_STATE = {};      // payload import gần nhất: reading | preview | commit (kèm lý do lỗi)
+let IO_EXPORT = {};     // payload export gần nhất: {format, name, text, count, note}
+let IO_B0 = {};         // payload "trích B0 còn thiếu" gần nhất
+let IO_SEQ = 0;         // đếm response đã nạp — chữ ký khỏi phải stringify cả file export vài MB
+let IO_BUSY = false;    // đã gửi một file, chờ lưới trả lời: ô chọn file PHẢI khóa tới lúc đó, vì
+                        // repaint() dựng lại input nên `pick.disabled = true` chỉ sống tới lượt vẽ kế.
+
+function ioModel() { return MODEL.io && typeof MODEL.io === "object" ? MODEL.io : {}; }
+function ioCap() { return mib(ioModel().max_bytes, 8); }
+function ioTypes() {
+  const list = Array.isArray(ioModel().types) && ioModel().types.length ? ioModel().types : ["csv", "txt", "xlsx", "json"];
+  return list.map(t => "." + t).join(",");
+}
+function ioNote(text, cls) { return el("div", "ioline" + (cls ? " " + cls : ""), text); }
+function openIo() { IO_OPEN = true; repaint(); }
+function closeIo() { IO_OPEN = false; repaint(); }
+
+function ioButton() {
+  const todo = Number(ioModel().b0_todo || 0);
+  const b = button("📥 Import · Export", "Thêm bài từ file link/JSON (có xem trước rồi mới tạo folder) và xuất"
+    + " đúng phần đang hiện ra file" + (todo ? " · còn " + todo + " bài chờ trích B0" : ""),
+    () => { if (IO_OPEN) closeIo(); else openIo(); });
+  b.id = "iobtn";
+  return b;
+}
+
+function ioFilePicker() {
+  const pick = document.createElement("input");
+  pick.type = "file";
+  pick.accept = ioTypes();
+  pick.disabled = IO_BUSY;  // đọc từ server chưa về thì chưa chọn file khác (xem IO_BUSY)
+  pick.title = "Chọn file " + ioTypes().replace(/,/g, " · ") + " — tối đa " + ioCap() + " MB mỗi lần."
+    + " CSV/TXT/XLSX: một dòng một link (cột A). JSON: đúng dạng lưới Export, có sẵn caption + link ảnh."
+    + " Chọn xong lưới ĐỌC TRƯỚC, chưa tạo bài nào.";
+  pick.addEventListener("click", e => e.stopPropagation());
+  pick.addEventListener("change", () => {
+    const f = pick.files && pick.files[0];
+    if (!f) return;
+    const max = Number(ioModel().max_bytes || 0);
+    if (max && f.size > max) {  // đừng gửi một file 40 MB qua WebSocket chỉ để Python từ chối nó
+      IO_FILE = null;
+      IO_STATE = { kind: "preview", name: f.name,
+                   error: f.size >= 1048576
+                     ? Math.round(f.size / 1048576) + " MB vượt trần " + ioCap() + " MB của một lần import — tách file rồi chọn lại."
+                     : Math.round(f.size / 1024) + " KB vượt trần " + ioCap() + " MB — chắc gì đây là file import?" };
+      repaint();
+      return;
+    }
+    const rd = new FileReader();
+    rd.onload = () => {
+      IO_BUSY = true;  // một event mỗi lượt vẽ: chờ lưới đọc xong mới được chọn file khác
+      IO_FILE = { name: f.name, data: String(rd.result).split(",", 2)[1] || "" };
+      IO_STATE = { kind: "reading", name: f.name };
+      send({ source: "import_read", name: f.name, data: IO_FILE.data });
+      repaint();
+    };
+    rd.onerror = () => {
+      IO_FILE = null;
+      IO_STATE = { kind: "preview", name: f.name, error: "Đọc file hỏng — chọn lại file, hoặc chép thẳng vào workspace." };
+      repaint();
+    };
+    rd.readAsDataURL(f);
+  });
+  return pick;
+}
+
+function ioImportCard() {
+  const st = IO_STATE || {};
+  const body = [ioFilePicker()];
+  let state = "pending";
+  if (st.error) {
+    state = "error";
+    body.push(ioNote("⚠ " + st.error, "bad"));
+  } else if (st.kind === "reading") {
+    state = "running";
+    body.push(ioNote("⏳ Đang đọc “" + st.name + "” — chưa tạo bài nào."));
+  } else if (st.kind === "preview") {
+    const kept = Number(st.rows || 0);
+    const cap = Number(st.with_caption || 0);
+    state = st.again ? "done" : kept ? "queued" : "error";
+    body.push(ioNote("📄 " + st.name + " · " + String(st.line || "")));
+    (st.items || []).forEach(item => body.push(el("div", "ioitem",
+      String(item.url || "(không link)") + " — " + item.head
+      + (Number(item.imgs) > 0 ? " · " + item.imgs + " ảnh trong file" : ""))));
+    const hidden = Number(st.total || 0) - (st.items || []).length;
+    if (hidden > 0) body.push(ioNote("· … còn " + hidden + " bài nữa trong file (modal chỉ liệt kê " + (st.items || []).length + " dòng đầu)"));
+    // Python đã viết sẵn "bỏ dòng …" / "bỏ link trùng …" — thêm chữ "bỏ" nữa là đọc trùng.
+    (st.skipped || []).forEach(line => body.push(ioNote("· " + line)));
+    if (Number(st.skipped_more || 0) > 0) body.push(ioNote("· … còn " + st.skipped_more + " dòng bị bỏ nữa"));
+    if (st.again) body.push(ioNote("✓ File này vừa import xong — chọn lại một file khác, hoặc Export rồi sửa trong workspace.", "ok"));
+    const go = button((st.again ? "✓ Đã tạo " : "➕ Tạo ") + kept + " bài mới" + (cap ? " (B0 chỉ tải ảnh)" : " + trích B0"),
+      !kept ? "Không có dòng hợp lệ nào — link Facebook ở cột A, hoặc {url, text, media} đúng dạng lưới Export."
+        : st.again ? "File này vừa import lần trước rồi — bấm lại là nhân đôi bài."
+        : "Tạo " + kept + " folder story (cột Nguồn = link) rồi giao B0 chạy trong luồng nền"
+          + (cap ? " — " + cap + " bài đã có caption trong file nên B0 chỉ tải ảnh"
+            : " — mỗi bài một việc, bộ rảnh tới đâu chạy tới đó")
+          + ". Không có undo: muốn xóa thì dời folder vào .trash.",
+      b => {
+        b.disabled = true;
+        send({ source: "import_commit", name: String((IO_FILE || {}).name || st.name || ""), data: String((IO_FILE || {}).data || "") });
+      });
+    go.disabled = !kept || !!st.again || !IO_FILE;
+    if (!IO_FILE && !st.again && kept) body.push(ioNote("· lưới không giữ hộ file giữa hai lần mở bảng — chọn lại file ở ô trên rồi bấm Tạo."));
+    body.push(go);
+  } else if (st.kind === "commit") {
+    state = st.again ? "error" : "done";
+    body.push(ioNote((st.again ? "⚠ " : "✓ ") + String(st.line || ""), st.again ? "bad" : "ok"));
+    if (!st.again && Number(st.made || 0))
+      body.push(ioNote("⏳ " + st.made + " bài đã vào luồng nền trích B0 — ô B0 xanh lá khi từng bài xong."));
+  } else {
+    body.push(ioNote("Chưa chọn file. Caption và ảnh chỉ lấy được từ bài công khai — bài trong group riêng tư sẽ báo lỗi ở ô B0."));
+  }
+  return card({ title: "📥 Import file → bài mới", state: state, wide: true, body: body,
+    help: ["Import: file ở máy → folder story mới, ĐỌC TRƯỚC rồi mới tạo.",
+      "CSV/TXT/XLSX: mỗi dòng một link bài viết/reel (cột A) — B0 trích caption + ảnh từ link đó.",
+      "JSON: đúng dạng lưới Export — caption lấy thẳng từ “text”, ảnh từ “media[].photo_image.uri”, nên B0 chỉ tải ảnh chứ không đọc lại bài.",
+      "Trần " + ioCap() + " MB và " + Number(ioModel().max_rows || 200) + " bài một lần; dòng trùng link tự bỏ, dòng vượt trần hiện ngay trong thẻ này.",
+      "Bấm “➕ Tạo N bài mới” là tạo thật N folder + hẹn B0 — chưa bấm thì chưa có gì thay đổi.",
+      "Import xong mà bài vẫn thiếu caption (link riêng tư) → dùng thẻ “🔁 B0 còn thiếu” bên dưới."] });
+}
+
+// Hai chiều của cùng một việc nên dựng theo bảng: format — label — giải thích nút — giải thích file.
+const IO_EXPORTS = [
+  ["json", "📤 JSON — import lại được",
+    "Dựng {url, text, media[]} cho các bài đang hiện — mang sang máy khác import lại chính file này là đủ caption + link ảnh",
+    "Bài chưa có caption/ảnh vẫn nằm trong file (trường để trống), chỉ bài không có link nguồn là bị bỏ."],
+  ["csv", "📤 CSV — 2 cột link",
+    "Hai cột “link nguồn · link đã đăng” cho các bài đang hiện — mở bằng Excel/Sheets để đối chiếu chỗ chưa đăng",
+    "CSV chỉ có hai cột link, không có caption — muốn mang nội dung đi thì export JSON."],
+];
+
+function ioExportCard() {
+  const st = IO_EXPORT || {};
+  const ids = visible().map(r => String(r.id));
+  const max = Number(ioModel().export_max || 500);
+  const keep = Math.min(ids.length, max);
+  const body = [ioNote("Xuất " + keep + " bài ĐANG HIỆN (trần " + max + "/lần) — theo đúng “Lọc bài” + ô tìm"
+    + (ids.length > max ? " · phần dư bị cắt, thu nhỏ bộ lọc lại" : "")
+    + ". Lưới không ghi file nào ra ổ: phải bấm ⬇ thì trình duyệt mới lưu.")];
+  if (!ids.length) body.push(ioNote("· hàng đang hiện trống — xóa chữ ở ô tìm hoặc đổi bộ lọc trước.", "bad"));
+  IO_EXPORTS.forEach(spec => {
+    const b = button(spec[1], spec[2], bb => {
+      bb.disabled = true;  // một event mỗi lượt vẽ — chờ lưới dựng nội dung xong hãy export kiểu khác
+      send({ source: "export_request", format: spec[0], ids });
+    });
+    b.disabled = ids.length === 0;
+    body.push(b);
+    if (st.format !== spec[0]) return;
+    if (st.error) body.push(ioNote("⚠ " + st.error, "bad"));
+    else if (st.text) {
+      const dropped = Number(st.asked || 0) - Number(st.count || 0);
+      body.push(ioNote("✓ " + String(st.name || "") + " · " + Number(st.count || 0) + " bài"
+        + (dropped > 0 ? " · bỏ " + dropped + " bài không có link nguồn" : "")
+        + (st.note ? " · " + st.note : ""), "ok"));
+      body.push(button("⬇ Lưu " + String(st.name || "file"), spec[3]
+        + " — tải về bằng trình duyệt (thường vào folder Downloads). Nội dung đã dựng xong nên bấm không gọi Python lại.",
+        () => downloadIo(st)));
+    } else if (st.line) body.push(ioNote("⚠ " + st.line, "bad"));  // quá trần: nói rõ chứ không cắt im
+  });
+  return card({ title: "📤 Export phần đang hiện", state: st.error ? "error" : st.text ? "done" : "pending", body: body,
+    help: ["Export lấy đúng phần ĐANG HIỆN trên lưới: bộ lọc “Lọc bài” + chữ trong ô tìm kiếm.",
+      "JSON {url, text, media}: import lại chính file này ở máy khác là nguyên văn caption + link ảnh, B0 khỏi trích.",
+      "CSV 2 cột “link nguồn · link đã đăng”, có BOM nên Excel mở ra tiếng Việt không thành chữ lạ.",
+      "Bài không có link nguồn bị bỏ ở cả hai dạng — số bài bị bỏ ghi ngay trên dòng ⬇.",
+      "File chỉ nằm trong bộ nhớ trình duyệt cho tới khi bấm ⬇; đóng bảng là mất, server không giữ bản nháp."] });
+}
+
+function ioB0Card() {
+  const st = IO_B0 || {};
+  const told = st.count != null;
+  const n = told ? Number(st.count || 0) : Number(ioModel().b0_todo || 0);
+  const body = [];
+  if (st.error) body.push(ioNote("⚠ " + st.error, "bad"));
+  else if (told) body.push(ioNote((n ? "⏳ " : "✓ ") + String(st.line || ""), n ? "" : "ok"));
+  else body.push(ioNote(n ? "Còn " + n + " bài có link nguồn mà B0 chưa ra caption (chưa chạy, lỗi, hoặc treo)."
+    : "Không bài nào chờ trích B0 — mọi bài có link nguồn đều đã có caption."));
+  const b = button("▶ Trích B0 cho " + n + " bài",
+    n ? "Giao luồng nền đọc lại link nguồn từng bài để lấy caption + ảnh — số bài lấy từ folder tại lúc bấm, "
+        + "mỗi bài một việc nên không tải cả loạt cùng lúc; chữ anh sửa tay trong input.txt không bị đè"
+      : "Không bài nào thiếu caption — B0 không có việc gì để làm",
+    bb => { bb.disabled = true; send({ source: "b0_retry" }); });
+  b.disabled = n === 0;
+  body.push(b);
+  return card({ title: "🔁 B0 còn thiếu", state: st.error ? "error" : (told && n) ? "running" : n ? "queued" : "done",
+    body: body,
+    help: ["B0 = caption + ảnh trích từ link ở cột Nguồn — bước này KHÔNG gọi AI, chỉ đọc trang công khai.",
+      "Nút này giao cho luồng nền MỌI bài còn thiếu caption trong workspace, không phụ bộ lọc đang bật.",
+      "Dùng khi: import CSV mà bài riêng tư không trích được, hoặc bạn xóa input.txt của bài nào đó.",
+      "Chữ bạn gõ tay trong input.txt đã được đánh dấu “thủ công” thì B0 không ghi đè.",
+      "Tiến trình hiện ở ô B0 từng hàng và ở dòng log dưới lưới."] });
+}
+
+function ioNode() {
+  if (!IO_OPEN) return null;
+  const overlay = el("div", "overlay io");
+  const modal = el("div", "modal");
+  const head = el("div", "mhead");
+  head.appendChild(el("span", "mid", "📥 Import · 📤 Export"));
+  head.appendChild(el("span", "muted", String(MODEL.workspace || "").split(/[\\/]/).pop() || "(workspace?)"));
+  head.appendChild(el("span", "mpos", visible().length + "/" + rows().length + " bài đang hiện"));
+  head.appendChild(helpChip(["Bảng Import/Export — làm cả hai chiều mà không rời khỏi lưới.",
+    "Import: chọn file → lưới đọc và ĐẾM (chưa tạo gì) → bấm “➕ Tạo N bài mới” mới sinh folder + hẹn B0.",
+    "Export: bấm một dạng → lưới dựng nội dung từ đúng phần đang hiện → bấm “⬇ Lưu …” trình duyệt mới tải file về.",
+    "Mọi số liệu lấy từ folder story tại thời điểm bấm, không có bản nháp nào được giữ hộ giữa hai lần mở bảng.",
+    "File import đi trong event nên có trần " + ioCap() + " MB; nhiều hơn thì tách file hoặc chép thẳng vào workspace.",
+    "Việc dài (B0, import hàng loạt) chạy trong luồng nền — đóng bảng không làm nó dừng."]));
+  head.appendChild(button("✕", "Đóng (Esc)", closeIo));
+  modal.appendChild(head);
+  const body = el("div", "mbody mcards");
+  body.appendChild(ioImportCard());
+  body.appendChild(ioExportCard());
+  body.appendChild(ioB0Card());
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  overlay.addEventListener("click", e => { if (e.target === overlay) closeIo(); });
+  return overlay;
+}
+
+function downloadIo(r) {
+  const csv = String(r.format || "") === "csv";
+  // BOM cho CSV: Excel mở UTF-8 mà không có BOM thì dấu tiếng Việt thành chữ lạ
+  const blob = new Blob([(csv ? "\ufeff" : "") + String(r.text || "")],
+    { type: (csv ? "text/csv" : "application/json") + ";charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = String(r.name || "fbtool-export." + (csv ? "csv" : "json"));
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// Python pop payload sau đúng một lần gửi nên ở đây chỉ nạp, không cần latch theo request_id.
+// Commit thành công thì xóa kết quả "trích B0" cũ — số của thẻ đó vừa đổi theo số bài mới.
+function ingestIo() {
+  const r = MODEL.io_response && typeof MODEL.io_response === "object" ? MODEL.io_response : {};
+  const kind = String(r.kind || "");
+  if (!kind) return;
+  IO_SEQ++;
+  IO_BUSY = false;  // lưới đã trả lời (kể cả trả lời lỗi) -> được chọn file khác
+  if (kind === "error") {
+    const why = String(r.line || "Có lỗi xảy ra.");
+    if (String(r.source || "") === "export_request") IO_EXPORT = { error: why };
+    else if (String(r.source || "") === "b0_retry") IO_B0 = { error: why };
+    else IO_STATE = { kind: "preview", error: why };
+    return;
+  }
+  if (kind === "export") IO_EXPORT = r;
+  else if (kind === "b0_retry") IO_B0 = r;
+  else if (kind === "preview" || kind === "commit") { IO_STATE = r; if (kind === "commit") IO_B0 = {}; }
+}
+
+function ioSig() {
+  if (!IO_OPEN) return "";
+  return JSON.stringify([(IO_FILE || {}).name || "", IO_SEQ, IO_BUSY, visible().length, rows().length,
+    Number(ioModel().b0_todo || 0), ioCap()]);
+}
+
+function syncIo() {
+  const sig = ioSig();
+  if (sig === LAST_IO_SIG) return;
+  LAST_IO_SIG = sig;
+  const root = document.getElementById("root");
+  const old = root.querySelector(":scope > .overlay.io");
+  const fresh = ioNode();
+  if (!fresh) { if (old) old.remove(); return; }
+  if (old) old.replaceWith(fresh); else root.appendChild(fresh);
+}
+
 let SEARCH_TIMER = null;
 
 function searchBox() {
@@ -1757,7 +2045,7 @@ function syncModal() {
   if (sig === LAST_MODAL_SIG) return;
   LAST_MODAL_SIG = sig;
   const root = document.getElementById("root");
-  const old = root.querySelector(":scope > .overlay");
+  const old = root.querySelector(":scope > .overlay:not(.io)");  // .io là bảng Import/Export — đừng có đụng vào
   const fresh = modalNode();
   if (!fresh) { if (old) old.remove(); return; }
   if (old) old.replaceWith(fresh); else root.appendChild(fresh);
@@ -1856,8 +2144,11 @@ function render(args, force) {
     providers: Array.isArray(args.providers) ? args.providers : [],
     defaults: args.defaults && typeof args.defaults === "object" ? args.defaults : {},
     cols: args.cols && typeof args.cols === "object" ? args.cols : {},
+    io: args.io && typeof args.io === "object" ? args.io : {},
+    io_response: args.io_response && typeof args.io_response === "object" ? args.io_response : {},
   };
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
+  ingestIo();        // tương tự cho bảng Import/Export — preview phải hiện ngay lượt vẽ này
   const alive = new Set(rows().map(r => String(r.id)));
   Array.from(PICKED).forEach(id => { if (!alive.has(id)) PICKED.delete(id); });
   if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
@@ -1878,6 +2169,7 @@ function render(args, force) {
     updateBar();
     syncStats();
     syncModal();
+    syncIo();
     restoreView(view);
     finishCopy();
     applyFlash();
@@ -1908,6 +2200,7 @@ function render(args, force) {
   allWrap.appendChild(all);
   allWrap.appendChild(el("span", "muted", " chọn tất cả"));
   bar.appendChild(searchBox());
+  bar.appendChild(ioButton());  // P22b: import/export nằm cạnh ô tìm — không còn mục native nào nữa
   bar.appendChild(batchButton());
   bar.appendChild(queueButton());
   bar.appendChild(errorsButton());
@@ -1951,11 +2244,13 @@ function render(args, force) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, đặt trong “📥 Import link…” · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ⋮ thêm thao tác (↗ trang Tạo bài · ✅ đã đăng · hàng đợi · 🗑 dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · 📋 ở cột Link để copy nguyên link đã đăng (khỏi mở modal), ✎ để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · ← → trong modal đổi bài · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
+    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, còn thêm bài hàng loạt thì làm ở nút “📥 Import · Export” cạnh ô tìm · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ⋮ thêm thao tác (↗ trang Tạo bài · ✅ đã đăng · hàng đợi · 🗑 dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · 📋 ở cột Link để copy nguyên link đã đăng (khỏi mở modal), ✎ để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · ← → trong modal đổi bài · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
   root.appendChild(wrap);
   unmarkSent();
   const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này
   if (modal) root.appendChild(modal);
+  const io = ioNode();  // bảng Import/Export vẽ SAU modal bài: mở cả hai thì bảng này ở trên, đúng thứ anh vừa bấm
+  if (io) root.appendChild(io);
   restoreView(view);
   updateBar();
   // chữ ký cho lần vá sau: hàng nào/cột nào vẽ ra sao, modal + khối đếm đang ở bản nào
@@ -1968,6 +2263,7 @@ function render(args, force) {
   LAST_WORKSPACE = MODEL.workspace;
   LAST_WIDTHS = wSig;
   LAST_MODAL_SIG = modalSig();
+  LAST_IO_SIG = ioSig();
   LAST_SUMMARY = JSON.stringify(MODEL.summary || {});
   finishCopy();   // response xin copy vừa về -> ghi clipboard, gắn nhãn lên nút vừa vẽ
   applyFlash();
@@ -2003,6 +2299,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     if (MENU) { closeMenu(); return; }
     if (inSearch) { SEARCH = ""; repaint(); return; }  // Esc ở ô tìm = xoá lọc, chưa phải đóng modal
+    if (IO_OPEN) { closeIo(); return; }               // bảng Import/Export phủ lên lưới -> Esc đóng nó trước
     if (modalRef()) { closeModal(); return; }
     if (expandedMode()) { lsSet(EXPANDED_KEY, "0"); repaint(); }  // Esc cũng thu được grid đang mở rộng
     return;

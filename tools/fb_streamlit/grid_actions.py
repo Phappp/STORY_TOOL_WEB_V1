@@ -14,6 +14,7 @@ import re
 import tempfile
 import time
 from dataclasses import dataclass, field
+from hashlib import sha1
 from pathlib import Path
 
 import db
@@ -28,6 +29,7 @@ MAX_BATCH = 5
 MAX_IMPORT = 200  # một lần import tạo tối đa bấy nhiêu bài — file dài thì chia nhiều lần, tránh tạo nhầm cả nghìn folder
 EXPORT_MAX = 500  # một lần export đọc tối đa bấy nhiêu folder — export là việc của người đã lọc, không phải quét cả ổ
 IMPORT_MAX_BYTES = 8 * 1024 * 1024  # trần file import: modal gửi file base64 qua event, không để message phình vô hạn
+EXPORT_MAX_BYTES = 8 * 1024 * 1024  # trần chiều ngược lại: nội dung export cũng đi qua một delta của Streamlit
 STALE_SECONDS = 15 * 60
 IMAGE_INLINE_MAX = 2 * 1024 * 1024  # chỉ còn cho ảnh refs/ của modal B0 (đi base64 trong một response)
 B2_IMAGE_MAX = 100 * 1024 * 1024  # trần ảnh B2 mở được trong modal — tải qua URL /media/, không qua delta
@@ -95,7 +97,9 @@ class Outcome:
     select: str = ""
     nav: str = ""
     copy: dict | None = None
+    io: dict | None = None  # payload cho bảng Import/Export trong lưới (preview/commit/export) — đi 1 lần rồi hết
     touched: list[str] = field(default_factory=list)
+    b0_ids: list[str] = field(default_factory=list)  # bài vừa tạo/vừa xin trích -> grid giao luồng nền
 
 
 def load_prefs(root: Path) -> dict:
@@ -555,15 +559,29 @@ def import_links(ctx: Ctx, urls: list[str]) -> tuple[list[str], list[str]]:
     return import_entries(ctx, [{"url": url} for url in urls])
 
 
+def b0_open(source, state) -> bool:
+    """LUẬT DUY NHẤT của "còn thiếu caption": có link nguồn mà B0 chưa xong.
+
+    Dùng cho cả bản đọc folder (b0_todo_ids) lẫn hàng lưới đã đọc sẵn (b0_open_ids) để cái số
+    hiện trong modal và danh sách thật sự giao cho luồng nền không bao giờ khác nhau.
+    """
+    return bool(clean_url(source)) and str(state or "") != stories.DONE
+
+
+def b0_open_ids(rows: list[dict]) -> list[str]:
+    """Như b0_todo_ids nhưng tính từ hàng đã đọc — khỏi quét lại 150 folder chỉ để đếm."""
+    return [str(r["id"]) for r in rows if b0_open(r.get("source"), r.get("b0"))]
+
+
 def b0_todo_ids(ctx: Ctx) -> list[str]:
     """Bài có link nguồn mà B0 chưa xong — để trích lại cả loạt mà không phải import lại file."""
     out = []
     for sid in stories.list_story_ids(ctx.root):
         story = stories.load_story(ctx.root, sid)
-        if not clean_url(story.get("source") or (story.get("b0") or {}).get("url")):
+        if not b0_open(story.get("source") or (story.get("b0") or {}).get("url"),
+                       b0_state(ctx.root, sid, story=story)):
             continue
-        if b0_state(ctx.root, sid, story=story) != stories.DONE:
-            out.append(sid)
+        out.append(sid)
     return out
 
 
@@ -633,6 +651,113 @@ def export_name(ctx: Ctx, kind: str) -> str:
     """
     safe = re.sub(r"[^\w.-]+", "-", ctx.root.name, flags=re.UNICODE).strip("-.") or "workspace"
     return f"fbtool-{safe}-{time.strftime('%Y%m%d-%H%M%S')}.{kind}"
+
+
+PREVIEW_ROWS = 6  # modal chỉ liệt kê bấy nhiêu dòng đầu — đủ để thấy chọn sai file hay không
+PREVIEW_SKIPPED = 8  # số lý do bỏ dòng hiển thị trong modal (phần dư gom thành một dòng đếm)
+EXPORT_KINDS = {"json": "JSON (import lại được)", "csv": "CSV 2 cột (link nguồn · link đã đăng)"}
+
+
+def decode_upload(data) -> tuple[bytes, str]:
+    """File modal gửi lên (data URL/base64 trong event) -> (bytes, dấu vân tay).
+
+    Bắt buộc có bước này vì bytes KHÔNG đi qua widget native nữa: một cú import là một message
+    component, nên trần IMPORT_MAX_BYTES chặn ở parse_import mới có nghĩa thật.
+    """
+    try:
+        raw = base64.b64decode(str(data or "").split(",", 1)[-1], validate=True)
+    except ValueError:
+        raise ValueError("File gửi từ lưới không giải mã được — chọn lại file rồi bấm Xem trước.") from None
+    if not raw:
+        raise ValueError("File rỗng — không có dòng nào để đọc.")
+    return raw, sha1(raw).hexdigest()
+
+
+def io_preview(name, data, done: str = "") -> dict:
+    """Đọc file + đếm, CHƯA đụng folder nào — modal hiện trước khi anh bấm Tạo bài.
+
+    Trả `again` khi dấu vân tay trùng file vừa import lần trước để lưới chặn được cú bấm đôi
+    (folder tạo gấp đôi là thứ mất cả buổi dọn, không phải chuyện để người dùng tự nhớ).
+    """
+    out = {"kind": "preview", "name": str(name or "(không tên)")[:120]}
+    try:
+        raw, digest = decode_upload(data)
+        rows, skipped = parse_import(raw, out["name"])
+    except ValueError as exc:
+        out["error"] = str(exc)
+        return out
+    kept = rows[:MAX_IMPORT]
+    shown = skipped[:PREVIEW_SKIPPED]
+    with_caption = sum(1 for r in kept if str(r.get("caption") or "").strip())
+    capped = max(0, len(rows) - len(kept))
+    out.update({
+        "digest": digest,
+        "again": bool(done) and digest == done,
+        "rows": len(kept),
+        "total": len(rows),
+        "with_caption": with_caption,
+        "capped": capped,
+        "skipped": shown,
+        "skipped_more": max(0, len(skipped) - len(shown)),
+        "items": [{"url": str(r.get("url") or ""),
+                   "head": (str(r.get("caption") or "").strip() or "(chưa có chữ — B0 sẽ trích)")[:70],
+                   "imgs": len(r.get("images") or [])} for r in kept[:PREVIEW_ROWS]],
+        "line": (f"Nhận {len(kept)} bài · bỏ {len(skipped)} dòng"
+                 + (f" · {with_caption} bài có caption sẵn trong file (B0 chỉ tải ảnh)" if with_caption else "")
+                 + (f" · {capped} dòng cuối vượt trần {MAX_IMPORT}/lần, chưa import" if capped else "")),
+    })
+    return out
+
+
+def io_commit(ctx: Ctx, name, data, done: str = "") -> tuple[dict, list[str]]:
+    """File đã xem trước -> tạo folder + hẹn B0; trả (payload cho modal, ids để grid giao luồng nền).
+
+    Parse lại từ bytes chứ không tin bản nháp nào: event tới tay server là một lần đọc file
+    mới, và modal có thể đã mở từ trước khi workspace đổi.
+    """
+    raw, digest = decode_upload(data)
+    if done and digest == done:
+        return ({"kind": "commit", "name": str(name or "")[:120], "again": True, "made": 0,
+                 "line": "File này vừa import xong — không tạo thêm bài nào."}, [])
+    rows, _skipped = parse_import(raw, str(name or "")[:120])
+    ids, lines = import_entries(ctx, rows)
+    return ({"kind": "commit", "name": str(name or "")[:120], "digest": digest, "again": False,
+             "made": len(ids), "b0": bool(ids), "line": " ".join(lines)}, ids)
+
+
+def io_b0_retry(ctx: Ctx) -> dict:
+    """id của mọi bài còn thiếu caption -> modal báo số lượng, grid giao B0 cho đúng số đó."""
+    ids = b0_todo_ids(ctx)
+    return {"kind": "b0_retry", "count": len(ids), "ids": ids,
+            "line": (f"Đã giao {len(ids)} bài còn thiếu caption cho luồng nền trích B0." if ids
+                     else "Không còn bài nào có link nguồn mà B0 chưa xong.")}
+
+
+def io_export(ctx: Ctx, kind, ids) -> dict:
+    """Export phần đang hiện -> {name, text} để lưới tải về bằng Blob (không ghi file nào ra ổ).
+
+    Trả `too_big` chứ không cắt bớt: một file export non bài im lặng là cái bẫy — anh mang file
+    đó sang máy khác rồi mới biết thiếu nửa sau thì không còn cách nào kiểm tra lại.
+    """
+    kind = str(kind or "").lower()
+    if kind not in EXPORT_KINDS:
+        return {"kind": "export", "error": f"Không biết dạng “{kind or '(trống)'}” — lưới chỉ export được "
+                                           f"{', '.join(sorted(EXPORT_KINDS))}."}
+    text, notes = (export_json if kind == "json" else export_csv)(ctx, ids)
+    kept, _skipped = export_ids(ctx, ids)
+    out = {"kind": "export", "format": kind, "name": export_name(ctx, kind),
+           "count": len(kept), "asked": len(ids) if isinstance(ids, (list, tuple)) else 0,
+           "note": " · ".join(notes)}
+    size = len(text.encode("utf-8"))
+    if size > EXPORT_MAX_BYTES:
+        out["too_big"] = size
+        out["line"] = (f"Phần đang hiện export ra {round(size / 1048576, 1)} MB, vượt trần "
+                       f"{round(EXPORT_MAX_BYTES / 1048576)} MB của một lần tải — thu hẹp bộ lọc rồi export lại.")
+        return out
+    out["text"] = text
+    out["line"] = (f"Export {len(kept)} bài ra {out['name']}." if kept
+                   else "Không có bài nào để export — hàng đang hiện không có link hoặc nội dung.")
+    return out
 
 
 def _guard(ctx: Ctx, sid: str):

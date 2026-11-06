@@ -7,7 +7,6 @@ nên state hiển thị luôn đọc lại từ folder story (không có bản s
 import mimetypes
 import time
 from datetime import datetime
-from hashlib import sha1
 from pathlib import Path
 
 import streamlit as st
@@ -31,7 +30,11 @@ POLL_SECONDS = 2.0    # nhịp fragment: chỉ đọc lại folder khi có việ
 PAYLOAD_KEY = "grid_payload"       # bản đọc folder gần nhất — 150 bài là 150 lần đọc file
 APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt mới thì phải đọc lại folder
 # mấy event này chỉ XEM nội dung (copy/mở modal), không sửa file -> khỏi đọc lại cả workspace
-READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request", "modal_request"}
+READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request", "modal_request",
+                # bảng Import/Export: đọc file anh chọn rồi trả lời, export chỉ dựng chuỗi trong RAM —
+                # không folder story nào đổi nên nhịp tick sau khỏi quét lại 150 bài
+                "import_read", "export_request"}
+IO_SOURCES = {"import_read", "import_commit", "b0_retry", "export_request"}  # mọi việc của modal Import/Export
 BUSY_STATES = {stories.RUNNING, ga.STALE}  # folder nói bước này đang có lượt gọi AI (chạy dở hoặc treo)
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
 PRESET_KEY = "ws_preset"  # cùng key cho Grid và trang Tạo bài: một widget, một ý nghĩa, một sự thật
@@ -40,10 +43,8 @@ PRESET_NONE_LABEL = "— Chưa chọn (mỗi bài theo preset_id của nó) —"
 # kèm `transition: opacity 1s ease-in .5s` -> lưới mờ rồi hiện lại MỖI NHỊP (2s), chính là cái nhấp nháy
 # thấy được dù không chạy gì. Lưới không cần tín hiệu "đang tải" đó nên tắt đúng phần tử của nó.
 NO_DIM_CSS = f"<style>.st-key-{KEY}[data-stale=\"true\"] {{ opacity: 1 !important; transition: none !important; }}</style>"
-CSV_KEY = "grid_import_file"
 CSV_DONE_KEY = "grid_import_done"  # dấu vân tay file vừa import — chặn bấm đôi tạo nhầm gấp đôi bài
 IMPORT_TYPES = ["csv", "txt", "xlsx", "xls", "xlsm", "json"]
-SKIPPED_SHOWN = 5
 
 GRID_STEPS = ("b0", "b1", "b2", "b3", "b4")
 
@@ -342,7 +343,7 @@ def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
 
     Không vẽ lại cả trang: fragment của lưới đã chạy đều 2 giây nên chính nó sẽ thấy
     luồng vừa có việc và đọc lại folder. st.rerun(scope='app') ở đây từng là cú loé trắng
-    ngay sau khi bấm ⚡/▶ (kèm cả lượt vẽ lại import_form/provider_bar vô việc).
+    ngay sau khi bấm ⚡/▶ (kèm cả lượt vẽ lại provider_bar vô việc).
     """
     jobs, notes = gr.job_for(event, ctx.root)
     msgs = [RUNNER.submit(job) for job in jobs]
@@ -368,7 +369,10 @@ def _cancel_targets(event: dict) -> list[str]:
 
 
 def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
-    if str(event.get("source") or "") in gr.HEAVY_SOURCES:  # việc dài -> thread nền, grid còn vẽ được
+    src = str(event.get("source") or "")
+    if src in IO_SOURCES:  # Import/Export có file đi kèm trong event -> xử lý ở _io, không qua dispatcher
+        return _io(ctx, event)
+    if src in gr.HEAVY_SOURCES:  # việc dài -> thread nền, grid còn vẽ được
         return hand_off(ctx, event)
     victims = _cancel_targets(event)
     out = ga.apply_event(ctx, event)
@@ -414,6 +418,9 @@ def media_url(path: str, sid: str) -> str:
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     _push(out.lines)
+    if out.io is not None:
+        # payload của bảng Import/Export: chữ + số, không có ảnh base64 nên gửi một lần là đủ
+        st.session_state["grid_io_response"] = out.io
     if str(event.get("source") or "") in ("copy_request", "content_request", "image_request", "b0_request",
                                           "modal_request"):
         # render_component giao response đúng 1 lần rồi xóa; JS latch theo request_id nên không xử lý trùng
@@ -450,54 +457,38 @@ def run_b0_import(ctx: ga.Ctx, ids: list[str]) -> None:
     hand_off(ctx, {"source": "b0_batch", "ids": ids})
 
 
-def import_form(ctx: ga.Ctx) -> None:
-    """Import file -> bài mới: CSV/TXT/XLSX lấy link ở cột A, JSON lấy cả caption + ảnh trong file."""
-    with st.expander("📥 Import từ CSV / TXT / XLSX / JSON — mỗi dòng thêm một bài", expanded=False):
-        file = st.file_uploader(
-            "File chứa link bài viết/reel Facebook (cột A) hoặc JSON {url, text, media}", key=CSV_KEY,
-            type=IMPORT_TYPES,
-            help=("CSV/TXT/XLSX: một dòng một link, không cần dòng tiêu đề (có cũng được — dòng 'link/url/nguồn…' tự bỏ), "
-                  f"một lần tạo tối đa {ga.MAX_IMPORT} bài; link trùng tự bỏ. "
-                  "JSON: đúng dạng lưới Export — caption + link ảnh lấy thẳng từ file, B0 chỉ còn tải ảnh."))
-        todo = ga.b0_todo_ids(ctx)
-        if todo and st.button(f"▶ Trích B0 cho {len(todo)} bài chưa xong (cả workspace)", key="grid_b0_retry",
-                              help=f"{len(todo)} bài có link nguồn mà B0 chưa ra caption — trích lại cả loạt, "
-                                   "luồng nền đi qua một chỗ trích chung nên không tải 150 link cùng lúc"):
-            run_b0_import(ctx, todo)
-        if file is None:
-            st.caption("Chưa chọn file. Ảnh và caption chỉ lấy được từ bài công khai — bài trong group riêng tư sẽ báo lỗi ở cột B0.")
-            return
-        raw = file.getvalue()
-        try:
-            rows, skipped = ga.parse_import(raw, file.name)
-        except ValueError as exc:
-            st.error(str(exc))
-            return
-        kept = rows[:ga.MAX_IMPORT]
-        with_caption = sum(1 for r in kept if str(r.get("caption") or "").strip())
-        st.write(f"**Nhận {len(kept)} bài** · bỏ {len(skipped)} dòng"
-                 + (f" · {with_caption} bài có caption sẵn trong file (không phải trích)" if with_caption else "")
-                 + (f" · {len(rows) - len(kept)} dòng cuối chưa import (giới hạn {ga.MAX_IMPORT}/lần)"
-                    if len(rows) > len(kept) else ""))
-        for line in skipped[:SKIPPED_SHOWN]:
-            st.caption("· " + line)
-        if len(skipped) > SKIPPED_SHOWN:
-            st.caption(f"· … còn {len(skipped) - SKIPPED_SHOWN} dòng bị bỏ nữa")
-        digest = sha1(raw).hexdigest()
-        again = st.session_state.get(CSV_DONE_KEY) == digest
-        if st.button(("✓ Đã tạo " if again else "➕ Tạo ") + f"{len(kept)} bài mới"
-                     + (" (B0 tải ảnh)" if with_caption else " + trích B0"),
-                     key="grid_import_go", disabled=not kept or again,
-                     help=("Tạo folder story cho từng bài rồi cho B0 chạy ngay: link thường thì trích caption + ảnh, "
-                           "JSON thì caption đã có trong file, B0 chỉ tải ảnh — mỗi bài một việc trong luồng nền, "
-                           "không tải cả loạt cùng lúc"
-                           if kept and not again else
-                           ("File này vừa import xong — bấm ✕ ở ô chọn file rồi chọn lại để import lần nữa." if again
-                            else "Không có dòng hợp lệ nào trong file (link Facebook ở cột A, hoặc {url,text} trong JSON)."))):
-            ids, lines = ga.import_entries(ctx, rows)
-            st.session_state[CSV_DONE_KEY] = digest
-            _push(lines)
-            run_b0_import(ctx, ids)
+def _io(ctx: ga.Ctx, event: dict) -> ga.Outcome:
+    """Mọi việc của modal Import/Export — một chỗ duy nhất, vì lưới không còn mục native nào.
+
+    Tách khỏi apply_event vì hai chuyện: file đi trong event nên phải giải mã + chặn trần ở tầng
+    biết Streamlit, và B0 phải ra qua đúng cửa hand_off (grid_actions cố ý không biết luồng nền).
+    """
+    out = ga.Outcome()
+    src = str(event.get("source") or "")
+    done = str(st.session_state.get(CSV_DONE_KEY) or "")
+    try:
+        if src == "import_read":
+            out.io = ga.io_preview(event.get("name"), event.get("data"), done)
+        elif src == "import_commit":
+            out.io, ids = ga.io_commit(ctx, event.get("name"), event.get("data"), done)
+            if out.io.get("digest"):  # chỉ đổi sau khi tạo thật — file lỗi thì lần bấm kế vẫn được thử lại
+                st.session_state[CSV_DONE_KEY] = out.io["digest"]
+            out.b0_ids = ids
+        elif src == "b0_retry":
+            out.io = ga.io_b0_retry(ctx)
+            out.b0_ids = out.io.pop("ids", [])
+        else:
+            out.io = ga.io_export(ctx, event.get("format"), event.get("ids") or [])
+    except (ValueError, stories.WorkspaceError, OSError) as exc:
+        # Fragment chết vì lỗi là cả lưới mất vẽ, nên lý do phải đi về modal dưới dạng chữ.
+        out.io = {"kind": "error", "source": src,
+                  "line": f"Chưa làm được ({type(exc).__name__}): {exc}"}
+    why = str(out.io.get("line") or out.io.get("error") or "")
+    out.lines = [why] if why else []
+    _collect(out, event)
+    if out.b0_ids:
+        run_b0_import(ctx, out.b0_ids)
+    return out
 
 
 def consume_event(ctx: ga.Ctx) -> tuple:
@@ -545,6 +536,7 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
         # response chỉ cần đi đúng 1 lần render (lượt ngay sau event đã dựng lại iframe): xong thì xóa,
         # nếu không ảnh base64 vài MB bị gửi lại mọi tick và modal tự xin lại khi cần.
         resp = st.session_state.pop("grid_copy_response", None) or {}
+        io_resp = st.session_state.pop("grid_io_response", None) or {}
         component()(rows=rows, workspace=str(ctx.root),
                     image_max=ga.B2_IMAGE_MAX,
                     video_max=ga.B4_VIDEO_MAX,
@@ -555,6 +547,12 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     defaults=dict(ctx.defaults),
                     cols=ga.pref_cols(ctx.root),
                     copy_response=resp,
+                    io={"max_bytes": ga.IMPORT_MAX_BYTES, "max_rows": ga.MAX_IMPORT,
+                        "export_max": ga.EXPORT_MAX, "types": IMPORT_TYPES,
+                        # số ghi trên nút "Trích B0 còn thiếu" lấy từ hàng lưới ĐÃ ĐỌC (khỏi quét folder
+                        # thêm lần nữa mỗi tick); bấm rồi modal nhận số thật từ folder trong response.
+                        "b0_todo": len(ga.b0_open_ids(all_rows))},
+                    io_response=io_resp,
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
         st.session_state["grid_component_error"] = f"{type(exc).__name__}: {exc}"
@@ -816,7 +814,6 @@ def render(ctx: ga.Ctx) -> None:
                      help="Bài đã vào hàng đợi nổi lên đầu danh sách lưới; thứ tự LÀM theo cột # — "
                           "bấm ＋ trước thì làm trước, bài mới xếp cuối.")
     workspace_bar(ctx)
-    import_form(ctx)
     video_form(ctx)  # B4 đứng NGOÀI fragment: file_uploader native phải nhận bytes thẳng vào server
     # Fragment luôn chạy đều: event từ lưới chỉ vẽ lại đúng nó, nên giao việc cho luồng nền
     # không cần vẽ lại cả trang nữa (đó chính là cú loé trắng sau khi bấm ⚡/▶).

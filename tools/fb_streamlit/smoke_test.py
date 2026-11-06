@@ -1890,20 +1890,9 @@ if pnames and all(w is not None for w in bar):
           not at_pb.exception and back.value == [pnames[0]]
           and ga.pref_providers(smoke_root) == {"b1": [pnames[0]]})
 
-# --- P4d AppTest: import file link -> tạo bài + trích B0 cả loạt ngay trên Grid ---
-class FakeFile:
-    """File uploader giả trong AppTest: không set được file thật nên thế đúng hợp đồng getvalue()/name."""
-
-    name = "links.csv"
-
-    def __init__(self, raw):
-        self._raw = raw
-
-    def getvalue(self):
-        return self._raw
-
-
-real_uploader = fbgrid.st.file_uploader
+# --- P22b AppTest: bảng Import/Export NGAY TRONG LƯỚI — preview rồi commit, không còn mục native ---
+# Modal gửi file y hệt refPicker (base64 trong event), nên test cũng dựng bytes rồi b64encode:
+# không còn widget native nào để stub, và đó chính là điều P22b muốn chứng minh.
 real_extract_ui = fb_import.extract
 ui_ref = smoke_ws / "ui_ref.jpg"
 ui_ref.write_bytes(b"REF-IMG")
@@ -1918,9 +1907,9 @@ def ui_extract(url):
 
 csv_ui = ("link\n" + "".join(f"https://fb.watch/ui-{i}\n" for i in range(1, 7))
           + "https://example.com/bai-viet\n").encode("utf-8")
+b64_ui = base64.b64encode(csv_ui).decode("ascii")
 fb_import.extract = ui_extract
 images.download_ref = lambda url: ui_ref
-fbgrid.st.file_uploader = lambda *a, **k: FakeFile(csv_ui) if k.get("key") == fbgrid.CSV_KEY else real_uploader(*a, **k)
 captured.clear()
 fbgrid.component = lambda: (lambda **kw: captured.update(kw))
 at_im = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=60)
@@ -1928,17 +1917,38 @@ at_im.session_state["nav_page"] = "Grid"
 at_im.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
 at_im.run()
 ids_before = stories.list_story_ids(smoke_root)
-go = next((b for b in at_im.button if b.key == "grid_import_go"), None)
-check("Grid có nút import nói trước số bài nhận được, chưa gọi mạng khi chưa bấm",
-      not at_im.exception and go is not None and go.label == "➕ Tạo 6 bài mới + trích B0" and ui_calls == []
-      and any("Nhận 6 bài" in (m.value or "") for m in at_im.markdown))
-if go is not None:
-    go.click().run()
+check("P22b Grid không còn mục native import/file_uploader — một thao tác chỉ còn MỘT chỗ",
+      not at_im.exception and not hasattr(fbgrid, "import_form")
+      and not any("Import" in (e.label or "") for e in at_im.expander)
+      and "import_read" in fbgrid.READ_SOURCES and "import_commit" in fbgrid.IO_SOURCES)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-read", "source": "import_read",
+                                   "name": "links.csv", "data": b64_ui}
+at_im.run()
+preview = captured.get("io_response") or {}
+check("P22b import_read CHỈ đọc + đếm: preview 6 bài, bỏ dòng tiêu đề, chưa tạo folder, chưa gọi mạng",
+      not at_im.exception and preview.get("kind") == "preview" and preview.get("rows") == 6
+      and preview.get("total") == 6 and preview.get("again") is False
+      and len(preview.get("items") or []) == 6
+      and any("tiêu đề" in s for s in preview.get("skipped") or [])
+      and stories.list_story_ids(smoke_root) == ids_before and ui_calls == [])
+check("P22b payload 'io' tới component mang trần file/số bài + số bài chờ B0 để modal vẽ nút đúng",
+      (captured.get("io") or {}).get("max_bytes") == ga.IMPORT_MAX_BYTES
+      and (captured.get("io") or {}).get("max_rows") == ga.MAX_IMPORT
+      and (captured.get("io") or {}).get("export_max") == ga.EXPORT_MAX
+      and (captured.get("io") or {}).get("types") == fbgrid.IMPORT_TYPES
+      and (captured.get("io") or {}).get("b0_todo") == 0)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-commit", "source": "import_commit",
+                                   "name": "links.csv", "data": b64_ui}
+at_im.run()
+commit = captured.get("io_response") or {}
 ok_import = wait_flow(fbgrid.RUNNER)  # B0 chạy trong luồng nền, test phải chờ nó cạn việc
 at_im.run()
 made = [s for s in stories.list_story_ids(smoke_root) if s not in ids_before]
-check("bấm import: tạo đủ 6 story, Nguồn = link, caption B0 vào input.txt, ảnh vào refs/",
-      not at_im.exception and len(made) == 6 and len(ui_calls) == 6
+check("P22b import_commit tạo đủ 6 story, Nguồn = link, caption B0 vào input.txt, ảnh vào refs/",
+      not at_im.exception and commit.get("kind") == "commit" and commit.get("made") == 6
+      and commit.get("again") is False and len(made) == 6 and len(ui_calls) == 6
       and all(stories.load_story(smoke_root, s)["source"].startswith("https://fb.watch/ui-") for s in made)
       and all((smoke_root / s / "input.txt").read_text(encoding="utf-8").startswith("Caption UI") for s in made)
       and all((smoke_root / s / "refs" / "ref_1.jpg").is_file() for s in made))
@@ -1952,30 +1962,86 @@ check("dòng component mang state B0 để vẽ ô vuông + tổng kết",
       all("b0" in r for r in captured.get("rows", []))
       and captured.get("summary", {}).get("b0_error") == 0
       and sum(1 for r in captured.get("rows", []) if r["b0"] == "done") == 6)
-again_btn = next((b for b in at_im.button if b.key == "grid_import_go"), None)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-read2", "source": "import_read",
+                                   "name": "links.csv", "data": b64_ui}
 at_im.run()
-made_after_rerun = stories.list_story_ids(smoke_root)
-again_btn = next((b for b in at_im.button if b.key == "grid_import_go"), None)
-check("rerun với nguyên file không tạo thêm bài, nút đổi nhãn 'đã tạo' và bị chặn — bấm đôi không nhân đôi bài",
-      not at_im.exception and made_after_rerun == ids_before + made and len(ui_calls) == 6
-      and again_btn is not None and again_btn.disabled
-      and again_btn.label == "✓ Đã tạo 6 bài mới + trích B0")
+again = captured.get("io_response") or {}
+made_after = stories.list_story_ids(smoke_root)
+check("P22b đọc lại đúng file đã import -> preview báo 'again' để modal khóa nút, không tạo thêm bài",
+      not at_im.exception and again.get("again") is True and again.get("rows") == 6
+      and made_after == ids_before + made and len(ui_calls) == 6)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-commit2", "source": "import_commit",
+                                   "name": "links.csv", "data": b64_ui}
+at_im.run()
+twice = captured.get("io_response") or {}
+check("P22b bấm 'Tạo' lần hai với nguyên file -> commit trả again + made 0, folder không nhân đôi",
+      not at_im.exception and twice.get("again") is True and twice.get("made") == 0
+      and stories.list_story_ids(smoke_root) == made_after and len(ui_calls) == 6)
 broken = made[-1]
 (smoke_root / broken / "input.txt").unlink()
+captured.clear()
 at_im.run()
-retry = next((b for b in at_im.button if b.key == "grid_b0_retry"), None)
-check("bài mất caption -> Grid hiện nút trích B0 lại và tổng kết đếm đúng lỗi B0",
-      not at_im.exception and retry is not None and retry.label == "▶ Trích B0 cho 1 bài chưa xong (cả workspace)"
+check("bài mất caption -> io.b0_todo hiện 1 cho modal đổi nhãn nút + lưới đếm đúng lỗi B0",
+      not at_im.exception and (captured.get("io") or {}).get("b0_todo") == 1
       and any(r["b0"] == "missing" for r in captured.get("rows", []))
       and captured.get("summary", {}).get("b0_error") == 1)
-if retry is not None:
-    retry.click().run()
-    ok_retry = wait_flow(fbgrid.RUNNER)
-    at_im.run()
-    check("bấm nút trích lại -> B0 chạy đúng bài còn thiếu trong luồng nền, không chạy lại bài đã xong",
-          not at_im.exception and ok_retry and len(ui_calls) == 7
-          and ui_calls[-1] == stories.load_story(smoke_root, broken)["source"]
-          and ga.b0_state(smoke_root, broken) == stories.DONE)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-b0", "source": "b0_retry"}
+at_im.run()
+retry = captured.get("io_response") or {}
+ok_retry = wait_flow(fbgrid.RUNNER)
+at_im.run()
+check("P22b b0_retry -> đúng bài còn thiếu chạy lại trong luồng nền, id không phải việc của browser",
+      not at_im.exception and retry.get("count") == 1 and "ids" not in retry
+      and ok_retry and len(ui_calls) == 7
+      and ui_calls[-1] == stories.load_story(smoke_root, broken)["source"]
+      and ga.b0_state(smoke_root, broken) == stories.DONE)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-export", "source": "export_request",
+                                   "format": "json", "ids": made[:3] + ["../evil"]}
+at_im.run()
+exp = captured.get("io_response") or {}
+_entries = json.loads(exp.get("text") or "[]")
+_rt_rows, _rt_skip = ga.parse_import((exp.get("text") or "").encode("utf-8"), str(exp.get("name") or "x.json"))
+check("P22b export JSON round-trip: 3 bài, id lạ bị bỏ, import lại chính file đó ra đủ caption + ảnh",
+      not at_im.exception and exp.get("kind") == "export" and exp.get("format") == "json"
+      and exp.get("count") == 3 and exp.get("asked") == 4
+      and "không còn là bài" in str(exp.get("note") or "")
+      and str(exp.get("name") or "").startswith("fbtool-") and str(exp.get("name") or "").endswith(".json")
+      and len(_entries) == 3 and len(_rt_rows) == 3 and not _rt_skip
+      and all(str(r.get("caption") or "").startswith("Caption UI") for r in _rt_rows)
+      and all(r.get("images") for r in _rt_rows))
+check("P22b export chỉ trả CHUỖI cho modal tải, không ghi file nào ra folder workspace",
+      not (smoke_root / str(exp.get("name") or "x.json")).is_file()
+      and len((exp.get("text") or "").encode("utf-8")) <= ga.EXPORT_MAX_BYTES)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-csv", "source": "export_request",
+                                   "format": "csv", "ids": made[:2]}
+at_im.run()
+csv_exp = captured.get("io_response") or {}
+check("P22b export CSV 2 cột: đọc lại bằng parse_import vẫn ra đúng 2 link nguồn",
+      not at_im.exception and csv_exp.get("format") == "csv" and csv_exp.get("count") == 2
+      and str(csv_exp.get("name") or "").endswith(".csv")
+      and str(csv_exp.get("text") or "").startswith("link_nguồn,link_da_dang")
+      and len(ga.parse_import((csv_exp.get("text") or "").encode("utf-8"), "x.csv")[0]) == 2)
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-badkind", "source": "export_request",
+                                   "format": "xlsx", "ids": made[:1]}
+at_im.run()
+bad = captured.get("io_response") or {}
+check("P22b export dạng lưới không biết -> modal nhận lý do, không âm thầm trả file rỗng",
+      not at_im.exception and bad.get("kind") == "export" and "xlsx" in str(bad.get("error") or "")
+      and not bad.get("text"))
+captured.clear()
+at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-big", "source": "import_read", "name": "to.csv",
+                                   "data": base64.b64encode(b"link\n" + b"x" * (ga.IMPORT_MAX_BYTES + 1)).decode("ascii")}
+at_im.run()
+big = captured.get("io_response") or {}
+check("P22b file vượt trần đi trong event -> preview nói 'quá trần' ngay trong modal, không tạo folder",
+      not at_im.exception and big.get("kind") == "preview" and "quá trần" in str(big.get("error") or "")
+      and not big.get("rows") and stories.list_story_ids(smoke_root) == made_after)
 captured.clear()
 at_im.session_state[fbgrid.KEY] = {"event_id": "evt-b0-run", "source": "b0_run", "id": made[0]}
 at_im.run()
@@ -2032,7 +2098,6 @@ at_im.run()
 check("text_save cho bước không có file chữ -> grid nói rõ ngay, không ghi đè gì",
       not at_im.exception and any("bước b2 không có file chữ" in line for line in at_im.session_state.get("grid_log", []))
       and (smoke_root / made[1] / "seo.md").read_text(encoding="utf-8") == seo_txt)
-fbgrid.st.file_uploader = real_uploader
 fb_import.extract = real_extract_ui
 images.download_ref = real_download
 fbgrid.component = real_component
@@ -3953,9 +4018,21 @@ finally:
 check("P22a quá trần MAX_IMPORT thì nói rõ bao nhiêu dòng bị bỏ, không âm thầm tạo thiếu",
       len(_p22_cut_ids) == 1 and any("dòng cuối bị bỏ" in l and "1 dòng" in l for l in _p22_cut_lines))
 _p22_grid_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
-check("P22a lưới nhận .json trong ô chọn file và đi qua parse_import — bỏ đoạn đọc cột A riêng ở UI, một đường duy nhất",
+check("P22a/P22b lưới nhận .json và đi qua parse_import MỘT đường — không còn code đọc cột A riêng ở UI",
       '"json"' in _p22_grid_src.split("IMPORT_TYPES")[1].split("\n")[0]
-      and "ga.parse_import(raw, file.name)" in _p22_grid_src and "ga.column_a" not in _p22_grid_src)
+      and "ga.column_a" not in _p22_grid_src
+      and "ga.io_preview(event.get(\"name\"), event.get(\"data\")" in _p22_grid_src
+      and "ga.parse_import(raw, file.name)" not in _p22_grid_src
+      and "def import_form" not in _p22_grid_src)
+_p22_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+check("P22b ô chọn file khóa bằng cờ SỐNG QUA LƯỢT VẼ (IO_BUSY) — pick.disabled=true một mình không trụ vì repaint() dựng lại input",
+      "pick.disabled = IO_BUSY" in _p22_fe and "pick.disabled = true;" not in _p22_fe
+      and _p22_fe.index("IO_BUSY = true") < _p22_fe.index('send({ source: "import_read"')
+      and "IO_BUSY = false" in _p22_fe.split("function ingestIo")[1].split("function ioSig")[0]
+      and "IO_SEQ, IO_BUSY," in _p22_fe.split("function ioSig")[1].split("function syncIo")[0])
+check("P22b modal KHÔNG viết lại chữ 'bỏ' trước lý do bỏ dòng — Python đã trả 'bỏ dòng …', UI thêm nữa là đọc trùng",
+      'ioNote("· bỏ dòng' not in _p22_fe
+      and '(st.skipped || []).forEach(line => body.push(ioNote("· " + line)))' in _p22_fe)
 shutil.rmtree(_p22_box, ignore_errors=True)
 # --- hết P22a ---
 
