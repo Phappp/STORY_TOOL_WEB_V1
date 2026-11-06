@@ -1156,7 +1156,7 @@ function linkBar(row, kind) {
   bar.appendChild(save);
   if (saved.trim()) {
     bar.appendChild(button("📋", "Copy nguyên link đang có của " + row.id + " (" + cfg.stored + ") — dán thẳng, khỏi xóa ô",
-      b => copyToClipboard(saved, ok => flash(b, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad")), "act"));
+      b => copyToClipboard(saved, ok => flash(b, ok ? "✓" : "✕", ok ? "ok" : "bad")), "act"));  // P21e: bản sao của nút 📋 ở cột Link — cùng một kiểu báo
     const open = el("a", "link", "↗ mở");
     open.href = saved;
     open.target = "_blank";
@@ -1692,7 +1692,7 @@ function linkCell(row) {
     a.title = raw;
     line.appendChild(a);
     line.appendChild(button("📋", "Copy nguyên link đã đăng của " + row.id + " — dán thẳng, khỏi mở modal",
-      b => copyToClipboard(raw, ok => flash(b, ok ? "✓ đã copy" : "không copy được", ok ? "ok" : "bad")), "ln"));
+      b => copyToClipboard(raw, ok => flash(b, ok ? "✓" : "✕", ok ? "ok" : "bad")), "ln"));  // P21e: NÚT là icon, chữ "đã copy" không nhét vừa ô 22 px
   } else {
     line.appendChild(el("span", "muted", "—"));  // chưa có link thì không vẽ nút copy — khỏi hứa một cú bấm rỗng
   }

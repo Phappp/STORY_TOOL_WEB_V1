@@ -4365,6 +4365,34 @@ check("P21d prefs cột cũ còn mang khóa 'pick' cũng vô hại: bề rộng 
       and "const total = COLS.reduce((sum, c) => sum + Number(map[c.key]), 0) + 2;" in _p21d_fe)
 # --- hết P21d ---
 
+# --- P21e: nút 📋 copy LINK báo bằng ICON tích, không bằng chữ "✓ đã copy" ---
+_p21e_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p21e_cell = _p21e_fe.split("function linkCell")[1].split("\n}")[0]
+_p21e_bar = _p21e_fe.split("function linkBar")[1].split("\n}")[0]
+_p21e_flash = _p21e_fe.split("function flash(")[1].split("\n}")[0]
+check("P21e cột Link: copy xong thì ICON đổi thành ✓ (thất bại ✕), không còn nhãn chữ 'đã copy' hay "
+      "'không copy được' trong cú bấm — button.ln RỘNG CỐ ĐỊNH 22px nên chín ký tự là tràn nút",
+      'flash(b, ok ? "✓" : "✕", ok ? "ok" : "bad")' in _p21e_cell
+      and 'ok ? "✓ đã copy"' not in _p21e_cell and '"không copy được"' not in _p21e_cell
+      and "button.ln { width:22px;" in _p21e_fe)
+check("P21e thanh link trong modal (linkBar) cũng báo bằng icon — hai chỗ một kiểu, để chữ ở chỗ này là "
+      "hứa hai cách đọc cho cùng một cú bấm",
+      'flash(b, ok ? "✓" : "✕", ok ? "ok" : "bad")' in _p21e_bar
+      and 'ok ? "✓ đã copy"' not in _p21e_bar and '"không copy được"' not in _p21e_bar)
+check("P21e chỉ đổi NHÃN báo, không đổi thứ vào clipboard: cột Link vẫn nguyên `raw` của row, "
+      "modal vẫn nguyên `saved` (bản đang có trong file, không phải nháp đang gõ)",
+      "copyToClipboard(raw, ok =>" in _p21e_cell and "copyToClipboard(saved, ok =>" in _p21e_bar)
+check("P21e ✓ là trạng thái TẠM: flash() ghi nhãn cũ lại sau 1.4s — tick dính vĩnh viễn thì hàng sẽ "
+      "còn báo 'đã copy' dù link vừa bị đổi/xóa",
+      "const old = b.textContent;" in _p21e_flash and "b.textContent = old;" in _p21e_flash
+      and "}, 1400);" in _p21e_flash)
+check("P21e không lan sang đường copy QUA PYTHON: ô B1/B3 trong lưới vẫn dùng chữ (không phải icon), "
+      "còn icon 📋 trong đầu thẻ vẫn một ký tự — nguyên tắc 'icon thì ngắn' nằm ở tham số short",
+      'const yes = short ? "✓" : "✓ đã copy"' in _p21e_fe
+      and 'copyField(row, STEP_FIELD[step], b, b.dataset.flash);' in _p21e_fe
+      and "copyField(row, field, bb, flashId, true)" in _p21e_fe)
+# --- hết P21e ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")
