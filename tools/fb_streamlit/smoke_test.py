@@ -858,8 +858,8 @@ old_limit = ga.MAX_IMPORT
 ga.MAX_IMPORT = 1
 capped_ids, cap_lines = ga.import_links(gctx, urls_p4d)
 ga.MAX_IMPORT = old_limit
-check("vượt MAX_IMPORT -> nói rõ bao nhiêu link bị bỏ, không âm thầm",
-      len(capped_ids) == 1 and any("tối đa 1 link" in line and "1 link cuối bị bỏ" in line for line in cap_lines))
+check("vượt MAX_IMPORT -> nói rõ bao nhiêu dòng bị bỏ, không âm thầm",
+      len(capped_ids) == 1 and any("tối đa 1 dòng" in line and "1 dòng cuối bị bỏ" in line for line in cap_lines))
 ga.apply_event(gctx, {"source": "archive", "id": capped_ids[0]})
 
 out = ga.apply_event(gctx, {"source": "b0_run", "id": ids_p4d[0]})
@@ -1929,9 +1929,9 @@ at_im.session_state["grid_mode"] = fbgrid.MODE_COMPONENT
 at_im.run()
 ids_before = stories.list_story_ids(smoke_root)
 go = next((b for b in at_im.button if b.key == "grid_import_go"), None)
-check("Grid có nút import nói trước số link nhận được, chưa gọi mạng khi chưa bấm",
+check("Grid có nút import nói trước số bài nhận được, chưa gọi mạng khi chưa bấm",
       not at_im.exception and go is not None and go.label == "➕ Tạo 6 bài mới + trích B0" and ui_calls == []
-      and any("Nhận 6 link FB" in (m.value or "") for m in at_im.markdown))
+      and any("Nhận 6 bài" in (m.value or "") for m in at_im.markdown))
 if go is not None:
     go.click().run()
 ok_import = wait_flow(fbgrid.RUNNER)  # B0 chạy trong luồng nền, test phải chờ nó cạn việc
@@ -3830,6 +3830,134 @@ finally:
     stories.set_current(_p21b_cur0)
     shutil.rmtree(_p21b_box, ignore_errors=True)
 # --- hết P21b ---
+
+# --- P22a: import JSON (caption + ảnh có sẵn trong file) và export round-trip ---
+_p22_box = Path(tempfile.mkdtemp(prefix="fbp22a_"))
+_p22_root = stories.validate_root(_p22_box / "ws")
+_p22_ctx = ga.build_ctx(db.connect(), _p22_root)
+_p22_src_json = json.dumps([
+    {"url": "https://www.facebook.com/permalink.php?story_fbid=pfbid0AAA&id=6155",
+     "media": [{"__typename": "Photo", "photo_image": {"uri": "https://scontent/x1.jpg", "height": 640, "width": 511},
+                "ocrText": "image of football"},
+               {"__typename": "Photo"}],
+     "text": "🏈 JOSH ALLEN IS STILL NO. 1! giữ nguyên https://inside.link"},
+    {"url": "https://www.facebook.com/permalink.php?story_fbid=pfbid0BBB&id=6155",
+     "media": [{"photo_image": {"uri": "https://scontent/y1.jpg"}}], "text": "🚨 INJURY NEWS: Joe Brady..."},
+    {"text": "mục có chữ mà quên link", "media": [{"photo_image": {"uri": "https://scontent/z.jpg"}}]},
+    {"url": "https://example.com/khong-phai-fb", "text": "link lạ"},
+    {"url": "https://www.facebook.com/permalink.php?story_fbid=pfbid0AAA&id=6155", "text": "trùng link"},
+], ensure_ascii=False).encode("utf-8")
+
+_p22_entries = fb_import.entries_from_json(_p22_src_json)
+check("P22a entries_from_json lấy caption trong `text` NGUYÊN VĂN — clean_caption của B0 sẽ xóa mất link dentro bài",
+      _p22_entries[0]["caption"] == "🏈 JOSH ALLEN IS STILL NO. 1! giữ nguyên https://inside.link")
+check("P22a ảnh lấy từ media[].photo_image.uri; mục media không có uri (video/reel) bị bỏ chứ không nổ",
+      _p22_entries[0]["images"] == ["https://scontent/x1.jpg"] and len(_p22_entries) == 5)
+_p22_bad = ""
+try:
+    ga.parse_import(b"[{\",", "a.json")
+    _p22_bad = "không ném lỗi"
+except ValueError as exc:
+    _p22_bad = str(exc)
+check("P22a file không phải JSON hợp lệ -> ValueError nói thẳng, KHÔNG im lặng trả 'Nhận 0 bài'",
+      "JSON không parse được" in _p22_bad)
+_p22_single = fb_import.entries_from_json(
+    '{"url":"https://www.facebook.com/a","text":"một mục thay vì list"}'.encode("utf-8"))
+check("P22a chấp nhận cả file chỉ có MỘT bài (dict chứ không phải list) — export tay từ tool khác hay gặp",
+      len(_p22_single) == 1 and _p22_single[0]["caption"].startswith("một mục"))
+_p22_rows, _p22_skip = ga.parse_import(_p22_src_json, "posts.json")
+check("P22a parse_import(.json) gộp MỘT chỗ với CSV: link vẫn là chuẩn, bỏ link lạ + trùng y hệt cột A",
+      len(_p22_rows) == 2 and any("không phải link FB" in s for s in _p22_skip)
+      and any("link trùng" in s for s in _p22_skip))
+check("P22a mục JSON có chữ mà không có link bị bỏ KÈM LÝ DO — grid cần link để mở bài gốc, không đoán bừa",
+      any("không có link" in s and "1 mục" in s for s in _p22_skip))
+_p22_rows_csv, _p22_skip_csv = ga.parse_import("link\nhttps://www.facebook.com/a\n".encode(), "links.csv")
+check("P22a CSV/TXT đi qua đúng parse_import mới: vẫn bỏ dòng tiêu đề, dòng chỉ mang link (không có caption) để B0 tự trích",
+      _p22_rows_csv == [{"url": "https://www.facebook.com/a"}] and any("tiêu đề" in s for s in _p22_skip_csv))
+try:
+    ga.parse_import(b"[" + b"x" * (ga.IMPORT_MAX_BYTES + 1), "to.json")
+    _p22_cap = "không ném lỗi"
+except ValueError as exc:
+    _p22_cap = str(exc)
+check("P22a file vượt trần IMPORT_MAX_BYTES bị chặn ngay lúc đọc — modal gửi file base64 qua event nên trần này là thật",
+      "quá trần" in _p22_cap and str(round(ga.IMPORT_MAX_BYTES / 1048576)) in _p22_cap)
+
+_p22_ids, _p22_lines = ga.import_entries(_p22_ctx, _p22_rows)
+_p22_b0 = stories.load_story(_p22_root, _p22_ids[0])["b0"]
+check("P22a import JSON ghi thẳng input.txt (topic tự lấy từ dòng đầu) — bài dùng được ngay, không chờ mạng",
+      stories.input_text(_p22_root, _p22_ids[0]).startswith("🏈 JOSH ALLEN")
+      and stories.load_story(_p22_root, _p22_ids[0])["topic"].startswith("🏈"))
+check("P22a caption sẵn nằm trong b0.pending + input_hash đúng — B0 chạy sau mới có căn cứ không đè chữ sửa tay",
+      _p22_b0["method"] == "json" and _p22_b0["state"] == stories.PENDING
+      and _p22_b0["pending"]["caption"].startswith("🏈")
+      and _p22_b0["pending"]["images"] == ["https://scontent/x1.jpg"]
+      and _p22_b0["input_hash"] == steps.text_hash(stories.input_text(_p22_root, _p22_ids[0])))
+_p22_plain_ids, _ = ga.import_entries(_p22_ctx, _p22_rows_csv)
+check("P22a dòng CSV không có caption -> B0 thường (không method, không pending) — hai loại file đi qua MỘT hàm import",
+      "pending" not in stories.load_story(_p22_root, _p22_plain_ids[0])["b0"]
+      and "method" not in stories.load_story(_p22_root, _p22_plain_ids[0])["b0"])
+
+_p22_img = _p22_box / "fake.jpg"
+_p22_img.write_bytes(b"\x89PNG-fake")
+_p22_data, _p22_log = steps.run_b0(_p22_root, _p22_ids[0], "https://www.facebook.com/permalink.php?story_fbid=pfbid0AAA&id=6155",
+                                   extract=lambda u: (_ for _ in ()).throw(AssertionError("B0 gọi mạng dù file đã có caption")),
+                                   download=lambda url: _p22_img)
+_p22_after = stories.load_story(_p22_root, _p22_ids[0])["b0"]
+check("P22a B0 của bài JSON KHÔNG gọi mạng: caption lấy trong file, chỉ ảnh là tải",
+      _p22_data is not None and "json" in _p22_log and _p22_after["state"] == stories.DONE
+      and _p22_after["refs"] == 1 and stories.input_text(_p22_root, _p22_ids[0]).startswith("🏈"))
+check("P22a tải xong là xóa b0.pending (set_b0 truyền None = xóa khóa) — để lại là B0 chạy lại ảnh cũ mãi mãi",
+      "pending" not in _p22_after and _p22_after["method"] == "json")
+check("P22a ảnh vào refs/ kèm url gốc trong ref.json — chính url đó là thứ export trả lại cho lần sau",
+      stories.ref_manifest(_p22_root, _p22_ids[0]) == [{"file": "refs/ref_1.jpg", "url": "https://scontent/x1.jpg"}])
+stories.save_input(_p22_root, _p22_ids[1], "Chữ anh sửa tay sau khi import")
+_p22_edit, _p22_edit_log = steps.run_b0(_p22_root, _p22_ids[1], "https://www.facebook.com/permalink.php?story_fbid=pfbid0BBB&id=6155",
+                                         extract=lambda u: {"caption": "B0 tự trích", "images": [], "method": "og", "note": ""},
+                                         download=lambda url: _p22_img)
+check("P22a sửa input.txt tay sau khi import thì B0 từ chối đè — luật cũ của P5a còn hiệu lực với caption JSON",
+      _p22_edit is None and "sửa tay" in _p22_edit_log
+      and stories.input_text(_p22_root, _p22_ids[1]) == "Chữ anh sửa tay sau khi import")
+check("P22a ref_manifest đọc folder chưa có ref.json trả [] — export cả workspace không được sập vì bài trắng",
+      stories.ref_manifest(_p22_root, _p22_plain_ids[0]) == [])
+
+_p22_json, _p22_notes = ga.export_json(_p22_ctx, [_p22_ids[0], "story_999", "../evil"])
+_p22_back, _p22_back_skip = ga.parse_import(_p22_json.encode("utf-8"), "export.json")
+_p22_obj = json.loads(_p22_json)
+check("P22a export đúng dạng file import (url + text + media[].photo_image.uri) — export xong import lại ra Y HỆT",
+      set(_p22_obj[0]) >= {"url", "text", "media"} and _p22_obj[0]["media"][0]["photo_image"]["uri"] == "https://scontent/x1.jpg"
+      and len(_p22_back) == 1 and _p22_back[0]["images"] == ["https://scontent/x1.jpg"]
+      and _p22_back[0]["caption"] == stories.input_text(_p22_root, _p22_ids[0]))
+check("P22a id lạ/bị xóa từ browser KHÔNG đọc được folder nào, và lưới nói rõ đã bỏ bao nhiêu id (P6b)",
+      any("không còn là bài" in n and "2 id" in n for n in _p22_notes) and len(_p22_obj) == 1)
+check("P22a export kèm `id` folder story để đối chiếu, import bỏ qua khóa lạ — hai bên không cần biết hết của nhau",
+      _p22_obj[0]["id"] == _p22_ids[0] and "id" not in (_p22_back[0] or {}))
+stories.save_ref(_p22_root, _p22_ids[0], _p22_img)  # ảnh chép tay: không có url gốc
+_p22_json2, _p22_notes2 = ga.export_json(_p22_ctx, [_p22_ids[0]])
+check("P22a ảnh chép thẳng vào refs/ (không có link gốc) vẫn được export kèm `local` + lưới nói thẳng là mất khi import lại",
+      any("chỉ có trong refs/" in n for n in _p22_notes2)
+      and [m.get("local") for m in json.loads(_p22_json2)[0]["media"]] == ["refs/ref_1.jpg", "refs/ref_2.jpg"])
+_p22_csv, _ = ga.export_csv(_p22_ctx, [_p22_ids[0]])
+check("P22a export CSV = đúng hai cột mà ô Import đọc lại (link_nguồn, link_da_dang) — vòng tròn khép kín",
+      _p22_csv.splitlines()[0] == "link_nguồn,link_da_dang"
+      and "pfbid0AAA" in _p22_csv and "https://scontent" not in _p22_csv)
+_p22_weird = ga.build_ctx(db.connect(), stories.validate_root(_p22_box / "bàn ăn"))
+check("P22a tên file export mang tên workspace + mốc giờ, giữ dấu tiếng Việt, khoảng trắng/ký tự Windows cấm thay gạch",
+      re.match(r"^fbtool-ws-\d{8}-\d{6}\.json$", ga.export_name(_p22_ctx, "json")) is not None
+      and re.match(r"^fbtool-bàn-ăn-\d{8}-\d{6}\.csv$", ga.export_name(_p22_weird, "csv")) is not None)
+_p22_small = ga.MAX_IMPORT
+ga.MAX_IMPORT = 1
+try:
+    _p22_cut_ids, _p22_cut_lines = ga.import_entries(_p22_ctx, _p22_rows)
+finally:
+    ga.MAX_IMPORT = _p22_small
+check("P22a quá trần MAX_IMPORT thì nói rõ bao nhiêu dòng bị bỏ, không âm thầm tạo thiếu",
+      len(_p22_cut_ids) == 1 and any("dòng cuối bị bỏ" in l and "1 dòng" in l for l in _p22_cut_lines))
+_p22_grid_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+check("P22a lưới nhận .json trong ô chọn file và đi qua parse_import — bỏ đoạn đọc cột A riêng ở UI, một đường duy nhất",
+      '"json"' in _p22_grid_src.split("IMPORT_TYPES")[1].split("\n")[0]
+      and "ga.parse_import(raw, file.name)" in _p22_grid_src and "ga.column_a" not in _p22_grid_src)
+shutil.rmtree(_p22_box, ignore_errors=True)
+# --- hết P22a ---
 
 # cleanup test rows
 c = db.connect()

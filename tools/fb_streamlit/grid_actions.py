@@ -10,6 +10,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,8 @@ import stories
 
 MAX_BATCH = 5
 MAX_IMPORT = 200  # một lần import tạo tối đa bấy nhiêu bài — file dài thì chia nhiều lần, tránh tạo nhầm cả nghìn folder
+EXPORT_MAX = 500  # một lần export đọc tối đa bấy nhiêu folder — export là việc của người đã lọc, không phải quét cả ổ
+IMPORT_MAX_BYTES = 8 * 1024 * 1024  # trần file import: modal gửi file base64 qua event, không để message phình vô hạn
 STALE_SECONDS = 15 * 60
 IMAGE_INLINE_MAX = 2 * 1024 * 1024  # chỉ còn cho ảnh refs/ của modal B0 (đi base64 trong một response)
 B2_IMAGE_MAX = 100 * 1024 * 1024  # trần ảnh B2 mở được trong modal — tải qua URL /media/, không qua delta
@@ -466,11 +469,40 @@ def column_a(raw: bytes, name: str) -> list[str]:
     return [row[0] for row in csv.reader(io.StringIO(text)) if row and row[0].strip()]
 
 
+def parse_import(raw: bytes, name: str) -> tuple[list[dict], list[str]]:
+    """MỘT chỗ đọc file import -> (dòng hợp lệ, dòng bị bỏ kèm lý do).
+
+    .json = đúng dạng file export của lưới: caption + ảnh có sẵn trong bài nên B0 khỏi trích
+    (link vẫn bắt buộc — grid cần nó để mở bài gốc). Các loại khác = cột A chỉ có link.
+    File sai cấu trúc thì NÉM ValueError như column_a đã làm với Excel hỏng: lưới báo đỏ
+    thẳng vào lỗi, không hiện "Nhận 0 bài" rồi để anh đoán.
+    """
+    if len(raw or b"") > IMPORT_MAX_BYTES:  # modal gửi file qua event dạng base64 -> trần này là trần thật
+        raise ValueError(f"File “{name}” lớn {round(len(raw) / 1048576, 1)} MB, quá trần "
+                         f"{round(IMPORT_MAX_BYTES / 1048576)} MB — chia nhỏ file ra.")
+    if Path(str(name or "")).suffix.lower() == ".json":
+        entries = fb_import.entries_from_json(raw)
+        rows, skipped = pick_entries(entries)
+        orphan = sum(1 for e in entries
+                     if not clean_url(e.get("url")) and (e.get("caption") or e.get("images")))
+        if orphan:
+            skipped.append(f"bỏ {orphan} mục JSON có chữ/ảnh nhưng không có link — grid cần link để mở bài gốc.")
+        return rows, skipped
+    return pick_entries([{"url": v} for v in column_a(raw, name)])
+
+
 def pick_links(values) -> tuple[list[str], list[str]]:
     """Cột A -> link FB (chuẩn hóa + bỏ trùng); phần bị bỏ trả kèm lý do để báo đúng, không âm thầm."""
-    urls, skipped, seen = [], [], set()
-    for raw in values:
-        head = str(raw or "").strip()
+    rows, skipped = pick_entries([{"url": v} for v in values])
+    return [str(r["url"]) for r in rows], skipped
+
+
+def pick_entries(entries) -> tuple[list[dict], list[str]]:
+    """Dòng import -> bài hợp lệ, GIỮ NGUYÊN caption + ảnh đi kèm dòng đó (link vẫn là chuẩn)."""
+    rows, skipped, seen = [], [], set()
+    for item in entries if isinstance(entries, (list, tuple)) else []:
+        entry = item if isinstance(item, dict) else {"url": item}
+        head = str(entry.get("url") or "").strip()
         if head.replace(".", "").lower() in HEADER_WORDS:  # dòng ghi "link"/"url"/"nguồn"… trong Excel
             skipped.append(f"bỏ dòng tiêu đề “{head[:60]}”")
             continue
@@ -484,23 +516,43 @@ def pick_links(values) -> tuple[list[str], list[str]]:
             skipped.append(f"bỏ link trùng: {value[:60]}")
             continue
         seen.add(value)
-        urls.append(value)
-    return urls, skipped
+        rows.append({**{k: v for k, v in entry.items() if k != "url"}, "url": value})
+    return rows, skipped
+
+
+def import_entries(ctx: Ctx, rows: list[dict]) -> tuple[list[str], list[str]]:
+    """Mỗi dòng đã duyệt -> một story folder mới (Nguồn = link); chưa gọi mạng ở đây.
+
+    Dòng có caption sẵn (JSON import) thì ghi thẳng input.txt và hẹn B0 TẢI ẢNH qua
+    b0.pending — B0 vẫn đi qua steps.run_b0, không mở đường ghi thứ hai (P6c).
+    """
+    ids, with_caption = [], 0
+    for row in rows[:MAX_IMPORT]:
+        url = str(row.get("url") or "")
+        caption = str(row.get("caption") or "").strip()
+        story = stories.create_story(ctx.root, topic="")
+        sid = story["id"]
+        block = {"state": stories.PENDING, "url": url, "refs": 0}
+        if caption:
+            stories.save_input(ctx.root, sid, caption)  # topic tự lấy từ dòng đầu, như B0 vẫn làm
+            images = [str(u) for u in (row.get("images") or []) if str(u or "").strip()]
+            block.update({"method": "json", "input_hash": steps.text_hash(caption),
+                          "pending": {"caption": caption, "images": images}})
+            with_caption += 1
+        stories.update_story(ctx.root, sid, source=url, b0=block)
+        ids.append(sid)
+    lines = [(f"Đã tạo {len(ids)} bài mới (cột Nguồn = link)"
+              + (f" · {with_caption} bài lấy caption thẳng từ file, B0 chỉ còn tải ảnh"
+                 if with_caption else ", B0 chưa trích.")) if ids
+             else "Không có link Facebook hợp lệ nào trong file."]
+    if len(rows) > MAX_IMPORT:
+        lines.append(f"Một lần import nhận tối đa {MAX_IMPORT} dòng — {len(rows) - MAX_IMPORT} dòng cuối bị bỏ.")
+    return ids, lines
 
 
 def import_links(ctx: Ctx, urls: list[str]) -> tuple[list[str], list[str]]:
-    """Mỗi link -> một story folder mới (Nguồn = link, B0 pending) — chưa gọi mạng ở đây."""
-    ids = []
-    for url in urls[:MAX_IMPORT]:
-        story = stories.create_story(ctx.root, topic="")
-        stories.update_story(ctx.root, story["id"], source=url,
-                             b0={"state": stories.PENDING, "url": url, "refs": 0})
-        ids.append(story["id"])
-    lines = [f"Đã tạo {len(ids)} bài mới (cột Nguồn = link), B0 chưa trích." if ids
-             else "Không có link Facebook hợp lệ nào trong file."]
-    if len(urls) > MAX_IMPORT:
-        lines.append(f"Một lần import nhận tối đa {MAX_IMPORT} link — {len(urls) - MAX_IMPORT} link cuối bị bỏ.")
-    return ids, lines
+    """Mỗi link -> một story folder mới (Nguồn = link, B0 pending)."""
+    return import_entries(ctx, [{"url": url} for url in urls])
 
 
 def b0_todo_ids(ctx: Ctx) -> list[str]:
@@ -513,6 +565,74 @@ def b0_todo_ids(ctx: Ctx) -> list[str]:
         if b0_state(ctx.root, sid, story=story) != stories.DONE:
             out.append(sid)
     return out
+
+
+def export_ids(ctx: Ctx, raw) -> tuple[list[str], list[str]]:
+    """id từ request export: chỉ nhận id CÒN LÀ bài trong workspace, cắt theo EXPORT_MAX kèm lý do.
+
+    ID đến từ browser nên phải lọc lại phía server (P6b): bài đã xóa / đã đổi tên / id bịa
+    không được phép làm lộ đường dẫn hay đọc folder khác.
+    """
+    wanted = [str(i) for i in raw if str(i)] if isinstance(raw, (list, tuple)) else []
+    live = set(stories.list_story_ids(ctx.root))
+    kept = [i for i in wanted if i in live]
+    notes = []
+    if len(wanted) != len(kept):
+        notes.append(f"bỏ {len(wanted) - len(kept)} id không còn là bài trong workspace này.")
+    if len(kept) > EXPORT_MAX:
+        notes.append(f"Một lần export tối đa {EXPORT_MAX} bài — {len(kept) - EXPORT_MAX} bài cuối bị bỏ.")
+        kept = kept[:EXPORT_MAX]
+    return kept, notes
+
+
+def export_json(ctx: Ctx, raw) -> tuple[str, list[str]]:
+    """Bài đã chọn -> ĐÚNG dạng file import ({url, text, media[].photo_image.uri}) — export rồi import lại được.
+
+    Kèm `id` (folder story) và `local` (đường dẫn ảnh trong refs/) cho anh đối chiếu; hai khóa đó
+    nằm ngoài cấu trúc import nên import bỏ qua. Ảnh anh chép tay vào refs/ không có link gốc
+    chỉ export được phần `local` — nói thẳng ra số ảnh đó thay vì im lặng làm mất.
+    """
+    ids, notes = export_ids(ctx, raw)
+    entries, local_only = [], 0
+    for sid in ids:
+        story = stories.load_story(ctx.root, sid)
+        media = []
+        for item in stories.ref_manifest(ctx.root, sid):
+            pic = {"local": item["file"]}
+            if item["url"]:
+                pic["photo_image"] = {"uri": item["url"]}
+            else:
+                local_only += 1
+            media.append(pic)
+        entries.append({"id": sid,
+                        "url": clean_url(story.get("source") or (story.get("b0") or {}).get("url")),
+                        "text": stories.input_text(ctx.root, sid),
+                        "media": media})
+    if local_only:
+        notes.append(f"{local_only} ảnh chỉ có trong refs/, không có link gốc (import lại sẽ không lấy được ảnh đó).")
+    return json.dumps(entries, ensure_ascii=False, indent=2), notes
+
+
+def export_csv(ctx: Ctx, raw) -> tuple[str, list[str]]:
+    """Cột A = link nguồn, cột B = link đã đăng — đúng hai cột mà ô Import CSV đọc lại được."""
+    ids, notes = export_ids(ctx, raw)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["link_nguồn", "link_da_dang"])
+    for sid in ids:
+        story = stories.load_story(ctx.root, sid)
+        writer.writerow([clean_url(story.get("source") or (story.get("b0") or {}).get("url")),
+                         clean_url(story.get("link"))])
+    return buf.getvalue(), notes
+
+
+def export_name(ctx: Ctx, kind: str) -> str:
+    """Tên file export kèm mốc thời gian + tên workspace — hai lần export không đè file cũ.
+
+    `\w` ở đây là Unicode nên "Bàn ăn" giữ được dấu, chỉ ký tự Windows cấm (\\ / : * ?) bị thay gạch.
+    """
+    safe = re.sub(r"[^\w.-]+", "-", ctx.root.name, flags=re.UNICODE).strip("-.") or "workspace"
+    return f"fbtool-{safe}-{time.strftime('%Y%m%d-%H%M%S')}.{kind}"
 
 
 def _guard(ctx: Ctx, sid: str):

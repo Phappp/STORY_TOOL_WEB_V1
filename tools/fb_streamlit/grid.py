@@ -42,7 +42,7 @@ PRESET_NONE_LABEL = "— Chưa chọn (mỗi bài theo preset_id của nó) —"
 NO_DIM_CSS = f"<style>.st-key-{KEY}[data-stale=\"true\"] {{ opacity: 1 !important; transition: none !important; }}</style>"
 CSV_KEY = "grid_import_file"
 CSV_DONE_KEY = "grid_import_done"  # dấu vân tay file vừa import — chặn bấm đôi tạo nhầm gấp đôi bài
-IMPORT_TYPES = ["csv", "txt", "xlsx", "xls", "xlsm"]
+IMPORT_TYPES = ["csv", "txt", "xlsx", "xls", "xlsm", "json"]
 SKIPPED_SHOWN = 5
 
 GRID_STEPS = ("b0", "b1", "b2", "b3", "b4")
@@ -451,12 +451,14 @@ def run_b0_import(ctx: ga.Ctx, ids: list[str]) -> None:
 
 
 def import_form(ctx: ga.Ctx) -> None:
-    """Import link FB từ cột A của file: mỗi link một bài mới (cột Nguồn = link) rồi trích B0 cả loạt."""
-    with st.expander("📥 Import link từ CSV / TXT / XLSX — mỗi dòng cột A thêm một bài", expanded=False):
+    """Import file -> bài mới: CSV/TXT/XLSX lấy link ở cột A, JSON lấy cả caption + ảnh trong file."""
+    with st.expander("📥 Import từ CSV / TXT / XLSX / JSON — mỗi dòng thêm một bài", expanded=False):
         file = st.file_uploader(
-            "File chứa link bài viết/reel Facebook ở cột A", key=CSV_KEY, type=IMPORT_TYPES,
-            help=("Một dòng một link, không cần dòng tiêu đề (có cũng được — dòng 'link/url/nguồn…' tự bỏ). "
-                  f"Một lần import tạo tối đa {ga.MAX_IMPORT} bài; link trùng tự bỏ."))
+            "File chứa link bài viết/reel Facebook (cột A) hoặc JSON {url, text, media}", key=CSV_KEY,
+            type=IMPORT_TYPES,
+            help=("CSV/TXT/XLSX: một dòng một link, không cần dòng tiêu đề (có cũng được — dòng 'link/url/nguồn…' tự bỏ), "
+                  f"một lần tạo tối đa {ga.MAX_IMPORT} bài; link trùng tự bỏ. "
+                  "JSON: đúng dạng lưới Export — caption + link ảnh lấy thẳng từ file, B0 chỉ còn tải ảnh."))
         todo = ga.b0_todo_ids(ctx)
         if todo and st.button(f"▶ Trích B0 cho {len(todo)} bài chưa xong (cả workspace)", key="grid_b0_retry",
                               help=f"{len(todo)} bài có link nguồn mà B0 chưa ra caption — trích lại cả loạt, "
@@ -467,28 +469,32 @@ def import_form(ctx: ga.Ctx) -> None:
             return
         raw = file.getvalue()
         try:
-            values = ga.column_a(raw, file.name)
+            rows, skipped = ga.parse_import(raw, file.name)
         except ValueError as exc:
             st.error(str(exc))
             return
-        urls, skipped = ga.pick_links(values)
-        kept = urls[:ga.MAX_IMPORT]
-        st.write(f"**Nhận {len(kept)} link FB** · cột A có {len(values)} dòng · bỏ {len(skipped)} dòng"
-                 + (f" · {len(urls) - len(kept)} link cuối chưa import (giới hạn {ga.MAX_IMPORT}/lần)" if len(urls) > len(kept) else ""))
+        kept = rows[:ga.MAX_IMPORT]
+        with_caption = sum(1 for r in kept if str(r.get("caption") or "").strip())
+        st.write(f"**Nhận {len(kept)} bài** · bỏ {len(skipped)} dòng"
+                 + (f" · {with_caption} bài có caption sẵn trong file (không phải trích)" if with_caption else "")
+                 + (f" · {len(rows) - len(kept)} dòng cuối chưa import (giới hạn {ga.MAX_IMPORT}/lần)"
+                    if len(rows) > len(kept) else ""))
         for line in skipped[:SKIPPED_SHOWN]:
             st.caption("· " + line)
         if len(skipped) > SKIPPED_SHOWN:
             st.caption(f"· … còn {len(skipped) - SKIPPED_SHOWN} dòng bị bỏ nữa")
         digest = sha1(raw).hexdigest()
         again = st.session_state.get(CSV_DONE_KEY) == digest
-        if st.button(("✓ Đã tạo " if again else "➕ Tạo ") + f"{len(kept)} bài mới + trích B0",
+        if st.button(("✓ Đã tạo " if again else "➕ Tạo ") + f"{len(kept)} bài mới"
+                     + (" (B0 tải ảnh)" if with_caption else " + trích B0"),
                      key="grid_import_go", disabled=not kept or again,
-                     help=("Tạo folder story cho từng link rồi trích caption + ảnh tham chiếu (B0) ngay, "
-                           "mỗi bài một việc trong luồng nền — không tải cả loạt cùng lúc"
+                     help=("Tạo folder story cho từng bài rồi cho B0 chạy ngay: link thường thì trích caption + ảnh, "
+                           "JSON thì caption đã có trong file, B0 chỉ tải ảnh — mỗi bài một việc trong luồng nền, "
+                           "không tải cả loạt cùng lúc"
                            if kept and not again else
                            ("File này vừa import xong — bấm ✕ ở ô chọn file rồi chọn lại để import lần nữa." if again
-                            else "Không có link Facebook hợp lệ nào ở cột A."))):
-            ids, lines = ga.import_links(ctx, urls)
+                            else "Không có dòng hợp lệ nào trong file (link Facebook ở cột A, hoặc {url,text} trong JSON)."))):
+            ids, lines = ga.import_entries(ctx, rows)
             st.session_state[CSV_DONE_KEY] = digest
             _push(lines)
             run_b0_import(ctx, ids)

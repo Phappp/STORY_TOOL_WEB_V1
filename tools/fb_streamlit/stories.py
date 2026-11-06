@@ -507,6 +507,22 @@ def refs_of(root: Path, sid: str) -> list[Path]:
     return sorted(p for p in refs_dir.iterdir() if p.is_file() and p.name.startswith("ref_"))
 
 
+def ref_manifest(root: Path, sid: str) -> list[dict]:
+    """refs/ref.json -> [{file, url}] — url gốc của từng ảnh, để export trả đúng dạng file import.
+
+    Ảnh anh chép thẳng vào refs/ không có url thì url = ""; file vẫn liệt kê đủ, không mất bài.
+    """
+    try:
+        data = json.loads((story_dir(root, sid) / REFS_DIR / "ref.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    items = data.get("refs") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [{"file": str(i.get("file") or ""), "url": str(i.get("url") or "")}
+            for i in items if isinstance(i, dict) and str(i.get("file") or "")]
+
+
 def image_of(root: Path, sid: str) -> Path | None:
     return _image_file(story_dir(root, sid))
 

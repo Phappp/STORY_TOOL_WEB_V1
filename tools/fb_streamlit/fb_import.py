@@ -158,3 +158,35 @@ def extract(url: str) -> dict:
         "stats": stats,
         "link": url,
     }
+
+
+def entries_from_json(raw: bytes) -> list[dict]:
+    """File JSON dạng [{url, text, media:[{photo_image:{uri}}]}] -> [{url, caption, images}].
+
+    Đây là đúng thứ extract() trả về sau khi gọi mạng, chỉ khác là KHÔNG gọi mạng: caption nằm
+    sẵn trong `text`, ảnh nằm sẵn trong `media[].photo_image.uri`. Chữ lấy NGUYÊN VĂN (không
+    clean_caption — bản đó đã bỏ mọi link trong bài, còn file này chính là bài viết).
+    Cấu trúc lạ (không phải list/dict, thiếu media, uri rỗng) chỉ bị bỏ qua chứ không nổ:
+    lưới còn báo được bao nhiêu bài thật sự vào được.
+    """
+    try:
+        data = json.loads((raw or b"").decode("utf-8-sig", errors="replace"))
+    except ValueError as exc:
+        raise ValueError(f"File JSON không parse được: {str(exc)[:160]}") from exc
+    out = []
+    for item in (data if isinstance(data, list) else [data]):
+        if not isinstance(item, dict):
+            continue
+        media = item.get("media")
+        images = []
+        for m in (media if isinstance(media, list) else []):
+            if not isinstance(m, dict):
+                continue
+            pic = m.get("photo_image")
+            uri = str(pic.get("uri") or "").strip() if isinstance(pic, dict) else ""
+            if uri:
+                images.append(uri)
+        out.append({"url": str(item.get("url") or "").strip(),
+                    "caption": str(item.get("text") or "").strip(),
+                    "images": images})
+    return out

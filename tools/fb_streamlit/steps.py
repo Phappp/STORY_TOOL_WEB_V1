@@ -51,14 +51,18 @@ class Result:
 
 
 def set_b0(root: Path, sid: str, **fields) -> dict:
-    """state + metadata của B0 nằm trong story.json (block riêng, không lẫn với B1-B3)."""
+    """state + metadata của B0 nằm trong story.json (block riêng, không lẫn với B1-B3).
+
+    Truyền giá trị None = XÓA khóa đó (đang dùng cho `pending` của ảnh JSON sau khi B0 xong).
+    """
     block = dict(stories.load_story(root, sid).get("b0") or {})
     block.update(fields)
+    block = {k: v for k, v in block.items() if v is not None}
     block["updated_at"] = time.time()
     return stories.update_story(root, sid, b0=block)
 
 
-def _text_hash(text: str) -> str:
+def text_hash(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
 
 
@@ -72,8 +76,16 @@ def run_b0(root: Path, sid: str, url: str, extract=None, download=None) -> tuple
     download = download or images.download_ref
     current = stories.input_text(root, sid)
     block = stories.load_story(root, sid).get("b0") or {}
-    if current.strip() and _text_hash(current) != str(block.get("input_hash") or ""):
+    if current.strip() and text_hash(current) != str(block.get("input_hash") or ""):
         return None, "B0: bỏ qua (input.txt đang có chữ sửa tay — xóa hoặc sửa input.txt rồi trích lại)"
+    pending = block.get("pending")
+    if isinstance(pending, dict) and str(pending.get("caption") or "").strip():
+        # JSON import đã có caption + link ảnh ngay trong file -> B0 khỏi trích mạng, chỉ tải ảnh.
+        local = {"caption": str(pending["caption"]),
+                 "images": [{"url": str(u)} for u in (pending.get("images") or []) if str(u or "").strip()],
+                 "method": str(block.get("method") or "json"), "note": "caption từ file JSON import",
+                 "title": "", "stats": ""}
+        extract = lambda _url: local  # noqa: E731 — một chỗ trích B0, hai nguồn (mạng / file import)
     set_b0(root, sid, state=stories.RUNNING, url=url, detail="")
     try:
         data = extract(url)
@@ -99,7 +111,7 @@ def run_b0(root: Path, sid: str, url: str, extract=None, download=None) -> tuple
     set_b0(root, sid, state=stories.DONE, url=url, detail="", note=note,
            method=str(data.get("method") or ""), title=str(data.get("title") or ""),
            stats=str(data.get("stats") or ""), refs=saved, words=len(text_now.split()),
-           input_hash=_text_hash(text_now))
+           input_hash=text_hash(text_now), pending=None)  # ảnh JSON đã nằm trong refs/ -> bản chờ không còn giá trị
     return data, f"B0: OK · {data.get('method') or '?'} · {len(text_now.split())} chữ · {saved} ảnh tham chiếu"
 
 
