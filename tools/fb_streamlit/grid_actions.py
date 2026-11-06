@@ -51,6 +51,10 @@ B4_CHUNK_BYTES = 1024 * 1024  # kích thước một mẩu NGUYÊN VĂN (base64 
 B4_MODAL_MAX = 32 * 1024 * 1024  # trần của ô tải trong modal — đủ cho clip đăng Facebook, không phải chờ vô hạn
 VIDEO_UPLOAD_SECONDS = 180  # không có mẩu nào sau 3 phút = bỏ buffer, kẻo RAM giữ dở cả phiên
 VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".wmv", ".flv", ".3gp")
+# Trần CHO THẺ XEM video trong modal B4 (P21i) — khác hẳn trần TẢI LÊN ở trên. Chiều xem đi qua
+# HTTP /media của Streamlit (Range), không qua message component, nên không đóng băng tab; con số
+# 8 MB là nặng/thẻ: video dài hơn thì thẻ chiếm hết modal và codec ngoài mp4/webm hay hỏng giữa chừng.
+B4_PLAY_MAX = 8 * 1024 * 1024
 
 # "Bài SEO" = nguyên văn seo.md (modal đang hiện markdown thì copy thứ đó);
 # "Bài SEO (render)" = bản chữ sạch qua formats.to_plain KÈM html qua formats.to_html — đúng thứ lưới
@@ -66,7 +70,7 @@ PROMPT_SPECS = [{"step": "b1", "field": "Prompt B1", "copy": True},
 PROMPT_FIELDS = {s["field"]: s["step"] for s in PROMPT_SPECS}  # modal hỏi bằng đúng tên ô (xem prompt_payload)
 # Ảnh không phải trường copy (nó đi image_payload, trả đường dẫn chứ không nhét base64 vào delta) —
 # modal xin gộp cả hai trong MỘT request (xem modal_payload), nên "Ảnh" cũng phải có trong bảng.
-MODAL_FIELDS = frozenset(COPY_FIELDS) | set(PROMPT_FIELDS) | {"Ảnh"}
+MODAL_FIELDS = frozenset(COPY_FIELDS) | set(PROMPT_FIELDS) | {"Ảnh", "Video"}
 
 
 def prompt_spec(step: str):
@@ -937,6 +941,27 @@ def image_payload(ctx: Ctx, sid: str, request_id: str):
 MODAL_MAX_FIELDS = 4  # một tab modal cùng lắm xin: kết quả + prompt — nhiều hơn là JS tự gửi sai
 
 
+def video_payload(ctx: Ctx, sid: str, request_id: str):
+    """Video trong folder cho thẻ B4: trả ĐƯỜNG DẪN FILE, lớp Streamlit đổi thành URL /media/ khi vẽ.
+
+    Cùng đường với ảnh B2 (P7c) chứ không phải base64: chiều XEM thì trình duyệt xin thẳng từ media
+    handler của Streamlit (có Range), nên một file 8 MB không chiếm message component nào — khác hẳn
+    chiều tải lên P21c, nơi bytes BẮT BUỘC đi qua event nên mới phải cắt mẩu.
+    """
+    video = stories.video_of(ctx.root, sid)
+    if video is None:
+        return None, f"{sid}: bài này chưa có video trong folder."
+    size = video.stat().st_size
+    if not size:
+        return None, f"{sid}: {video.name} rỗng (0 MB) — chưa có gì để xem."
+    if size > B4_PLAY_MAX:
+        return None, (f"{sid}: {video.name} {round(size / 1048576, 1)} MB vượt trần "
+                      f"{B4_PLAY_MAX // 1048576} MB của thẻ xem trong modal — file vẫn nguyên trong "
+                      "folder bài, mở bằng trình phát trên máy mà xem.")
+    return {"id": sid, "field": "Video", "request_id": request_id, "video": "", "video_path": str(video),
+            "name": video.name, "text": "", "bytes": size}, ""
+
+
 def modal_payload(ctx: Ctx, sid: str, raw_fields, request_id: str):
     """MỘT response cho cả tab modal: kết quả + prompt về cùng một lượt.
 
@@ -946,7 +971,7 @@ def modal_payload(ctx: Ctx, sid: str, raw_fields, request_id: str):
     Gộp lại thành một request là hết nghẽn, và cũng đỡ một lượt script chạy cho mỗi lần mở tab.
 
     Trường lạ không có trong bảng là lỗi CHẶT (item.error), không phải đường dẫn: modal chỉ xin
-    bằng đúng tên trường Python biết đọc (COPY_FIELDS ∪ PROMPT_FIELDS ∪ "Ảnh").
+    bằng đúng tên trường Python biết đọc (COPY_FIELDS ∪ PROMPT_FIELDS ∪ "Ảnh" ∪ "Video").
     """
     fields = [str(f) for f in (raw_fields or []) if str(f).strip()][:MODAL_MAX_FIELDS]
     if not fields:
@@ -958,6 +983,7 @@ def modal_payload(ctx: Ctx, sid: str, raw_fields, request_id: str):
             failed.append(name)
             continue
         payload, why = (image_payload(ctx, sid, request_id) if name == "Ảnh"
+                        else video_payload(ctx, sid, request_id) if name == "Video"
                         else _copy_payload(ctx, sid, name, request_id))
         if payload is None:
             items.append({"field": name, "error": why or f"{sid}: {name} không đọc được."})

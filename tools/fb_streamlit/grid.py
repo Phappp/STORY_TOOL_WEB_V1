@@ -410,18 +410,21 @@ def _push(lines: list[str], kind: str = "event") -> None:
     st.session_state["grid_log"] = (st.session_state.get("grid_log", []) + lines)[-LOG_KEEP:]
 
 
-def media_url(path: str, sid: str) -> str:
-    """Đăng ký ảnh với media manager của Streamlit -> URL /media/… cho modal tải bằng HTTP.
+def media_url(path: str, sid: str, slot: str = "b2") -> str:
+    """Đăng ký file với media manager của Streamlit -> URL /media/… cho modal mở qua HTTP.
 
-    Đặt ở lớp grid chứ không ở grid_actions: dispatcher cố ý không biết gì về Streamlit.
+    Đặt ở lớp grid chứ không ở dispatcher: dispatcher cố ý không biết gì về Streamlit.
     Chạy ngoài app (smoke test không có runtime) thì trả '' để modal tự nói rõ, không treo.
+    `slot` phân biệt URL của ảnh B2 và video B4 (P21i) — media manager khóa URL theo
+    component_id, hai slot cùng id bài mà dùng chung thì thẻ video ăn nhầm ảnh.
     """
     try:
         from streamlit import runtime
         mgr = runtime.get_instance().media_file_mgr
     except Exception:  # chưa có runtime (test) -> không có URL
         return ""
-    return str(mgr.add(path, mimetypes.guess_type(path)[0] or "image/png", f"fbgrid:{sid}:b2"))
+    fallback = "video/mp4" if slot == "b4" else "image/png"
+    return str(mgr.add(path, mimetypes.guess_type(path)[0] or fallback, f"fbgrid:{sid}:{slot}"))
 
 
 def _collect(out: ga.Outcome, event: dict) -> None:
@@ -451,6 +454,11 @@ def _collect(out: ga.Outcome, event: dict) -> None:
                 if not item["image"]:
                     item["error"] = (f"{resp.get('id')}: server không cấp được đường dẫn ảnh — "
                                      "mở bài ở trang Tạo bài để xem.")
+            if item.get("video_path"):  # P21i: thẻ B4 xem video thật, không chỉ đọc tên file
+                item["video"] = media_url(str(item["video_path"]), str(resp.get("id") or ""), "b4")
+                if not item["video"]:
+                    item["error"] = (f"{resp.get('id')}: server không cấp được đường dẫn video — "
+                                     "mở folder bài để xem.")
         if resp.get("image_path"):  # ảnh B2: file -> URL, modal không nhận base64 qua delta
             resp["image"] = media_url(str(resp["image_path"]), str(resp.get("id") or ""))
             if not resp["image"]:
@@ -585,6 +593,9 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     # P21c: ô tải trong modal cần tự nói trần của NÓ (khác trần mục native) và
                     # cỡ một mẩu để JS cắt file đúng nhịp server chờ.
                     video_modal_max=ga.B4_MODAL_MAX, video_chunk=ga.B4_CHUNK_BYTES,
+                    # P21i: thẻ B4 cũng cần tự nói trần của CHIỀU XEM (khác trần tải lên) — chữ trong
+                    # help và dòng "vượt trần" của ô xem lấy từ đây, không phải con số JS tự đoán.
+                    video_play_max=ga.B4_PLAY_MAX,
                     video_types=VIDEO_TYPES,
                     summary=ga.count_buckets(all_rows),
                     queue_ids=ga.queue_ids(all_rows),

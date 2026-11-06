@@ -164,6 +164,12 @@
   .vidbar i { display:block; height:100%; background:var(--accent); width:0; transition:width .25s ease; }
   .vidbar.done i { background:var(--done-t); }
   .vidbar.bad i { background:var(--error-t); }
+  /* P21i: thẻ B4 PHÁT video thật ngay trong modal — chiều xem đi qua HTTP /media của Streamlit (Range)
+     nên bytes không đè message component như chiều tải. Trần chiều cao là chỗ P20 "modal không cuộn"
+     sống tiếp: video nào cao hơn cũng bị bóp vào đây, phần chữ dài vẫn cuộn TRONG thẻ. */
+  .vidplay { display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .vidplay video.videl { width:100%; max-height:min(38vh,320px); min-height:118px; background:#000;
+    border:1px solid var(--border); border-radius:8px; }
   /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
   button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
@@ -305,6 +311,7 @@ const DRAFT = new Map();    // "id|B0 preview|dấu_mốc_file" -> chữ anh đa
 const LINK_DRAFT = new Map();  // "id|link" -> chữ đang gõ ở ô Link (P18d). KHÔNG keyed theo dấu mốc:
                                // batch chạy làm updated_at đổi liên tục, nháp link đang gõ dở mà mất là lỗi.
 const IMAGES = new Map();   // "id|Ảnh|dấu_mốc_file" -> data URL
+const VIDEOS = new Map();   // "id|Video|dấu_mốc_file" -> {url, name, bytes} — URL /media/ cho thẻ B4 (P21i)
 const NOTES = new Map();    // "id|field|dấu_mốc_file" -> dòng giải thích (trống/chưa có ảnh) — chặn xin lại vòng vô hạn
 const WAITING = new Map();  // request_id -> {keys|key, fields|field, id, mode, flash, short, at} — chờ response về
 const WAIT_EXPIRE_MS = 6000;  // response lạc (Streamlit chỉ chuyển 1 event/lượt) -> quá hạn thì xin lại, đừng để modal kẹt "đang đọc"
@@ -526,7 +533,7 @@ function contentKey(row, field) {
   return isPrompt ? base + "|preset=" + String(row.preset || "") : base;
 }
 function findRow(id) { return rows().find(r => String(r.id) === String(id)) || null; }
-function tabField(tab) { return tab === "b2" ? "Ảnh" : (TAB_FIELD[tab] || ""); }
+function tabField(tab) { return tab === "b2" ? "Ảnh" : tab === "b4" ? "Video" : (TAB_FIELD[tab] || ""); }
 
 // Xin nội dung/ảnh từ Python (component không tự đọc file) — ghi cache theo dấu mốc của folder story.
 // `short` = nút copy chỉ là một ICON: nhãn báo phải gọn một ký tự, dài là méo đầu thẻ.
@@ -617,8 +624,9 @@ function ingestLot(r) {
   wanted.forEach(field => {
     if (told.indexOf(field) >= 0) return;
     const key = row ? contentKey(row, field) : String(r.id || "") + "|" + field + "|";
-    if (!CONTENT.has(key) && !IMAGES.has(key) && !NOTES.has(key)) {
-      NOTES.set(key, String(r.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
+    if (!CONTENT.has(key) && !IMAGES.has(key) && !VIDEOS.has(key) && !NOTES.has(key)) {
+      NOTES.set(key, String(r.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh."
+        : field === "Video" ? "Bài này chưa có video trong folder." : field + " trống — chưa có gì để hiện."));
     }
   });
 }
@@ -627,10 +635,14 @@ function ingestLot(r) {
 function fillField(field, key, payload) {
   const p = payload || {};
   if (p.image) IMAGES.set(key, String(p.image));  // response B0 mang cả chữ lẫn ảnh -> nạp đủ hai ô cache
+  // P21i: video không đi base64 — Python đưa URL /media/, thẻ B4 tự xin qua HTTP (Range), nên
+  // cache chỉ giữ {url, name, bytes}. Không có branch này thì mọi lượt xem video bị coi là "trống".
+  if (p.video) VIDEOS.set(key, { url: String(p.video), name: String(p.name || ""), bytes: Number(p.bytes || 0) });
   if (String(p.text || "").trim() || field === TAB_FIELD.b0) CONTENT.set(key, String(p.text || ""));  // B0 payload rỗng vẫn là "đã đọc file"
   if (p.html) RICH.set(key, String(p.html));  // chữ đi kèm HTML thì nhớ cả HTML, kẻo lần copy sau rơi về chữ thường
-  if (!p.image && !String(p.text || "").trim() && field !== TAB_FIELD.b0) {  // modal B0 tự có dòng hướng dẫn + ô gõ, không cần note chung
-    NOTES.set(key, String(p.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
+  if (!p.image && !p.video && !String(p.text || "").trim() && field !== TAB_FIELD.b0) {  // modal B0 tự có dòng hướng dẫn + ô gõ, không cần note chung
+    NOTES.set(key, String(p.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh."
+      : field === "Video" ? "Bài này chưa có video trong folder." : field + " trống — chưa có gì để hiện."));
   }
 }
 
@@ -808,10 +820,16 @@ function ensureTab(row, tab) {
   if (fields[0] === TAB_FIELD.b0) { ensureOne(row, TAB_FIELD.b0); return; }
   const ask = fields.filter(field => {
     const key = contentKey(row, field);
-    if (CONTENT.has(key) || IMAGES.has(key) || NOTES.has(key)) return false;
+    if (CONTENT.has(key) || IMAGES.has(key) || VIDEOS.has(key) || NOTES.has(key)) return false;
     if (field === "Ảnh" && !row.image) { NOTES.set(key, "Bài này chưa có ảnh — chạy B2 để có ảnh."); return false; }
+    // Video không có trường `copyable` nào: folder nói bằng b4meta, khỏi xin Python một lượt thừa
+    if (field === "Video" && !row.b4meta) {
+      NOTES.set(key, "Bài này chưa có video trong folder — chọn file ở ô tải bên dưới.");
+      return false;
+    }
     // Python đã nói trong row.copyable là trường này không có chữ thì tự trả lời, khỏi gọi lượt đọc
-    if (field !== "Ảnh" && !PROMPT_BY_FIELD[field] && row.copyable && row.copyable[field] === false) {
+    if (field !== "Ảnh" && field !== "Video" && !PROMPT_BY_FIELD[field] && row.copyable
+        && row.copyable[field] === false) {
       NOTES.set(key, field + " trống — chạy bước này trước.");
       return false;
     }
@@ -1399,24 +1417,64 @@ function vidSig() {
     (VID.err || "").length, (VID.line || "").length].join(":") + extra;
 }
 
+function vidPlayMax() { return Number(MODEL.video_play_max || 0) || 8 * 1048576; }
+
+// P21i: thẻ B4 PHÁT thật video trong folder. Bytes KHÔNG đi qua message component như chiều tải lên
+// (P21c) — Python chỉ đưa URL /media/, trình duyệt tự xin qua HTTP nên 8 MB là chuyện bình thường.
+function vidPlayer(row) {
+  const key = contentKey(row, "Video");
+  const box = el("div", "vidplay");
+  if (!row.b4meta) {
+    box.appendChild(el("div", "muted", NOTES.get(key)
+      || ("Chưa có video trong folder — file tải xong sẽ hiện ra đây (thẻ xem được tới "
+          + vidMb(vidPlayMax()) + " MB).")));
+    return box;
+  }
+  const v = VIDEOS.get(key);
+  if (!v || !v.url) {
+    box.appendChild(el("div", "loading", NOTES.get(key) || ("⏳ đang tải video về thẻ · " + row.b4meta)));
+    return box;
+  }
+  const clip = document.createElement("video");
+  clip.className = "videl";
+  clip.src = String(v.url);
+  clip.controls = true;
+  clip.preload = "metadata";
+  clip.playsInline = true;
+  clip.title = (v.name || row.b4meta) + " — bấm ▶ để xem ngay trong modal";
+  box.appendChild(clip);
+  box.appendChild(el("div", "ioline", "▶ đang phát " + String(v.name || row.b4meta)
+    + " trực tiếp từ folder · ↗ ở góc thẻ mở tab mới"));
+  return box;
+}
+
 function videoCard(row) {
   const state = stateOf(row, "b4");
   const detail = String((row.detail || {}).b4 || "");
-  const body = [el("div", null, row.b4meta ? "Video đang có: " + row.b4meta
-    : "Bài này chưa có video trong folder."), vidBox(row)];
+  // P21i: thẻ XEM đã nói cả hai tình huống (chưa có file / đang có file nào) nên dòng chữ trên chỉ
+  // thêm khi THẬT SỰ có file — không có file mà still hai dòng cùng nghĩa là chữ thừa trong thẻ.
+  const body = [];
+  if (row.b4meta) body.push(el("div", null, "Video đang có: " + row.b4meta));
+  body.push(vidPlayer(row), vidBox(row));
   if (detail) body.push(el("div", "muted", "Ghi chú: " + detail));
+  const key = contentKey(row, "Video");
+  const played = VIDEOS.get(key);
   return card({
     title: "🎬 Video trong folder · video.*", state: state,
     warn: SQ_WARN.indexOf(state) >= 0 ? state : "",
+    actions: played && played.url ? [openIcon(played.url, "Mở " + String(played.name || "video")
+      + " bằng trình duyệt (tab mới, xem toàn màn hình)")] : [],
     help: ["B4 là bước tải tay — không có AI, không vào hàng đợi, không ảnh hưởng ⚡",
       "Chọn file rồi bấm “🚀 Tải lên”: file đi từng mẩu " + vidMb(vidChunkBytes()) + " MB qua lưới, "
         + "mẩu cuối về tới nơi mới ghi `video.<đuôi>` vào folder — đang tải mà hủy thì folder còn nguyên.",
-      "Trần của ô này là " + vidMb(vidModalMax()) + " MB vì bytes đi qua message component. Lớn hơn thì dùng mục "
+      "Trần của ô TẢI là " + vidMb(vidModalMax()) + " MB vì bytes đi qua message component. Lớn hơn thì dùng mục "
         + "“🎬 B4 · Video” phía trên lưới (tới " + mib(MODEL.video_max, 200) + " MB) hoặc chép thẳng vào folder bài.",
       "Bấm “⛔ Hủy” giữa chừng để bỏ lượt (RAM dọn ngay), “🔁 Tải lại từ đầu” khi một mẩu không được xác nhận.",
       "Ô B4 chỉ lên xanh khi folder THẬT SỰ có file. Ô 🎬 Link video dưới đầu modal chỉ là chữ trong story.json — nó không đổi màu ô.",
       "Tải file mới là ghi đè: một bài giữ MỘT video.",
-      "Lưới không phát video (file quá lớn để gửi qua iframe) — muốn xem thì mở folder bài."],
+      "Thẻ này XEM được video ngay trong modal tới " + vidMb(vidPlayMax()) + " MB (bytes đi qua HTTP /media, "
+        + "không qua message). Lớn hơn thì thẻ nói rõ và phải mở file bằng trình phát trên máy.",
+      "Đuôi .mp4/.webm/.m4v là trình duyệt phát được; .avi/.wmv/.mkv/.flv/.3gp thường phải mở ngoài."],
     body: body,
   });
 }
@@ -1443,10 +1501,8 @@ function linkCards(row) {
        "Đổi nguồn: import lại link ở đầu lưới."]),
     linkCard("🎬 Link video (B4)", row.b4link, "(chưa có — mở tab B4 rồi gõ ở ô 🎬)", true,
       ["Chỉ là CHỮ trong story.json · b4.link — video nằm nơi khác (YouTube, Drive…) thì ghi link ở đây.",
-       "Không đổi màu ô B4: ô đó luôn nói về FILE `video.*` trong folder."]),
-    linkCard("📁 File video trong folder", row.b4meta, "(chưa có — tải file ở thẻ 🎬 Video trong folder, tab B4)", false,
-      ["File thật trong folder bài: tên · dung lượng · tải lúc nào.",
-       "Xóa file ngoài ổ thì ô B4 về cam “mất file”."]),
+       "Không đổi màu ô B4. Muốn xem FILE `video.*` thật trong folder thì mở tab B4 — thẻ 🎬 phát được "
+        + "ngay trong modal tới " + vidMb(vidPlayMax()) + " MB."]),
   ];
 }
 
@@ -1595,7 +1651,8 @@ function repaint() {
            copy_response: MODEL.copy_response, summary: MODEL.summary, queue_ids: MODEL.queue_ids,
            error_ids: MODEL.error_ids, providers: MODEL.providers, defaults: MODEL.defaults, cols: MODEL.cols,
            io: MODEL.io, io_response: {}, video_response: {},  // response đã nạp rồi: vẽ lại cục bộ không được nạp lại lần hai
-           video_modal_max: MODEL.video_modal_max, video_chunk: MODEL.video_chunk,
+           video_modal_max: MODEL.video_modal_max, video_play_max: MODEL.video_play_max,
+           video_chunk: MODEL.video_chunk,
            video_types: MODEL.video_types }, true);
 }
 
@@ -2490,7 +2547,8 @@ function modalSig() {
   return JSON.stringify([ref.id, ref.tab, stampOf(row), row.flow, row.prov, row.b0meta, row.b4, row.b4meta,
     row.video, row.image, row.link, row.b4link, row.b2ref,
     row.copyable, row.preset, SHOW_MD, (MODEL.copy_response || {}).request_id || "", (MODEL.providers || []).join("|"),
-    String(MODEL.image_max || 0), String(MODEL.video_max || 0), vidSig(), String(MODEL.video_modal_max || 0)]);
+    String(MODEL.image_max || 0), String(MODEL.video_max || 0), vidSig(), String(MODEL.video_modal_max || 0),
+    String(MODEL.video_play_max || 0)]);
 }
 
 function syncModal() {
@@ -2600,6 +2658,7 @@ function render(args, force) {
     io: args.io && typeof args.io === "object" ? args.io : {},
     io_response: args.io_response && typeof args.io_response === "object" ? args.io_response : {},
     video_modal_max: Number(args.video_modal_max || 0),
+    video_play_max: Number(args.video_play_max || 0),
     video_chunk: Number(args.video_chunk || 0),
     video_types: Array.isArray(args.video_types) ? args.video_types : [],
     video_response: args.video_response && typeof args.video_response === "object" ? args.video_response : {},

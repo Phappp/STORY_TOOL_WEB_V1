@@ -2618,8 +2618,9 @@ check("P18a modal xin không có trường nào -> từ chối rõ ràng, không
 _p18_out6, _p18_items6 = _p18_lot(["Caption", "Bài SEO", "Input", "Link", "Prompt B1", "Prompt B3"], req="rq-p18-6")
 check("P18a một lô tối đa MODAL_MAX_FIELDS trường — JS gửi sai cũng không kéo theo cả chục lần đọc file",
       len(_p18_items6) == ga.MODAL_MAX_FIELDS and set(_p18_items6) == {"Caption", "Bài SEO", "Input", "Link"})
-check("P18a bảng trường modal = đúng các trường Python đọc được (copy ∪ prompt ∪ Ảnh) — thêm ô là sửa một bảng",
-      set(ga.MODAL_FIELDS) == set(ga.COPY_FIELDS) | set(ga.PROMPT_FIELDS) | {"Ảnh"}
+check("P18a bảng trường modal = đúng các trường Python đọc được (copy ∪ prompt ∪ Ảnh ∪ Video, P21i thêm chiều xem) "
+      "— thêm ô là sửa một bảng",
+      set(ga.MODAL_FIELDS) == set(ga.COPY_FIELDS) | set(ga.PROMPT_FIELDS) | {"Ảnh", "Video"}
       and 'source == "modal_request"' in (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8"))
 
 grid_src_p18 = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encoding="utf-8")
@@ -3728,10 +3729,12 @@ check("P18d chữ link vào DOM bằng value/textContent, không innerHTML — l
 check("P18d b4link vào chữ ký modal (lưu xong ô phải hiện lại chữ mới) + có style riêng .mlink, không vẽ trần",
       "row.b4link" in _js18d[_js18d.index("function modalSig"):_js18d.index("\n}", _js18d.index("function modalSig"))]
       and ".mlink {" in _js18d)
-check("P18d tab Link thành bản tóm tắt đủ bốn thứ (đã đăng / nguồn / link video / file video) — P20: mỗi thứ MỘT THẺ",
+check("P18d tab Link thành bản tóm tắt ba thứ chữ (đã đăng / nguồn / link video) — P20: mỗi thứ MỘT THẺ; "
+      "P21i: file video KHÔNG nằm ở đây nữa, tab B4 đã phát được nó thật",
       'linkCard("🔗 Đã đăng", row.link' in _js18d and 'linkCard("🧭 Nguồn (B0)", row.source' in _js18d
       and 'linkCard("🎬 Link video (B4)", row.b4link' in _js18d
-      and 'linkCard("📁 File video trong folder", row.b4meta' in _js18d
+      and 'linkCard("📁 File video trong folder"' not in _js18d
+      and _js18d.split("function linkCards")[1].split("\n}")[0].count('linkCard(') == 3
       and 'bấm ✎ ở cột Link để nhập' not in _js18d
       and "if (tab === \"link\") return linkCards(row);" in _js18d)
 _p18d_conn.close()
@@ -4217,10 +4220,12 @@ check("P21c có ĐỒNG HỒ chờ xác nhận (20s) cho mỗi mẩu — IO_BUSY
       and "clearTimeout(VID_TIMER)" in _p22_fe.split("function ingestVideo")[1].split("function vidPrecheck")[0])
 check("P21c response đã nạp thì repaint KHÔNG được nạp lại lần hai (io_response:{} đã là bài học) — nếu không một ack gửi hai mẩu",
       "video_response: {}" in _p22_fe.split("function repaint")[1].split("function linkEditor")[0]
-      and "video_modal_max: MODEL.video_modal_max, video_chunk: MODEL.video_chunk" in _p22_fe.split("function repaint")[1].split("function linkEditor")[0])
+      and "video_modal_max: MODEL.video_modal_max" in _p22_fe.split("function repaint")[1].split("function linkEditor")[0]
+      and "video_chunk: MODEL.video_chunk" in _p22_fe.split("function repaint")[1].split("function linkEditor")[0])
 check("P21c mọi thứ của lượt tải sống ở MODULE (VID/VID_FILE/VID_PICK/VID_MSG) + sig modal tính vidSig — tick 2s dựng lại thẻ không được xóa tiến độ",
       all(f"let {n} = " in _p22_fe for n in ("VID", "VID_FILE", "VID_PICK", "VID_MSG", "VID_TIMER"))
-      and "vidSig(), String(MODEL.video_modal_max || 0)]);" in _p22_fe
+      and "vidSig(), String(MODEL.video_modal_max || 0)," in _p22_fe
+      and "String(MODEL.video_play_max || 0)]);" in _p22_fe
       and "ingestVideo();" in _p22_fe.split("function render(args, force)")[1].split("const alive")[0]
       and "vidBox(row)" in _p22_fe.split("function videoCard")[1].split("function linkCard")[0])
 check("P21c vidSig tính cả VID_PICK + VID_MSG — đo live: chọn file 40 MB sau một lượt đã xong mà sig không đổi thì lời 'vượt trần' không bao giờ hiện",
@@ -4244,6 +4249,82 @@ check("P21c chữ 'Đã hủy' là sự thật, không bị ack của mẩu đan
 check("P21c ack của LƯỢT CŨ (up khác) bị bỏ hẳn, chỉ dựng lại ô từ error khi VID đã mất vì trang vẽ lại — kẻo mẩu trễ giết lượt vừa Tải lại",
       "if (!VID && r.error) {" in _p22_fe.split("function ingestVideo")[1].split("function vidPrecheck")[0]
       and "if (r.error) VID = " not in _p22_fe.split("function ingestVideo")[1].split("function vidPrecheck")[0])
+
+# --- P21i: thẻ B4 XEM video thật trong modal — chiều xem đi qua HTTP /media, không qua message ---
+_p21i_ga_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_pay_v, _why_v = ga.video_payload(vid_ctx, s_vid, "r-p21i")
+check("P21i video trong folder -> payload mang ĐƯỜNG DẪN FILE cho lớp Streamlit tự đổi lấy URL (bytes không vào delta), "
+      "kèm tên + bytes để thẻ nói đúng file nào đang phát",
+      _pay_v is not None and _why_v == "" and _pay_v["field"] == "Video"
+      and _pay_v["video"] == "" and Path(_pay_v["video_path"]).name == "video.mp4"
+      and _pay_v["name"] == "video.mp4"
+      and _pay_v["bytes"] == (vid_root / s_vid / "video.mp4").stat().st_size)
+s_novid = stories.create_story(vid_root, "Chưa có video")["id"]
+check("P21i bài chưa có video -> không có payload, lời báo nói thẳng chưa có gì trong folder (thẻ hiện đúng chữ này)",
+      ga.video_payload(vid_ctx, s_novid, "r-p21i")[0] is None
+      and "chưa có video trong folder" in str(ga.video_payload(vid_ctx, s_novid, "r-p21i")[1]))
+(vid_root / s_novid / "video.mp4").write_bytes(b"")
+check("P21i file rỗng 0 MB -> thẻ báo 'rỗng' chứ không phát một video 0 byte (người dùng tưởng xem được)",
+      ga.video_payload(vid_ctx, s_novid, "r-p21i")[0] is None
+      and "rỗng" in str(ga.video_payload(vid_ctx, s_novid, "r-p21i")[1]))
+s_big = stories.create_story(vid_root, "Video quá trần thẻ")["id"]
+(vid_root / s_big / "video.mp4").write_bytes(b"\0" * (5 * 1024 * 1024))
+_cap_old = ga.B4_PLAY_MAX
+try:
+    ga.B4_PLAY_MAX = 4 * 1024 * 1024
+    _big_pay, _big_why = ga.video_payload(vid_ctx, s_big, "r-p21i")
+finally:
+    ga.B4_PLAY_MAX = _cap_old
+check("P21i vượt trần thẻ xem -> từ chối TRƯỚC khi cấp URL và nói đúng số MB của trần (JS đọc video_play_max nên "
+      "con số trên thẻ phải là con số server đang thật sự áp), file vẫn nguyên trong folder",
+      _big_pay is None and "vượt trần 4 MB" in _big_why
+      and (vid_root / s_big / "video.mp4").stat().st_size == 5 * 1024 * 1024)
+check("P21i 'Video' là trường modal xin được — MỘT request cho cả tab (P18a) nên mở B4 không bao giờ kẹt 'đang đọc'",
+      "Video" in ga.MODAL_FIELDS
+      and ga.modal_payload(vid_ctx, s_vid, ["Video"], "r-p21i")[0]["items"][0].get("video_path")
+      and ga.modal_payload(vid_ctx, s_vid, ["Video"], "r-p21i")[0]["items"][0].get("mode") == "show")
+check("P21i vẫn một đường chặn chặt: trường lạ không đọc được file khác trong folder — video chỉ đi qua đúng "
+      "video_of(root, safe_id)",
+      "không phải trường modal xin được" in str(
+          ga.modal_payload(vid_ctx, s_vid, ["../secrets"], "r-p21i")[0]["items"][0].get("error")))
+check("P21i lớp Streamlit đổi video_path -> URL /media/ với SLOT 'b4' riêng (component_id khác ảnh B2 — dùng chung "
+      "slot là thẻ video ăn nhầm ảnh) và mất URL thì lỗi nói đúng, không phát thẻ rỗng",
+      'item["video"] = media_url(str(item["video_path"]), str(resp.get("id") or ""), "b4")' in _p22_grid_src
+      and 'def media_url(path: str, sid: str, slot: str = "b2")' in _p22_grid_src
+      and 'f"fbgrid:{sid}:{slot}"' in _p22_grid_src
+      and 'item["error"] = (f"{resp.get(\'id\')}: server không cấp được đường dẫn video — "' in _p22_grid_src)
+check("P21i trần XEM do server đưa xuống (video_play_max=ga.B4_PLAY_MAX) — để JS tự đoán là chữ trên thẻ nói sai một cục",
+      "video_play_max=ga.B4_PLAY_MAX" in _p22_grid_src
+      and "B4_PLAY_MAX = 8 * 1024 * 1024" in _p21i_ga_src)
+check("P21i video_play_max sống đủ ba đường: args -> MODEL, repaint giữ nguyên, chữ ký modal tính nó — "
+      "thiếu repaint là sau một tick thẻ quên trần",
+      "video_play_max: Number(args.video_play_max || 0)," in _p22_fe
+      and "video_play_max: MODEL.video_play_max" in _p22_fe.split("function repaint")[1].split("\n}")[0]
+      and "String(MODEL.video_play_max || 0)" in _p22_fe.split("function modalSig")[1].split("\n}")[0])
+check("P21i tab B4 xin đúng trường 'Video' (tabField) — ảnh B2 vẫn là 'Ảnh', hai ô không đè cache nhau",
+      'tab === "b2" ? "Ảnh" : tab === "b4" ? "Video"' in _p22_fe
+      and 'const VIDEOS = new Map();' in _p22_fe)
+check("P21i có URL trong VIDEOS thì KHÔNG xin lại lượt nữa, và bài chưa có file thì chặn ngay ở JS "
+      "(đo P18a: xin rồi nhận 'chưa có' là thừa một lượt script)",
+      "CONTENT.has(key) || IMAGES.has(key) || VIDEOS.has(key) || NOTES.has(key)"
+      in _p22_fe.split("function ensureTab")[1].split("\n}")[0]
+      and 'if (field === "Video" && !row.b4meta) {' in _p22_fe.split("function ensureTab")[1].split("\n}")[0])
+check("P21i response video nạp vào VIDEOS bằng URL chứ không phải base64, và thiếu URL thì lời error của server "
+      "là chữ hiện trên thẻ",
+      'if (p.video) VIDEOS.set(key, { url: String(p.video), name: String(p.name || ""), bytes: Number(p.bytes || 0) });'
+      in _p22_fe.split("function fillField")[1].split("\n}")[0]
+      and "!p.video" in _p22_fe.split("function fillField")[1].split("\n}")[0])
+_p21i_player = _p22_fe.split("function vidPlayer")[1].split("\n}")[0]
+check("P21i thẻ vẽ <video controls> thật từ URL /media/, preload metadata (không xin cả file khi chưa bấm) + "
+      "playsInline; chưa có URL thì hiện ⏳/lỗi, không hiện ô đen hỏng",
+      'document.createElement("video")' in _p21i_player and "clip.controls = true;" in _p21i_player
+      and 'clip.src = String(v.url);' in _p21i_player and 'clip.preload = "metadata";' in _p21i_player
+      and "clip.playsInline = true;" in _p21i_player and "⏳ đang tải video về thẻ" in _p21i_player
+      and "send(" not in _p21i_player)
+check("P21i thẻ B4 có ↗ mở URL /media/ bằng tab mới khi đã cấp được video (file ngoài trần không có ↗ vì không có URL)",
+      "actions: played && played.url ? [openIcon(played.url," in _p22_fe.split("function videoCard")[1].split("\n}")[0])
+check("P21i thẻ có trần chiều cao riêng (.videl max-height) — P20 'modal không cuộn' sống tiếp với video 16:9",
+      ".vidplay video.videl {" in _p22_fe)
 shutil.rmtree(_p21_box, ignore_errors=True)
 # --- hết P21c ---
 
