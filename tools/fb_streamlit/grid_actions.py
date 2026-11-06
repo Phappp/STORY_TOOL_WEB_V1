@@ -42,8 +42,9 @@ B4_VIDEO_MAX = 200 * 1024 * 1024
 VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".wmv", ".flv", ".3gp")
 
 # "Bài SEO" = nguyên văn seo.md (modal đang hiện markdown thì copy thứ đó);
-# "Bài SEO (render)" = bản chữ sạch qua formats.to_plain — đúng thứ lưới hiện ra khi đang render.
-COPY_FIELDS = ("Caption", "Bài SEO", "Bài SEO (render)", "Input", "Link", "Bài SEO (Facebook)")
+# "Bài SEO (render)" = bản chữ sạch qua formats.to_plain KÈM html qua formats.to_html — đúng thứ lưới
+# hiện ra khi đang render, và dán vào Google Docs/WordPress/Word vẫn còn Heading + in đậm.
+COPY_FIELDS = ("Caption", "Bài SEO", "Bài SEO (render)", "Input", "Link")
 # Bảng MỘT SỐ của các ô prompt trong modal: thêm một B ở đây là JS hiện theo, không phải đi sửa tên
 # chuỗi rải rác hay đoán theo tiền tố "Prompt". P20 bỏ luôn khóa `open`: prompt giờ là MỘT THẺ đứng
 # ngang thẻ kết quả nên không còn chuyện gập/mở. `copy` còn đi theo payload (copyable) để clipboard
@@ -626,21 +627,25 @@ def _copy_payload(ctx: Ctx, sid: str, field_name: str, request_id: str):
     if step:
         return prompt_payload(ctx, sid, field_name, request_id)
     text = ""
+    html = ""
     if field_name == "Caption":
         text = stories.step_text(ctx.root, sid, "b1")
     elif field_name == "Bài SEO":
         text = stories.step_text(ctx.root, sid, "b3")
     elif field_name == "Bài SEO (render)":
-        text = formats.to_plain(stories.step_text(ctx.root, sid, "b3"))
-    elif field_name == "Bài SEO (Facebook)":
-        text = formats.to_fb_unicode(stories.step_text(ctx.root, sid, "b3"))
+        seo_md = stories.step_text(ctx.root, sid, "b3")
+        text = formats.to_plain(seo_md)
+        html = formats.to_html(seo_md)
     elif field_name == "Input":
         text = stories.input_text(ctx.root, sid)
     elif field_name == "Link":
         text = str(stories.load_story(ctx.root, sid).get("link") or "")
     if not text.strip():
         return None, f"{sid}: {field_name} trống — chưa có gì để copy."
-    return {"id": sid, "field": field_name, "request_id": request_id, "text": text}, ""
+    payload = {"id": sid, "field": field_name, "request_id": request_id, "text": text}
+    if html:
+        payload["html"] = html
+    return payload, ""
 
 
 def image_payload(ctx: Ctx, sid: str, request_id: str):

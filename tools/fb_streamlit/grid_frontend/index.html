@@ -253,6 +253,7 @@ const PROMPT_FIELD = {};     // tab -> tên trường xin Python (prompt không 
 const PROMPT_BY_FIELD = {};  // ngược lại: trường -> spec, để contentKey clipboard biết là prompt mà không so tên
 PROMPT_SPECS.forEach(s => { PROMPT_FIELD[s.step] = s.field; PROMPT_BY_FIELD[s.field] = s; });
 const CONTENT = new Map();  // "id|field|dấu_mốc_file" -> chữ, chỉ sống tới khi file đổi
+const RICH = new Map();     // "id|field|dấu_mốc_file" -> HTML để dán vào nơi nhận định dạng (chỉ B3 render có)
 const DRAFT = new Map();    // "id|B0 preview|dấu_mốc_file" -> chữ anh đang gõ tay, giữ qua mỗi lần grid vẽ lại
 const LINK_DRAFT = new Map();  // "id|link" -> chữ đang gõ ở ô Link (P18d). KHÔNG keyed theo dấu mốc:
                                // batch chạy làm updated_at đổi liên tục, nháp link đang gõ dở mà mất là lỗi.
@@ -379,12 +380,43 @@ function fallbackCopy(value) {
   document.body.removeChild(ta);
   return ok;
 }
-function copyToClipboard(value, done) {
+function copyToClipboard(value, done, html) {
+  // P21a: bản render của B3 phải dán ra Heading + in đậm ở Google Docs/WordPress/Word, nên clipboard
+  // nhận thêm text/html. write() với ClipboardItem bắt buộc gọi THẲNG trong lượt click (không await gì
+  // trước đó) -> dựng Blob rồi gửi luôn; trình duyệt từ chối thì rơi xuống đường chữ thường.
+  if (html && navigator.clipboard && window.ClipboardItem) {
+    try {
+      navigator.clipboard.write([new ClipboardItem({
+        "text/plain": new Blob([String(value)], { type: "text/plain" }),
+        "text/html": new Blob([String(html)], { type: "text/html" }),
+      })]).then(() => done(true), () => done(fallbackRich(value, html)));
+      return;
+    } catch (_) { /* xuống đường dưới */ }
+  }
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(value).then(() => done(true), () => done(fallbackCopy(value)));
     return;
   }
-  done(fallbackCopy(value));
+  done(html ? fallbackRich(value, html) : fallbackCopy(value));
+}
+// execCommand copy từ một khối contenteditable: đường này giữ được định dạng cả khi Clipboard API
+// bị chặn (iframe không secure context) — chỉ cần chữ vẫn dán được, hỏng định dạng còn hơn mất hết.
+function fallbackRich(value, html) {
+  const box = document.createElement("div");
+  box.contentEditable = "true";
+  box.style.position = "fixed"; box.style.left = "-9999px"; box.style.top = "0";
+  box.innerHTML = String(html);
+  document.body.appendChild(box);
+  const range = document.createRange();
+  range.selectNodeContents(box);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (_) {}
+  sel.removeAllRanges();
+  document.body.removeChild(box);
+  return ok || fallbackCopy(value);
 }
 function flash(b, label, cls) {
   if (!b) return;
@@ -516,7 +548,7 @@ function ingestResponse() {
   if (r.copyable === false) return;  // Python nói trường này không ra clipboard được thì thôi, JS không tự đoán theo tên
   const text = String(r.text || "");
   if (!text.trim()) { flashSel(wait ? wait.flash : "", wait && wait.short ? "✕" : "trống", "bad"); return; }
-  COPY_NOW = { text: text, flash: (wait && wait.flash) || "", short: !!(wait && wait.short) };
+  COPY_NOW = { text: text, html: String(r.html || ""), flash: (wait && wait.flash) || "", short: !!(wait && wait.short) };
 }
 
 // Lô modal: {items:[{field,...}]} — mỗi phần tử một trường đã đọc được, hoặc lý do không đọc được.
@@ -548,6 +580,7 @@ function fillField(field, key, payload) {
   const p = payload || {};
   if (p.image) IMAGES.set(key, String(p.image));  // response B0 mang cả chữ lẫn ảnh -> nạp đủ hai ô cache
   if (String(p.text || "").trim() || field === TAB_FIELD.b0) CONTENT.set(key, String(p.text || ""));  // B0 payload rỗng vẫn là "đã đọc file"
+  if (p.html) RICH.set(key, String(p.html));  // chữ đi kèm HTML thì nhớ cả HTML, kẻo lần copy sau rơi về chữ thường
   if (!p.image && !String(p.text || "").trim() && field !== TAB_FIELD.b0) {  // modal B0 tự có dòng hướng dẫn + ô gõ, không cần note chung
     NOTES.set(key, String(p.error || "") || (field === "Ảnh" ? "Bài này chưa có ảnh." : field + " trống — chưa có gì để hiện."));
   }
@@ -560,7 +593,7 @@ function finishCopy() {
   // Nhãn báo trên ICON chỉ được một ký tự, dài là méo đầu thẻ — chữ giải thích đã có ở title và thẻ "?".
   const yes = job.short ? "✓" : "✓ đã copy";
   const no = job.short ? "✕" : "không copy được";
-  copyToClipboard(job.text, ok => flashSel(job.flash, ok ? yes : no, ok ? "ok" : "bad"));
+  copyToClipboard(job.text, ok => flashSel(job.flash, ok ? yes : no, ok ? "ok" : "bad"), job.html);
 }
 
 // Bấm 1 lần = copy (không có gì để copy thì nói rõ), bấm 2 lần = mở modal xem kết quả.
@@ -573,8 +606,10 @@ function splitClick(single, double) {
 }
 function copyField(row, field, b, flashId, short) {
   const yes = short ? "✓" : "✓ đã copy", no = short ? "✕" : "không copy được";
-  const cached = CONTENT.get(contentKey(row, field));
-  if (cached != null) { copyToClipboard(String(cached), ok => flash(b, ok ? yes : no, ok ? "ok" : "bad")); return; }
+  const key = contentKey(row, field);
+  const cached = CONTENT.get(key);
+  // cache chỉ có chữ THƯỜNG nên copy lại từ cache cũng mất đậm — phải lấy kèm RICH của đúng key đó.
+  if (cached != null) { copyToClipboard(String(cached), ok => flash(b, ok ? yes : no, ok ? "ok" : "bad"), RICH.get(key)); return; }
   if (row.copyable && row.copyable[field] === false) { flash(b, short ? "✕" : "trống", "bad"); return; }
   requestContent(row, field, "copy", flashId, short);
   flash(b, "…", "");
@@ -859,14 +894,13 @@ function textCard(row, tab, key) {
   const actions = [];
   if (text != null && copyName) {
     actions.push(copyIcon(row, copyName, "modal:copy:" + tab, tab === "b3"
-      ? "Copy " + (SHOW_MD ? "bản đã render — chữ sạch, hết ## và **" : "nguyên văn markdown") + " đang hiện trong thẻ này"
+      ? "Copy " + (SHOW_MD ? "bản đã render KÈM định dạng (Heading, in đậm) — chữ sạch, hết ## và **"
+                             : "nguyên văn markdown") + " đang hiện trong thẻ này"
       : "Copy nguyên văn " + (STEP_TITLE[tab] || tab) + " đang hiện trong thẻ này"));
   }
-  if (tab === "b3") {
-    actions.push(copyIcon(row, "Bài SEO (Facebook)", "modal:fb",
-      "Copy bản in đậm unicode (không còn dấu ** và ##) — dán thẳng lên Facebook"));
-    actions.push(toggleMdIcon());
-  }
+  // P21a: bỏ nút "Copy bản dán Facebook" — đúng một việc với nút copy phía trên mà lại mất hết
+  // Heading/in đậm khi dán vào Docs/WordPress; muốn dán FB thì bật 🔤 markdown gốc lên FB web.
+  if (tab === "b3") actions.push(toggleMdIcon());
   return card({
     title: (STEP_TITLE[tab] || tab) + (cfg ? " · " + cfg.file : "")
       + (tab === "b3" ? " — " + (SHOW_MD ? "đang render" : "markdown gốc") : ""),
@@ -875,7 +909,7 @@ function textCard(row, tab, key) {
     warn: SQ_WARN.indexOf(state) >= 0 ? state : "",
     help: [(STEP_TITLE[tab] || tab) + " · " + (cfg ? cfg.file : "folder bài"),
       cfg ? "Sửa tay rồi bấm “" + cfg.label + "” — ghi thẳng vào " + cfg.file + " của " + row.id + "; " + cfg.over + "." : "",
-      "Bấm 1 lần ở ô " + tab.toUpperCase() + " ngoài lưới copy " + (tab === "b3" ? "bản đã render (chữ sạch)" : "đúng thứ đang hiện") + ".",
+      "Bấm 1 lần ở ô " + tab.toUpperCase() + " ngoài lưới copy " + (tab === "b3" ? "bản đã render (chữ sạch, KÈM Heading + in đậm)" : "đúng thứ đang hiện") + ".",
       flow ? "Luồng nền: " + flow : "",
       detail ? "Đang lỗi/thiếu: " + detail : "",
       String((row.hint || {})[tab] || "")].filter(Boolean),
@@ -1223,7 +1257,7 @@ function modalNode() {
   // P20: quy ước chung của cả modal nằm ở dấu "?" này thay cho cái footer 7 mệnh đề dưới đáy.
   head.appendChild(helpChip(["Cách dùng modal — " + tabLabel(ref.tab) + " của " + row.id,
     "Mỗi thẻ là MỘT thứ (chữ | ảnh | prompt | file | link); rê chuột vào dấu ? ở đầu thẻ để đọc hướng dẫn của riêng nó.",
-    "Bấm 1 lần ở ô B1/B3 ngoài lưới = copy (B3 copy BẢN ĐÃ RENDER, chữ sạch hết ## và **), bấm đúp = mở modal này.",
+    "Bấm 1 lần ở ô B1/B3 ngoài lưới = copy (B3 copy BẢN ĐÃ RENDER, chữ sạch hết ## và **, dán vào Docs/WordPress/Word còn Heading + in đậm), bấm đúp = mở modal này.",
     "← → hoặc hai nút đầu modal: sang bài trước/kế TRONG ĐÚNG danh sách đang hiện, giữ nguyên tab.",
     "Sửa chữ trong modal là ghi thẳng vào file trong folder bài — file vẫn là nguồn thật; xóa file ngoài ổ thì ô về cam “mất file”.",
     "Ô 🔗/🎬 ngay dưới đầu modal sửa link (Enter = lưu, 📋 = copy nguyên link, ↗ = mở).",

@@ -667,9 +667,9 @@ out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "B�
 check("copy_request giữ nguyên format AI trả về (còn ** và ##), mode copy",
       out.copy is not None and out.copy["mode"] == "copy" and "**đậm**" in out.copy["text"])
 out = ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Bài SEO (Facebook)", "request_id": "req-fb"})
-check("bản dán Facebook là unicode đậm, không còn ký hiệu markdown",
-      out.copy is not None and out.copy["text"] == formats.to_fb_unicode(stories.step_text(ga_root, sid_ok, "b3"))
-      and "**" not in out.copy["text"] and "##" not in out.copy["text"] and "━━━" in out.copy["text"])
+check("P21a bản unicode dán Facebook không còn là trường copy — xin là bị từ chối ngay ở Python",
+      out.copy is None and out.lines and "Bài SEO (Facebook)" in out.lines[0]
+      and "Bài SEO (Facebook)" not in ga.COPY_FIELDS)
 # --- P17b: bấm 1 lần ở ô B3 copy BẢN ĐÃ RENDER (chữ sạch), không phải nguyên văn seo.md ---
 _p17b_md = (ga.apply_event(gctx, {"source": "copy_request", "id": sid_ok, "field": "Bài SEO",
                                   "request_id": "req-b3-md"}).copy or {}).get("text") or ""
@@ -3736,6 +3736,48 @@ check("P20 vẽ lại vẫn giữ chỗ cuộn + con trỏ: modalBody giữ lớ
       and 'document.querySelectorAll(".scroll,.mbody")' in _js20
       and "DRAFT.has(key)" in _f20("textEditor"))
 # --- hết P20 ---
+
+# --- P21a: copy bản render của B3 ra clipboard KÈM định dạng + bỏ nút copy "dán Facebook" ---
+
+_p21a_box = Path(tempfile.mkdtemp(prefix="fbp21a_"))
+_p21a_root = stories.validate_root(_p21a_box / "ws")
+_p21a_ctx = ga.build_ctx(db.connect(), _p21a_root)
+_p21a_sid = stories.create_story(_p21a_root, "P21a bài copy định dạng", input_text="nội dung p21a")["id"]
+stories.save_step_text(_p21a_root, _p21a_sid, "b3", "## Tiêu đề **đậm**\n\nĐoạn có **chữ đậm** và *nghiêng*.")
+_p21a_md = stories.step_text(_p21a_root, _p21a_sid, "b3")
+_p21a_html = formats.to_html(_p21a_md)
+check("P21a formats.to_html biến dấu markdown thành thẻ thật — dán vào nơi nhận rich text còn Heading + in đậm",
+      "<h2>" in _p21a_html and "<strong>đậm</strong>" in _p21a_html and "**" not in _p21a_html)
+check("P21a to_html escape chữ nên nội dung AI sinh không nhét được thẻ/script vào bản copy",
+      formats.to_html('<img src=x onerror="alert(1)"> [a](javascript:alert(1))') ==
+      '<p>&lt;img src=x onerror=&quot;alert(1)&quot;&gt; [a](javascript:alert(1))</p>')
+check("P21a list có mở là có đóng — thẻ cụt làm Google Docs/Word dán ra cả bài thành một đống chữ",
+      formats.to_html("- a\n- b\n\n## T\n") == "<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n<h2>T</h2>")
+_p21a_out = ga.apply_event(_p21a_ctx, {"source": "copy_request", "id": _p21a_sid, "field": "Bài SEO (render)",
+                                  "request_id": "req-p21a-render"})
+check("P21a bản render trả HAI thứ: text = chữ sạch (nơi không nhận định dạng) + html = đúng formats.to_html(seo.md)",
+      _p21a_out.copy is not None and _p21a_out.copy["text"] == formats.to_plain(_p21a_md)
+      and _p21a_out.copy["html"] == _p21a_html)
+check("P21a markdown gốc KHÔNG kèm html — clipboard chỉ nhận định dạng ở đúng bản render của B3",
+      "html" not in (ga.apply_event(_p21a_ctx, {"source": "copy_request", "id": _p21a_sid, "field": "Bài SEO",
+                                                 "request_id": "req-p21a-md"}).copy or {}))
+_p21a_js = _js20
+check("P21a lưới viết cả text/plain lẫn text/html vào clipboard, gọi write() THẲNG trong lượt click",
+      'navigator.clipboard.write([new ClipboardItem({' in _f20("copyToClipboard")
+      and '"text/html": new Blob(' in _f20("copyToClipboard")
+      and "fallbackRich(value, html)" in _f20("copyToClipboard"))
+check("P21a không có ClipboardItem/vị bị từ chối thì vẫn dán được chữ thường — mất đậm còn hơn mất hết",
+      "function fallbackRich(value, html)" in _p21a_js and "return ok || fallbackCopy(value);" in _f20("fallbackRich"))
+check("P21a copy lần hai từ cache KHÔNG rơi về chữ thường: HTML cache theo đúng key của chữ",
+      "RICH.set(key, String(p.html))" in _f20("fillField") and "RICH.get(key)" in _f20("copyField")
+      and 'job.html' in _f20("finishCopy"))
+check("P21a modal B3 chỉ còn MỘT nút copy + nút 🔤 — hết hai nút một việc, hết bản unicode mất Heading",
+      "Bài SEO (Facebook)" not in _f20("textCard") and 'actions.push(toggleMdIcon());' in _f20("textCard"))
+check("P21a chữ hướng dẫn nói đúng thứ anh nhận được (kèm Heading + in đậm), không còn hứa 'chữ sạch' một chiều",
+      "KÈM định dạng (Heading, in đậm)" in _f20("textCard")
+      and "dán vào Docs/WordPress/Word còn Heading + in đậm" in _p21a_js)
+shutil.rmtree(_p21a_box, ignore_errors=True)
+# --- hết P21a ---
 
 # cleanup test rows
 c = db.connect()

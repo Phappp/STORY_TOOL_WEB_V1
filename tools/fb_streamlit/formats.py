@@ -1,4 +1,4 @@
-"""Chuyển bài markdown (AI trả về) sang 3 bản: markdown gốc, Unicode đậm cho Facebook, text thường.
+"""Chuyển bài markdown (AI trả về) sang các bản: markdown gốc, Unicode đậm cho Facebook, text thường, HTML.
 
 Bản Facebook chỉ đậm được chữ Latin/digit (bảng Mathematical Alphanumeric của Unicode);
 chữ Việt có dấu không có ô đậm tương ứng nên đề mục dùng IN HOA + vạch phân cách.
@@ -103,3 +103,78 @@ def render(markdown: str, mode: str) -> str:
     if mode.startswith("Text"):
         return to_plain(markdown)
     return (markdown or "").strip()
+
+
+_HTML_ESC = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}
+# ONE pass trên chữ ĐÃ escape: không được để `<strong>` vừa chèn bị bước sau ăn lại, và link chỉ nhận
+# http/https nên không có đường nào để javascript: chui vào href.
+_INLINE_HTML = re.compile(
+    r"`([^`]+)`|\*\*(.+?)\*\*|__(.+?)__|\*([^*\n]+)\*|\[([^\]]+)\]\((https?://[^\s)]+)\)|!\[([^\]]*)\]\([^)]*\)")
+
+
+def _inline_html(text: str) -> str:
+    def sub(m: re.Match) -> str:
+        if m.group(1) is not None:
+            return f"<code>{m.group(1)}</code>"
+        if m.group(2) is not None:
+            return f"<strong>{m.group(2)}</strong>"
+        if m.group(3) is not None:
+            return f"<strong>{m.group(3)}</strong>"
+        if m.group(4) is not None:
+            return f"<em>{m.group(4)}</em>"
+        if m.group(5) is not None:
+            return f'<a href="{m.group(6)}">{m.group(5)}</a>'
+        return m.group(7) or ""
+
+    escaped = "".join(_HTML_ESC.get(ch, ch) for ch in text)
+    return _INLINE_HTML.sub(sub, escaped)
+
+
+def to_html(markdown: str) -> str:
+    """Markdown -> HTML để dán vào nơi nhận rich text (Google Docs, WordPress, Word).
+
+    Chỉ là một mảng thẻ, không có <html>/<head> — clipboard `text/html` chấp nhận fragment, và
+    chỗ dán không bị kéo theo style của công cụ.
+    """
+    out: list[str] = []
+    list_tag = ""
+
+    def close_list() -> None:
+        nonlocal list_tag
+        if list_tag:
+            out.append(f"</{list_tag}>")
+            list_tag = ""
+
+    for line in (markdown or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            close_list()
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        bullet = re.match(r"^[-*•+]\s+(.*)$", stripped)
+        numbered = re.match(r"^\d+[.)]\s+(.*)$", stripped)
+        quote = re.match(r"^>\s*(.*)$", stripped)
+        if heading:
+            close_list()
+            level = len(heading.group(1))
+            out.append(f"<h{level}>{_inline_html(heading.group(2))}</h{level}>")
+        elif bullet:
+            if list_tag != "ul":
+                close_list()
+                list_tag = "ul"
+                out.append("<ul>")
+            out.append(f"<li>{_inline_html(bullet.group(1))}</li>")
+        elif numbered:
+            if list_tag != "ol":
+                close_list()
+                list_tag = "ol"
+                out.append("<ol>")
+            out.append(f"<li>{_inline_html(numbered.group(1))}</li>")
+        elif quote:
+            close_list()
+            out.append(f"<blockquote>{_inline_html(quote.group(1))}</blockquote>")
+        else:
+            close_list()
+            out.append(f"<p>{_inline_html(stripped)}</p>")
+    close_list()
+    return "\n".join(out)
