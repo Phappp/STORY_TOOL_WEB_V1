@@ -1338,11 +1338,11 @@ check("P15b state ô B4 lấy từ row.b4 (state riêng như B0), bấm một l�
 check("P15b sig pill + sig modal tính cả b4/b4meta/video/video_max — vá ô là thẻ hover đổi theo",
       "row.b0, row.b4, row.states, row.detail, row.b0meta, row.b4meta" in js_b4
       and "row.b0meta, row.b4, row.b4meta," in js_b4
-      and "String(MODEL.video_max || 0)]);" in js_b4
+      and "String(MODEL.video_max || 0), vidSig()," in js_b4  # P21c: sig tính cả lượt tải video đang chạy
       and "video_max: Number(args.video_max || 0)," in js_b4 and "video_max: MODEL.video_max," in js_b4)
-check("P15b modal B4 nói thẳng đường tải: lưới chỉ gửi id, bytes đi qua widget native (không qua iframe)",
+check("P15b nút 🎬 trong modal B4 chỉ GỬI ID (bytes không đi qua nó) — P21c đổi nhãn thành đúng việc còn lại: mở mục native",
       'send({ source: "b4_pick", id: row.id })' in js_b4
-      and "🎬 Chọn bài này để tải video" in js_b4 and 'if (ref.tab === "b4") {' in js_b4
+      and "Mục native" in js_b4 and 'if (ref.tab === "b4") {' in js_b4
       and 'if (tab === "b4") return [videoCard(row)];' in js_b4  # P20: B4 = một thẻ mô tả file, không xin nội dung
       and "tabField(tab) === \"b4\"" not in js_b4  # không có nội dung nào xin từ Python cho B4
       and '"b4"' not in str(fbgrid.READ_SOURCES))  # event sửa session_state -> vẽ lại cả trang, không phải tick rẻ
@@ -4110,6 +4110,142 @@ check("P22d dán rỗng/quá trần thì bỏ IO_FILE để nút ➕ Tạo KHÔN
       _p22_paste_slice.count("IO_FILE = null") == 2 and "vượt trần " in _p22_paste_slice)
 shutil.rmtree(_p22_box, ignore_errors=True)
 # --- hết P22a ---
+
+# --- P21c: tải video B4 NGAY TRONG modal — file cắt mẩu, ghồng trong RAM, chỉ ghi khi đủ bytes ---
+_p21_box = Path(tempfile.mkdtemp(prefix="fbp21c_"))
+vid_root = stories.validate_root(_p21_box / "ws_vid")
+s_vid = stories.create_story(vid_root, "Video tải trong modal")["id"]
+vid_ctx = ga.build_ctx(db.connect(), vid_root)
+vid_up = "v-test-1"
+vid_parts = [b"AAA", b"BBB", b"CCC-fin"]
+vid_total = sum(len(p) for p in vid_parts)
+
+
+def _vid(seq, chunk, total, up=vid_up, sid=s_vid, name="quay tay.mp4"):
+    """Một event y như lưới gửi: mẩu nguyên văn đem base64, total là kích thước file KHAI BÁO từ đầu."""
+    return {"source": "video_chunk", "up": up, "id": sid, "seq": seq, "total": total, "name": name,
+            "data": base64.b64encode(chunk).decode("ascii")}
+
+
+_vid_buf, _vid_pays = None, []
+for _i, _p in enumerate(vid_parts[:2]):
+    _vid_buf, _pay = ga.video_chunk(vid_ctx, _vid_buf, _vid(_i, _p, vid_total))
+    _vid_pays.append(_pay)
+check("P21c hai mẩu đầu CHỈ ghồng RAM: server báo đã nhận bao nhiêu byte + mẩu nào là mẩu kế, folder bài còn nguyên",
+      _vid_pays[0]["done"] is False and _vid_pays[0].get("seq") == 1 and _vid_pays[0].get("got") == 3
+      and _vid_pays[1].get("seq") == 2 and _vid_pays[1].get("got") == 6
+      and _vid_buf["parts"] == vid_parts[:2] and not list((vid_root / s_vid).glob("video.*")))
+_vid_buf, _pay = ga.video_chunk(vid_ctx, _vid_buf, _vid(2, vid_parts[2], vid_total))
+_vid_pays.append(_pay)
+check("P21c mẩu cuối đủ bytes -> ghép lại ghi video.<đuôi>, line trả về đúng chữ của ô B4 và buffer được dọn",
+      _vid_pays[2]["done"] is True and not _vid_pays[2].get("error") and _vid_buf is None
+      and str(_vid_pays[2].get("line", "")).startswith(s_vid + ": đã lưu")
+      and (vid_root / s_vid / "video.mp4").read_bytes() == b"".join(vid_parts))
+row_vid = next(r for r in fbgrid.rows_for(vid_ctx) if r["id"] == s_vid)
+check("P21c tải xong thì ô B4 xanh như đường native — cùng một hàm ghi nên không có trạng thái riêng cho modal",
+      row_vid["b4"] == stories.DONE and row_vid["video"] == "video.mp4"
+      and stories.load_story(vid_root, s_vid)["b4"]["method"] == ga.MANUAL_METHOD)
+# buffer đang dở một mẩu, y như phiên thật giữ giữa hai event
+_mid = {"up": vid_up, "sid": s_vid, "name": "quay tay.mp4", "suffix": ".mp4",
+        "total": vid_total, "got": 3, "parts": [b"AAA"], "at": time.time()}
+check("P21c mẩu đến SAI LƯỢT (kể cả seq 0 của lượt cũ) thì bỏ cả buffer chứ không ghép tiếp — ghép nhầm là file lai hai bài",
+      "không đúng lượt" in str(ga.video_chunk(vid_ctx, _mid, _vid(5, b"XX", vid_total))[1].get("error"))
+      and "không đúng lượt" in str(ga.video_chunk(vid_ctx, _mid, _vid(0, b"AAA", vid_total))[1].get("error"))
+      and not (vid_root / s_vid / "video.mp4").read_bytes().endswith(b"XXXX"))
+_old_buf = {"up": "luot-cu", "sid": s_vid, "name": "quay tay.mp4", "suffix": ".mp4",
+            "total": vid_total, "got": 3, "parts": [b"AAA"], "at": time.time()}
+check("P21c mẩu của LƯỢT KHÁC hoặc của lượt đã hết hạn bị đá ngay từ seq>0 — không bao giờ nối vào buffer cũ",
+      "không còn trên server" in str(ga.video_chunk(vid_ctx, _old_buf, _vid(1, b"BBB", vid_total))[1].get("error"))
+      and "không còn trên server" in str(ga.video_chunk(vid_ctx, {**_old_buf, "up": vid_up,
+            "at": time.time() - ga.VIDEO_UPLOAD_SECONDS - 1}, _vid(1, b"BBB", vid_total))[1].get("error")))
+check("P21c seq>0 mà server KHÔNG còn buffer (tab vừa tải lại giữa chừng) -> bảo rõ phải tải lại từ đầu",
+      "Tải lại từ đầu" in str(ga.video_chunk(vid_ctx, None, _vid(3, b"BBB", vid_total))[1].get("error")))
+check("P21c file không phải video / rỗng / không có mã lượt / ID KHÔNG PHẢI folder bài -> dừng ngay ở mẩu 1, chưa ghi gì",
+      "không phải video" in str(ga.video_chunk(vid_ctx, None, _vid(0, b"AB", 2, name="danh_sach.txt"))[1].get("error"))
+      and "File rỗng" in str(ga.video_chunk(vid_ctx, None, _vid(0, b"", 0))[1].get("error"))
+      and "mã lượt tải" in str(ga.video_chunk(vid_ctx, None, _vid(0, b"AB", 2, up=""))[1].get("error"))
+      and "không hợp lệ" in str(ga.video_chunk(vid_ctx, None, _vid(0, b"AB", 2, sid="../evil"))[1].get("error"))
+      and (vid_root / s_vid / "video.mp4").read_bytes() == b"".join(vid_parts)
+      and not (vid_root.parent / "evil").exists())
+_ceiling21 = ga.B4_MODAL_MAX
+ga.B4_MODAL_MAX = 8 * 1024 * 1024  # hạ trần tạm để test đường từ chối khỏi phải gửi 33 MB
+_over21 = ga.video_chunk(vid_ctx, None, _vid(0, b"AB", 50 * 1048576))[1]
+ga.B4_MODAL_MAX = _ceiling21
+check("P21c vượt trần modal thì từ chối ngay MẨU ĐẦU (không cho tải dở rồi mới báo) và chỉ đường mục native",
+      _over21["done"] is True and "vượt trần 8 MB" in str(_over21.get("error"))
+      and "🎬 B4 · Video" in str(_over21.get("error")) and "200 MB" in str(_over21.get("error"))
+      and (vid_root / s_vid / "video.mp4").read_bytes() == b"".join(vid_parts))
+_check21 = ga.video_chunk(vid_ctx, None, _vid(0, b"ABCDEFGH", 4))[1]
+check("P21c tổng byte nhận được LỚN HƠN file khai báo là lượt hỏng — dừng lại chứ không ghi file dư",
+      "nhiều hơn kích thước file khai báo" in str(_check21.get("error")) and _check21["done"] is True)
+_buf21, _pay21 = ga.video_chunk(vid_ctx, None, _vid(0, b"AAA", vid_total))
+_buf21, _pay21 = ga.video_abort(_buf21, {"source": "video_abort", "up": vid_up, "id": s_vid})
+check("P21c ⛔ Hủy giữa chừng: buffer bốc hơi, payload nói đã hủy, folder bài chưa từng bị đụng",
+      _buf21 is None and _pay21["cancelled"] is True and _pay21["done"] is True and _pay21["got"] == 0
+      and (vid_root / s_vid / "video.mp4").read_bytes() == b"".join(vid_parts))
+check("P21c số đo của đường này nằm ở grid_actions một chỗ: mẩu 1 MB vừa trần đã đo (P22d: 4 MB base64 đơ tab), "
+      "trần modal 32 MB < trần native 200 MB, RAM hết hạn sau 3 phút",
+      ga.B4_CHUNK_BYTES == 1024 * 1024 and ga.B4_MODAL_MAX == 32 * 1024 * 1024
+      and ga.B4_MODAL_MAX < ga.B4_VIDEO_MAX and ga.VIDEO_UPLOAD_SECONDS == 180)
+check("P21c lưới đi MỘT đường event cho chunk+abort, xử lý ở _video chứ không qua dispatcher, và không quét folder mỗi mẩu",
+      {"video_chunk", "video_abort"} <= fbgrid.VIDEO_SOURCES
+      and {"video_chunk", "video_abort"} <= fbgrid.READ_SOURCES
+      and 'src in VIDEO_SOURCES' in inspect.getsource(fbgrid._after)
+      and "ga.video_chunk(ctx, st.session_state.get(VIDEO_UP_KEY)" in inspect.getsource(fbgrid._video)
+      and "ga.video_abort(st.session_state.get(VIDEO_UP_KEY)" in inspect.getsource(fbgrid._video))
+check("P21c folder chỉ được đọc lại khi mẩu CUỐI ghi xong: payload có line mà không có error, và đó là cửa FORCE-SCAN",
+      "payload.get(\"done\") and payload.get(\"line\") and not payload.get(\"error\")" in inspect.getsource(fbgrid._video)
+      and "VIDEO_SCAN_KEY" in inspect.getsource(fbgrid.scan_needed)
+      and "st.session_state.pop(VIDEO_SCAN_KEY" in inspect.getsource(fbgrid.scan_needed))
+check("P21c tiến độ đi về BẰNG RESPONSE NHƯ MỌI thứ khác (pop 1 lần) — để nguyên thì 1 MB base64 gửi lại mọi tick",
+      'video_response=vid_resp' in inspect.getsource(fbgrid.render_component)
+      and 'st.session_state.pop("grid_video_response"' in inspect.getsource(fbgrid.render_component)
+      and 'st.session_state["grid_video_response"] = out.video' in inspect.getsource(fbgrid._collect)
+      and "video_modal_max=ga.B4_MODAL_MAX, video_chunk=ga.B4_CHUNK_BYTES" in inspect.getsource(fbgrid.render_component))
+_vid_render = _p22_fe.split("function sendVideoChunk")[1].split("function ingestVideo")[0]
+check("P21c send() mẩu kế NẾP TRONG callback FileReader — send đồng bộ ngay trong render là cái Streamlit bỏ",
+      "b64Blob(blob, data =>" in _vid_render and _vid_render.index("b64Blob(blob") < _vid_render.index('send({ source: "video_chunk"')
+      and "readAsDataURL" in _p22_fe.split("function b64Blob")[1].split("function vidStop")[0]
+      and "b64Utf8" not in _vid_render and _p22_fe.count('source: "video_chunk"') == 1
+      and _p22_fe.count('source: "video_abort"') == 1)
+check("P21c chuỗi chunk cắt theo SEQ MÀ SERVER BÁO, không đếm theo DOM — off-by-one là ghép hai lần cùng một đoạn byte",
+      "const from = v.seq * v.chunk;" in _vid_render and "VID_FILE.slice(from, Math.min(from + v.chunk, v.total))" in _vid_render
+      and "VID.seq = Number(r.seq || 0);" in _p22_fe.split("function ingestVideo")[1].split("function vidPrecheck")[0])
+check("P21c có ĐỒNG HỒ chờ xác nhận (20s) cho mỗi mẩu — IO_BUSY không timeout là cái giá anh đã trả ở P22d",
+      "const VID_WAIT_MS = 20000;" in _p22_fe and "VID_TIMER = setTimeout(() => vidStop(" in _vid_render
+      and "clearTimeout(VID_TIMER)" in _p22_fe.split("function vidStop")[1].split("function sendVideoChunk")[0]
+      and "clearTimeout(VID_TIMER)" in _p22_fe.split("function ingestVideo")[1].split("function vidPrecheck")[0])
+check("P21c response đã nạp thì repaint KHÔNG được nạp lại lần hai (io_response:{} đã là bài học) — nếu không một ack gửi hai mẩu",
+      "video_response: {}" in _p22_fe.split("function repaint")[1].split("function linkEditor")[0]
+      and "video_modal_max: MODEL.video_modal_max, video_chunk: MODEL.video_chunk" in _p22_fe.split("function repaint")[1].split("function linkEditor")[0])
+check("P21c mọi thứ của lượt tải sống ở MODULE (VID/VID_FILE/VID_PICK/VID_MSG) + sig modal tính vidSig — tick 2s dựng lại thẻ không được xóa tiến độ",
+      all(f"let {n} = " in _p22_fe for n in ("VID", "VID_FILE", "VID_PICK", "VID_MSG", "VID_TIMER"))
+      and "vidSig(), String(MODEL.video_modal_max || 0)]);" in _p22_fe
+      and "ingestVideo();" in _p22_fe.split("function render(args, force)")[1].split("const alive")[0]
+      and "vidBox(row)" in _p22_fe.split("function videoCard")[1].split("function linkCard")[0])
+check("P21c vidSig tính cả VID_PICK + VID_MSG — đo live: chọn file 40 MB sau một lượt đã xong mà sig không đổi thì lời 'vượt trần' không bao giờ hiện",
+      'const extra = (VID_PICK ? "pick:"' in _p22_fe.split("function vidSig")[1].split("function videoCard")[0]
+      and '"msg:" + VID_MSG.id + ":" + VID_MSG.text.length' in _p22_fe.split("function vidSig")[1].split("function videoCard")[0])
+check("P21c chữ trong ô B4 nói ĐÚNG lúc nào folder bị ghi và trần nào đi đường nào — đang tải mà tưởng đã xong là đăng thiếu video",
+      "folder bài CHƯA bị đụng tới cho tới mẩu cuối" in _p22_fe
+      and "vượt trần" in _p22_fe.split("function vidPrecheck")[1].split("function startVideo")[0]
+      and "B4 · Video" in _p22_fe.split("function vidPrecheck")[1].split("function startVideo")[0]
+      and "🚀 Tải lên" in _p22_fe and "🔁 Tải lại từ đầu" in _p22_fe and "⛔ Hủy" in _p22_fe)
+check("P21c thẻ B4 vẫn KHÔNG xin nội dung từ Python khi vẽ (P18a) — mọi send chỉ tới từ người bấm",
+      "send(" not in _p22_fe.split("function videoCard")[1].split("function linkCard")[0]
+      and "send(" not in _p22_fe.split("function vidBox")[1].split("function vidSig")[0]
+      and "send(" not in _p22_fe.split("function b64Blob")[1].split("function vidStop")[0])
+check("P21c lượt ĐÃ DỪNG (xong hoặc lỗi) phải nhường chỗ khi chọn file khác — đo live: bảng ✅ cũ che mất nút 🚀 của lần tải thứ hai",
+      "if (!bad && VID && VID.seq < 0) VID = null;" in _p22_fe.split("function vidBox")[1].split("function vidSig")[0])
+check("P21c chữ 'Đã hủy' là sự thật, không bị ack của mẩu đang đi tới đè thành 'không còn trên server' — đo live: bấm Hủy lúc mẩu 3, thẻ báo lỗi nhảm",
+      "if (v) v.cancelled = true;" in _p22_fe.split("function abortVideo")[1].split("function vidStatus")[0]
+      and "if (VID.cancelled) return;" in _p22_fe.split("function ingestVideo")[1].split("function vidPrecheck")[0]
+      and "VID.cancelled = false;" in _p22_fe.split("function restartVideo")[1].split("function abortVideo")[0])
+check("P21c ack của LƯỢT CŨ (up khác) bị bỏ hẳn, chỉ dựng lại ô từ error khi VID đã mất vì trang vẽ lại — kẻo mẩu trễ giết lượt vừa Tải lại",
+      "if (!VID && r.error) {" in _p22_fe.split("function ingestVideo")[1].split("function vidPrecheck")[0]
+      and "if (r.error) VID = " not in _p22_fe.split("function ingestVideo")[1].split("function vidPrecheck")[0])
+shutil.rmtree(_p21_box, ignore_errors=True)
+# --- hết P21c ---
 
 # cleanup test rows
 c = db.connect()

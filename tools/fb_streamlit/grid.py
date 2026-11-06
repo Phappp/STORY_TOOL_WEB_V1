@@ -33,8 +33,15 @@ APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt m�
 READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request", "modal_request",
                 # bảng Import/Export: đọc file anh chọn rồi trả lời, export chỉ dựng chuỗi trong RAM —
                 # không folder story nào đổi nên nhịp tick sau khỏi quét lại 150 bài
-                "import_read", "export_request"}
+                "import_read", "export_request",
+                # P21c: MỖI MẨU video là một event, mà một mẩu chỉ nằm trong RAM — đọc lại 150 folder
+                # sau từng mẩu (656–932 ms/lần, đo P8iii) còn chậm hơn chính cú tải. Lượt cuối tự xin
+                # quét lại qua `grid_video_scan`.
+                "video_chunk", "video_abort"}
 IO_SOURCES = {"import_read", "import_commit", "b0_retry", "export_request"}  # mọi việc của modal Import/Export
+VIDEO_SOURCES = {"video_chunk", "video_abort"}  # tải video trong modal B4 — buffer nằm ở session
+VIDEO_UP_KEY = "grid_video_up"  # các mẩu đang ghồng trong RAM của phiên này
+VIDEO_SCAN_KEY = "grid_video_scan"  # mẩu cuối đã ghi xong -> lượt vẽ kế phải đọc lại folder
 BUSY_STATES = {stories.RUNNING, ga.STALE}  # folder nói bước này đang có lượt gọi AI (chạy dở hoặc treo)
 PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
 PRESET_KEY = "ws_preset"  # cùng key cho Grid và trang Tạo bài: một widget, một ý nghĩa, một sự thật
@@ -372,6 +379,8 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     src = str(event.get("source") or "")
     if src in IO_SOURCES:  # Import/Export có file đi kèm trong event -> xử lý ở _io, không qua dispatcher
         return _io(ctx, event)
+    if src in VIDEO_SOURCES:  # P21c: mẩu video cũng mang bytes, buffer ở session chứ không ở dispatcher
+        return _video(ctx, event)
     if src in gr.HEAVY_SOURCES:  # việc dài -> thread nền, grid còn vẽ được
         return hand_off(ctx, event)
     victims = _cancel_targets(event)
@@ -421,6 +430,8 @@ def _collect(out: ga.Outcome, event: dict) -> None:
     if out.io is not None:
         # payload của bảng Import/Export: chữ + số, không có ảnh base64 nên gửi một lần là đủ
         st.session_state["grid_io_response"] = out.io
+    if out.video is not None:  # P21c: tiến độ tải video — vài chục byte, cũng đi đúng một lần
+        st.session_state["grid_video_response"] = out.video
     if str(event.get("source") or "") in ("copy_request", "content_request", "image_request", "b0_request",
                                           "modal_request"):
         # render_component giao response đúng 1 lần rồi xóa; JS latch theo request_id nên không xử lý trùng
@@ -491,6 +502,36 @@ def _io(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     return out
 
 
+def _video(ctx: ga.Ctx, event: dict) -> ga.Outcome:
+    """Tải video NGAY TRONG modal B4 (P21c): một mẩu một event, ghồng ở session, ghi khi đủ bytes.
+
+    Session state chứ không phải grid_actions giữ buffer, vì dispatcher cố ý không biết gì về
+    phiên vẽ; `ga.video_chunk` chỉ là hàm thuần (buffer vào, buffer ra) nên test được ngoài app.
+    """
+    out = ga.Outcome()
+    try:
+        if str(event.get("source") or "") == "video_abort":
+            buf, payload = ga.video_abort(st.session_state.get(VIDEO_UP_KEY), event)
+        else:
+            buf, payload = ga.video_chunk(ctx, st.session_state.get(VIDEO_UP_KEY), event)
+    except (ValueError, stories.WorkspaceError, OSError) as exc:
+        buf, payload = None, {"kind": "video", "done": True, "up": str(event.get("up") or ""),
+                              "error": f"Chưa làm được ({type(exc).__name__}): {exc}"}
+    if buf is None:
+        st.session_state.pop(VIDEO_UP_KEY, None)
+    else:
+        st.session_state[VIDEO_UP_KEY] = buf
+    if payload.get("done") and payload.get("line") and not payload.get("error"):
+        # chỉ khi file THẬT SỰ ghi xong mới đọc lại folder: lỗi/hủy thì folder còn nguyên,
+        # mà một lượt quét 150 folder mất 656–932 ms — `video_chunk` là READ_SOURCE nên không tự quét.
+        st.session_state[VIDEO_SCAN_KEY] = True
+    out.video = payload
+    why = str(payload.get("line") or payload.get("error") or "")
+    out.lines = [why] if why else []
+    _collect(out, event)
+    return out
+
+
 def consume_event(ctx: ga.Ctx) -> tuple:
     """Event component gửi về -> chạy đúng 1 lần (latch theo event_id) rồi trả (outcome, event).
 
@@ -537,9 +578,14 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
         # nếu không ảnh base64 vài MB bị gửi lại mọi tick và modal tự xin lại khi cần.
         resp = st.session_state.pop("grid_copy_response", None) or {}
         io_resp = st.session_state.pop("grid_io_response", None) or {}
+        vid_resp = st.session_state.pop("grid_video_response", None) or {}
         component()(rows=rows, workspace=str(ctx.root),
                     image_max=ga.B2_IMAGE_MAX,
                     video_max=ga.B4_VIDEO_MAX,
+                    # P21c: ô tải trong modal cần tự nói trần của NÓ (khác trần mục native) và
+                    # cỡ một mẩu để JS cắt file đúng nhịp server chờ.
+                    video_modal_max=ga.B4_MODAL_MAX, video_chunk=ga.B4_CHUNK_BYTES,
+                    video_types=VIDEO_TYPES,
                     summary=ga.count_buckets(all_rows),
                     queue_ids=ga.queue_ids(all_rows),
                     error_ids=ga.error_ids(all_rows),
@@ -553,6 +599,7 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                         # thêm lần nữa mỗi tick); bấm rồi modal nhận số thật từ folder trong response.
                         "b0_todo": len(ga.b0_open_ids(all_rows))},
                     io_response=io_resp,
+                    video_response=vid_resp,
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
         st.session_state["grid_component_error"] = f"{type(exc).__name__}: {exc}"
@@ -685,6 +732,8 @@ def scan_needed(snap: dict, event, payload, was_busy: bool) -> bool:
     """
     if payload is None:
         return True
+    if st.session_state.pop(VIDEO_SCAN_KEY, False):
+        return True  # mẩu video cuối vừa ghi xong: `video_chunk` là READ_SOURCE nên phải có cửa này
     if snap["busy"] or snap.get("paused"):
         return True  # có việc nền: queue/flow phải hiện gần lúc bài xong, không chờ tới nhịp 5s
     if event is not None and str(event.get("source") or "") not in READ_SOURCES:
@@ -767,8 +816,9 @@ def video_form(ctx: ga.Ctx) -> None:
         # bài 150 folder phải đọc 150 file story.json chỉ để ra nhãn.
         sid = st.selectbox("Bài sẽ nhận video", ids, key=B4_KEY,
                            help="Đúng một bài mỗi lần tải — id này là tên folder trong workspace. "
-                                "Bấm ô B4 của bài trong lưới (tab B4 video ▸ 🎬 Chọn bài này để tải video) "
-                                "thì bài đó tự nhảy vào đây, khỏi tìm.")
+                                "Video tới " + str(ga.B4_MODAL_MAX // 1048576) + " MB thì tải ngay trong modal "
+                                "của bài (tab B4 video) khỏi tìm ở đây; còn bấm ô B4 trong lưới "
+                                "(nút “📂 Mục native”) thì bài đó tự nhảy vào đây.")
         story = stories.load_story(ctx.root, sid)
         folder = ga._folder(story, ctx.root, sid)
         state = stories.video_state(story, folder)

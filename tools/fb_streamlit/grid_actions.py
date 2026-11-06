@@ -41,9 +41,15 @@ B0_PREVIEW_FIELD = "B0 preview"
 MANUAL_METHOD = "thủ công"  # method ghi vào block khi anh sửa chữ tay trong modal — B0 phân biệt với og-tags/yt-dlp, B1/B3 phân biệt với chữ AI
 B0_UPLOAD_MAX = 4 * 1024 * 1024  # ảnh tay gửi base64 qua event, để message từ component không phình vô hạn
 REF_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
-# B4 video: KHÔNG đi base64 qua iframe (một file 200 MB thành chuỗi ~270 MB trong delta). Bytes
-# vào bằng widget native st.file_uploader của Grid, event chỉ chọn bài nhận file.
+# B4 video: mục native phía trên lưới vẫn nhận tới 200 MB vì st.file_uploader đưa bytes thẳng
+# vào server. Ô tải TRONG modal (P21c) thì khác — bytes đi qua message component, mà một message
+# vài chục MB là đóng băng tab (đo P22d: 4 MB base64 là trình duyệt ngừng phản hồi). Nên modal
+# cắt file thành từng mẩu, mỗi mẩu một event, và chỉ nhận tới B4_MODAL_MAX; lớn hơn thì giới
+# thiệu sang mục native.
 B4_VIDEO_MAX = 200 * 1024 * 1024
+B4_CHUNK_BYTES = 1024 * 1024  # kích thước một mẩu NGUYÊN VĂN (base64 trong event dài hơn ~1.37 lần)
+B4_MODAL_MAX = 32 * 1024 * 1024  # trần của ô tải trong modal — đủ cho clip đăng Facebook, không phải chờ vô hạn
+VIDEO_UPLOAD_SECONDS = 180  # không có mẩu nào sau 3 phút = bỏ buffer, kẻo RAM giữ dở cả phiên
 VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".wmv", ".flv", ".3gp")
 
 # "Bài SEO" = nguyên văn seo.md (modal đang hiện markdown thì copy thứ đó);
@@ -98,6 +104,7 @@ class Outcome:
     nav: str = ""
     copy: dict | None = None
     io: dict | None = None  # payload cho bảng Import/Export trong lưới (preview/commit/export) — đi 1 lần rồi hết
+    video: dict | None = None  # payload tiến độ tải video trong modal B4 (P21c) — cũng đi 1 lần
     touched: list[str] = field(default_factory=list)
     b0_ids: list[str] = field(default_factory=list)  # bài vừa tạo/vừa xin trích -> grid giao luồng nền
 
@@ -1070,6 +1077,93 @@ def save_video(ctx: Ctx, sid: str, src, name: str = "") -> list[str]:
     src.seek(0)
     block = stories.save_video(ctx.root, sid, src, suffix=suffix, method=MANUAL_METHOD)
     return [f"{sid}: đã lưu {block['file']} ({round(block['bytes'] / 1048576, 1)} MB) vào folder bài — ô B4 lên xanh lá."]
+
+
+def video_chunk(ctx: Ctx, buf, event: dict) -> tuple:
+    """Ghồng một mẩu video modal gửi lên — P21c, tải file NGAY TRONG modal B4.
+
+    Một message component chỉ mang nổi ít MB trước khi đóng băng tab (đo P22d: 4 MB base64 là
+    trình duyệt ngừng phản hồi), nên file lớn phải cắt thành nhiều mẩu và mỗi mẩu là một event.
+    Server giữ các mẩu trong session, chỉ ghi folder khi đủ `total` — ghi dở thì thà còn video cũ.
+    Đường ghi luôn do server ghép (`safe_id` + đuôi trong VIDEO_SUFFIXES), trình duyệt không
+    chọn được file nào bị ghi.
+
+    `buf` là buffer lần trước (session state) hoặc None. Trả (buffer_mới, payload cho lưới).
+    """
+    up = str(event.get("up") or "")
+    sid = str(event.get("id") or "")
+    out = {"kind": "video", "up": up, "sid": sid, "done": False}
+    if not up:
+        return buf, {**out, "error": "Mẩu gửi lên không có mã lượt tải — đóng modal rồi mở lại.", "done": True}
+    expired = isinstance(buf, dict) and (time.time() - float(buf.get("at") or 0.0)) > VIDEO_UPLOAD_SECONDS
+    if isinstance(buf, dict) and (buf.get("up") != up or buf.get("sid") != sid or expired):
+        buf = None  # không ghép mẩu của hai lượt/ hai bài vào một file
+    try:
+        seq = int(event.get("seq") or 0)
+    except (TypeError, ValueError):
+        seq = -1
+    if not isinstance(buf, dict):
+        if seq != 0:
+            return None, {**out, "done": True,
+                          "error": "Lượt tải này không còn trên server (hết hạn hoặc trang đã vẽ lại) "
+                                   "— bấm Tải lại từ đầu."}
+        try:
+            stories.safe_id(sid)
+        except stories.WorkspaceError as exc:
+            return None, {**out, "done": True, "error": str(exc)}
+        name = str(event.get("name") or "")
+        suffix = Path(name).suffix.lower()
+        if suffix not in VIDEO_SUFFIXES:
+            return None, {**out, "done": True,
+                          "error": f"“{name or '(không tên)'}” không phải video — chỉ nhận {'/'.join(VIDEO_SUFFIXES)}."}
+        try:
+            total = int(event.get("total") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        if total <= 0:
+            return None, {**out, "done": True, "error": "File rỗng (0 MB) — chưa ghi gì cả."}
+        if total > B4_MODAL_MAX:
+            return None, {**out, "done": True,
+                          "error": f"video {round(total / 1048576, 1)} MB vượt trần "
+                                   f"{B4_MODAL_MAX // 1048576} MB của ô tải trong modal — "
+                                   f"dùng mục “🎬 B4 · Video” phía trên lưới (tới "
+                                   f"{B4_VIDEO_MAX // 1048576} MB) hoặc chép thẳng vào folder bài."}
+        buf = {"up": up, "sid": sid, "name": name[:200], "suffix": suffix,
+               "total": total, "got": 0, "parts": [], "at": time.time()}
+    try:
+        raw, _ = decode_upload(event.get("data"))
+    except ValueError as exc:
+        return None, {**out, "done": True, "error": str(exc)}
+    if seq != len(buf["parts"]):
+        return None, {**out, "done": True,
+                      "error": f"Mẩu thứ {seq + 1} đến không đúng lượt (server đang chờ mẩu "
+                               f"{len(buf['parts']) + 1}) — hủy rồi tải lại để không ghép nhầm file."}
+    buf["parts"].append(raw)
+    buf["got"] += len(raw)
+    buf["at"] = time.time()
+    if buf["got"] > buf["total"]:
+        return None, {**out, "done": True,
+                      "error": "Tổng số byte nhận được nhiều hơn kích thước file khai báo — "
+                               "lượt tải hỏng, chưa ghi gì vào folder bài."}
+    if buf["got"] < buf["total"]:
+        return buf, {**out, "seq": len(buf["parts"]), "got": buf["got"], "total": buf["total"],
+                     "parts": len(buf["parts"])}
+    try:
+        lines = save_video(ctx, buf["sid"], io.BytesIO(b"".join(buf["parts"])), name=buf["name"])
+    except Exception as exc:  # folder hỏng/đĩa đầy… — báo đúng chỗ chết, đừng để modal treo
+        return None, {**out, "done": True, "error": f"không ghi được video — {exc}"}
+    line = lines[0] if lines else ""
+    bad = not line.startswith(f"{buf['sid']}: đã lưu")
+    return None, {**out, "seq": len(buf["parts"]), "got": buf["got"], "total": buf["total"],
+                  "parts": len(buf["parts"]), "done": True, "error": line if bad else "", "line": line}
+
+
+def video_abort(buf, event: dict) -> tuple:
+    """⛔ Hủy giữa chừng: bỏ hết mẩu trong RAM, folder bài không bị đụng tới."""
+    out = {"kind": "video", "up": str(event.get("up") or ""), "sid": str(event.get("id") or ""),
+           "done": True, "cancelled": True, "seq": 0, "got": 0}
+    return None, out
+
 
 
 def batch_ids(raw) -> tuple[list[str], str]:

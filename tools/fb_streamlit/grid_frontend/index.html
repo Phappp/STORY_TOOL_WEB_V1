@@ -157,6 +157,13 @@
   /* P22d: ô dán chữ thay cho chọn file — cùng một hàng chờ, cùng một event import_read. */
   .iopaste { display:flex; flex-direction:column; gap:6px; min-width:0; }
   .iopaste textarea.ta { flex:0 0 auto; min-height:84px; resize:vertical; }
+  /* P21c: ô tải video trong modal B4 — thanh tiến độ thật, không chỉ mỗi chữ ⏳ đổi màu. */
+  .vidbox { display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .vidrow { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .vidbar { height:7px; border:1px solid var(--border); border-radius:4px; background:var(--field); overflow:hidden; }
+  .vidbar i { display:block; height:100%; background:var(--accent); width:0; transition:width .25s ease; }
+  .vidbar.done i { background:var(--done-t); }
+  .vidbar.bad i { background:var(--error-t); }
   /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
   button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
@@ -704,7 +711,7 @@ function stepsCell(row) {
     b.dataset.flash = "sq:" + row.id + ":" + step;
     const preview = step === "b0" || step === "b2" || step === "b4";  // mấy bước này không có gì để copy — bấm là mở modal xem
     const how = preview ? "bấm để mở modal xem " + (step === "b0" ? "caption + ảnh trích được, sửa caption hoặc thêm ảnh tay ở đó"
-      : step === "b4" ? "video đang nằm trong folder và chọn bài này để tải file từ ổ đĩa" : "ảnh")
+      : step === "b4" ? "video đang nằm trong folder và tải file mới ngay trong modal" : "ảnh")
       : step === "b3" ? "bấm 1 lần để copy BẢN ĐÃ RENDER (chữ sạch, hết ## và **), bấm đúp để mở modal"
         : "bấm 1 lần để copy, bấm đúp để mở modal";
     // KHÔNG đặt b.title: tooltip mặc định của trình duyệt hiện trễ ~1 giây, chữ nhỏ và không
@@ -1027,7 +1034,7 @@ const LINK_BARS = {
           help: "Link bài của bạn đã đăng — Enter để lưu, lưới và cột Link đổi theo" },
   b4link: { label: "🎬 Link video", source: "b4_link_save", stored: "story.json · b4.link",
           tabs: ["b4"],
-          help: "Chỉ lưu CHỮ, không tải file — muốn có video trong folder thì dùng mục “🎬 B4 · Video” phía trên lưới" },
+          help: "Chỉ lưu CHỮ, không tải file — muốn có video trong folder thì tải ở thẻ 🎬 Video trong folder ngay dưới" },
 };
 
 // Ảnh tham chiếu B0 đi base64 qua event (component không upload thẳng được).
@@ -1201,20 +1208,214 @@ function b0Cards(row, key) {
   return [caption, refs];
 }
 
+// ---- P21c: tải video B4 NGAY TRONG modal -------------------------------------------------------
+// Một file KHÔNG đi thành một message: bytes qua message component mà message vài MB là đóng băng
+// tab (đo P22d: 4 MB base64 là trình duyệt ngừng phản hồi). Nên file = chuỗi "gửi mẩu → server xác
+// nhận → gửi mẩu kế", và send() mẩu kế NẾP TRONG callback của FileReader — Streamlit chỉ nhận đúng
+// một event mỗi lượt vẽ, còn callback đó là task mới, không nằm trong stack của render().
+function vidMb(bytes) { return Math.round(Number(bytes || 0) / 104857.6) / 10; }
+function vidChunkBytes() { return Number(MODEL.video_chunk || 0) || 1048576; }
+function vidModalMax() { return Number(MODEL.video_modal_max || 0) || 32 * 1048576; }
+function vidTypes() {
+  const list = Array.isArray(MODEL.video_types) && MODEL.video_types.length
+    ? MODEL.video_types : ["mp4", "mov", "webm", "m4v"];
+  return list.map(t => "." + t).join(",");
+}
+function b64Blob(blob, then) {  // đọc qua FileReader để việc base64 hóa KHÔNG chạy trên main thread (b64Utf8 thì có)
+  const rd = new FileReader();
+  rd.onload = () => then(String(rd.result).split(",", 2)[1] || "");
+  rd.onerror = () => then("");
+  rd.readAsDataURL(blob);
+}
+
+function vidStop(msg, keepPaint) {
+  clearTimeout(VID_TIMER); VID_TIMER = null;
+  if (VID) { VID.err = String(msg || "Lượt tải đã dừng."); VID.busy = false; VID.seq = -1; }
+  if (!keepPaint) repaint();
+}
+
+function sendVideoChunk() {
+  if (!VID || VID.seq < 0 || !VID_FILE) return;
+  const v = VID;
+  const from = v.seq * v.chunk;
+  if (from >= v.total) { vidStop("File đã gửi hết mà server chưa báo ghi xong — bấm “🔁 Tải lại từ đầu”."); return; }
+  const blob = VID_FILE.slice(from, Math.min(from + v.chunk, v.total));
+  v.busy = true;
+  b64Blob(blob, data => {
+    if (!data) { vidStop("Đọc “" + v.name + "” hỏng ở mẩu " + (v.seq + 1) + " — chọn lại file hoặc chép thẳng vào folder bài."); return; }
+    send({ source: "video_chunk", up: v.up, id: v.sid, seq: v.seq, total: v.total, name: v.name, data });
+    clearTimeout(VID_TIMER);
+    // đồng hồ báo "mẩu này không được xác nhận": chờ vô hạn là cái giá anh đã trả ở ô dán P22d (IO_BUSY).
+    VID_TIMER = setTimeout(() => vidStop("Mẩu " + (v.seq + 1) + " của “" + v.name + "” không được server xác nhận sau "
+      + Math.round(VID_WAIT_MS / 1000) + "s — trang vừa vẽ lại hay lưới đang bận? Bấm “🔁 Tải lại từ đầu”."), VID_WAIT_MS);
+    repaint();
+  });
+}
+
+function ingestVideo() {
+  const r = MODEL.video_response || {};
+  if (!r.up) return;
+  if (!VID || VID.up !== String(r.up)) {
+    // iframe vẽ lại làm mất trạng thái: chỉ dựng lại ô khi server báo LỖI, kẻo hiện nhầm bảng của lượt đã qua.
+    // ack của LƯỢT CŨ (up khác, ví dụ mẩu trễ sau khi Hủy rồi bấm Tải lại) phải bỏ hẳn, đừng đè lên lượt đang chạy.
+    if (!VID && r.error) {
+      VID = { up: String(r.up), sid: String(r.sid || ""), name: "", total: Number(r.total || 0),
+        got: Number(r.got || 0), seq: -1, chunk: vidChunkBytes(), busy: false, err: String(r.error), line: "" };
+    }
+    return;
+  }
+  clearTimeout(VID_TIMER); VID_TIMER = null;
+  VID.busy = false;
+  if (typeof r.got === "number") VID.got = r.got;
+  if (Number(r.total || 0)) VID.total = Number(r.total);
+  if (r.error) {
+    // Mẩu đang đi lúc bấm Hủy tới server SAU khi buffer đã bị video_abort xóa -> server báo "không còn trên
+    // server". Đo live P21c: lời đó đè lên chữ "Đã hủy" khiến anh tưởng tải hỏng, trong khi chính mình vừa hủy.
+    if (VID.cancelled) return;
+    VID.err = String(r.error); VID.seq = -1; return;  // giữ VID_FILE -> còn bấm Tải lại từ đầu
+  }
+  if (r.cancelled) { VID.seq = -1; VID_FILE = null; return; }        // chữ "Đã hủy" do vidStop đặt, đừng đè
+  if (r.done) { VID.seq = -1; VID_FILE = null; VID_PICK = null; VID.line = String(r.line || "đã lưu video"); return; }
+  VID.seq = Number(r.seq || 0);
+  if (!VID_FILE) {
+    VID.err = "Trình duyệt không còn giữ “" + VID.name + "” (trang vừa tải lại) — chọn lại file rồi bấm 🚀 Tải lên.";
+    VID.seq = -1;
+    return;
+  }
+  sendVideoChunk();
+}
+
+function vidPrecheck(row, f) {
+  if (VID && VID.busy && VID.sid !== String(row.id)) {
+    return "⏳ một lượt tải video đang chạy ở bài " + VID.sid + " — chờ xong hoặc mở bài đó mà Hủy (lưới chỉ gửi được một mẩu mỗi lần).";
+  }
+  if (!Number(f.size || 0)) return "File rỗng (0 MB) — chưa ghi gì cả.";
+  if (f.size > vidModalMax()) {
+    return "“" + f.name + "” " + vidMb(f.size) + " MB vượt trần " + vidMb(vidModalMax())
+      + " MB của ô tải trong modal — dùng mục “🎬 B4 · Video” phía trên lưới (tới " + mib(MODEL.video_max, 200)
+      + " MB) hoặc chép thẳng vào folder " + row.id + "\\";
+  }
+  return "";
+}
+
+function startVideo(row, file) {
+  VID = { up: "v" + Date.now().toString(36) + Math.round(Math.random() * 1e6).toString(36),
+    sid: String(row.id), name: String(file.name || ""), total: Number(file.size || 0), got: 0,
+    seq: 0, chunk: vidChunkBytes(), busy: true, err: "", line: "" };
+  VID_FILE = file; VID_PICK = null; VID_MSG = null;
+  sendVideoChunk();
+  repaint();
+}
+
+function restartVideo() {  // mẩu mới với LƯỢT TẢI MỚI (up mới): server quên các mẩu cũ, không ghép nhầm file
+  if (!VID || !VID_FILE) return;
+  VID.up = "v" + Date.now().toString(36) + Math.round(Math.random() * 1e6).toString(36);
+  VID.seq = 0; VID.got = 0; VID.err = ""; VID.line = ""; VID.busy = true; VID.cancelled = false;
+  VID_MSG = null;
+  sendVideoChunk();
+  repaint();
+}
+
+function abortVideo() {
+  const v = VID;
+  vidStop("Đã hủy — các mẩu đã gửi bị bỏ, folder " + (v ? v.sid : "bài") + " chưa bị ghi gì.");
+  if (v) v.cancelled = true;  // lời "Đã hủy" là trạng thái THẬT, mẩu trễ tới sau đó không được đè lên
+  if (v && v.up) send({ source: "video_abort", up: v.up, id: v.sid });
+}
+
+function vidStatus(v) {
+  if (v.err) return "⚠ " + v.err;
+  if (v.line) return "✅ " + v.line + " — đã đọc lại folder nên ô B4 hiện đúng file mới.";
+  const pct = v.total ? Math.min(100, Math.round((v.got / v.total) * 100)) : 0;
+  if (v.busy) return "⏳ đang gửi mẩu " + (v.seq + 1) + " · " + vidMb(v.got) + "/" + vidMb(v.total) + " MB ("
+    + pct + "%) — folder bài CHƯA bị đụng tới cho tới mẩu cuối.";
+  return "⏸ dừng ở mẩu " + (v.seq + 1) + " · " + vidMb(v.got) + "/" + vidMb(v.total) + " MB (" + pct + "%)"
+    + (VID_FILE ? " — file vẫn còn trong trình duyệt, bấm Tải lại từ đầu để gửi lại từ đầu." : " — mất file, phải chọn lại.");
+}
+
+function vidBox(row) {
+  const box = el("div", "vidbox");
+  const mine = VID && VID.sid === String(row.id) ? VID : null;
+  const otherBusy = VID && VID.sid !== String(row.id) && VID.busy;
+  const pick = document.createElement("input");
+  pick.type = "file";
+  pick.accept = vidTypes();
+  pick.disabled = !!otherBusy || !!(mine && mine.busy);
+  pick.title = "Chọn file video (" + vidTypes().replace(/,/g, " · ") + ") cho " + row.id
+    + " — tối đa " + vidMb(vidModalMax()) + " MB trong modal, từng mẩu " + vidMb(vidChunkBytes()) + " MB";
+  pick.addEventListener("click", e => e.stopPropagation());
+  pick.addEventListener("change", () => {
+    const f = pick.files && pick.files[0];
+    if (!f) return;
+    const bad = vidPrecheck(row, f);
+    VID_MSG = bad ? { id: String(row.id), text: bad, bad: true } : null;
+    if (!bad && VID && VID.seq < 0) VID = null;  // lượt cũ đã dừng (xong hoặc lỗi): file mới thay hẳn bảng của nó
+    VID_PICK = bad ? null : { id: String(row.id), file: f, name: f.name, size: Number(f.size || 0) };
+    repaint();  // input type=file không dựng lại được giá trị, nên tên file hiển thị bằng chữ của VID_PICK
+  });
+  box.appendChild(pick);
+  if (VID_MSG && String(VID_MSG.id) === String(row.id)) {
+    box.appendChild(el("div", "ioline" + (VID_MSG.bad ? " bad" : ""), String(VID_MSG.text)));
+  }
+  if (VID_PICK && String(VID_PICK.id) === String(row.id) && !mine) {
+    const line = el("div", "ioline", "Đã chọn “" + VID_PICK.name + "” · " + vidMb(VID_PICK.size)
+      + " MB · " + Math.ceil(VID_PICK.size / (vidChunkBytes() || 1)) + " mẩu. Bấm Tải lên để bắt đầu.");
+    const actions = el("div", "vidrow");
+    actions.appendChild(button("🚀 Tải lên", "Gửi từng mẩu " + vidMb(vidChunkBytes())
+      + " MB lên lưới; folder bài chỉ bị ghi sau mẩu cuối", () => startVideo(row, VID_PICK.file), "act"));
+    actions.appendChild(button("✕ Bỏ đã chọn", "Quay lại ô chọn file, không gửi gì cả",
+      () => { VID_PICK = null; repaint(); }, "act"));
+    box.appendChild(line);
+    box.appendChild(actions);
+  }
+  if (mine) {
+    const pct = mine.total ? Math.min(100, Math.round((mine.got / mine.total) * 100)) : 0;
+    const bar = el("div", "vidbar" + (mine.err ? " bad" : (mine.line ? " done" : "")));
+    const fill = el("i");
+    fill.style.width = pct + "%";
+    bar.appendChild(fill);
+    box.appendChild(bar);
+    box.appendChild(el("div", "ioline" + (mine.err ? " bad" : (mine.line ? " ok" : "")), vidStatus(mine)));
+    const actions = el("div", "vidrow");
+    if (mine.busy) {
+      actions.appendChild(button("⛔ Hủy", "Dừng lượt tải, bỏ hết mẩu trong RAM — folder bài không bị ghi",
+        () => abortVideo(), "act"));
+    } else if (mine.seq < 0 && VID_FILE) {
+      actions.appendChild(button("🔁 Tải lại từ đầu", "Gửi lại file từ mẩu 1 (lượt mới, không ghép với mẩu cũ)",
+        () => restartVideo(), "act"));
+    }
+    if (actions.childNodes.length) box.appendChild(actions);
+  }
+  return box;
+}
+
+function vidSig() {
+  // Phải tính CẢ ô đã chọn và lời báo dưới nút chọn file: đo live P21c, chọn file 40 MB sau một lượt
+  // đã xong thì VID không đổi -> sig không đổi -> syncModal bỏ qua, lời "vượt trần" không bao giờ hiện.
+  const extra = (VID_PICK ? "pick:" + VID_PICK.id + ":" + VID_PICK.size : "")
+    + (VID_MSG ? "msg:" + VID_MSG.id + ":" + VID_MSG.text.length : "");
+  if (!VID) return extra;
+  return [VID.up, VID.sid, VID.seq, VID.got, VID.busy ? 1 : 0,
+    (VID.err || "").length, (VID.line || "").length].join(":") + extra;
+}
+
 function videoCard(row) {
   const state = stateOf(row, "b4");
   const detail = String((row.detail || {}).b4 || "");
   const body = [el("div", null, row.b4meta ? "Video đang có: " + row.b4meta
-    : "Bài này chưa có video trong folder.")];
+    : "Bài này chưa có video trong folder."), vidBox(row)];
   if (detail) body.push(el("div", "muted", "Ghi chú: " + detail));
   return card({
     title: "🎬 Video trong folder · video.*", state: state,
     warn: SQ_WARN.indexOf(state) >= 0 ? state : "",
     help: ["B4 là bước tải tay — không có AI, không vào hàng đợi, không ảnh hưởng ⚡",
-      "1. Bấm “🎬 Chọn bài này để tải video” ở thanh trên, mục “🎬 B4 · Video” ngay phía trên lưới sẽ mở sẵn " + row.id + ".",
-      "2. Chọn file từ ổ đĩa rồi bấm Lưu — file ghi vào folder bài thành `video.<đuôi>`; một bài giữ MỘT video nên tải file mới là ghi đè.",
+      "Chọn file rồi bấm “🚀 Tải lên”: file đi từng mẩu " + vidMb(vidChunkBytes()) + " MB qua lưới, "
+        + "mẩu cuối về tới nơi mới ghi `video.<đuôi>` vào folder — đang tải mà hủy thì folder còn nguyên.",
+      "Trần của ô này là " + vidMb(vidModalMax()) + " MB vì bytes đi qua message component. Lớn hơn thì dùng mục "
+        + "“🎬 B4 · Video” phía trên lưới (tới " + mib(MODEL.video_max, 200) + " MB) hoặc chép thẳng vào folder bài.",
+      "Bấm “⛔ Hủy” giữa chừng để bỏ lượt (RAM dọn ngay), “🔁 Tải lại từ đầu” khi một mẩu không được xác nhận.",
       "Ô B4 chỉ lên xanh khi folder THẬT SỰ có file. Ô 🎬 Link video dưới đầu modal chỉ là chữ trong story.json — nó không đổi màu ô.",
-      "Trần của ô tải lên: " + mib(MODEL.video_max, 200) + " MB — video lớn hơn thì chép thẳng vào folder bài.",
+      "Tải file mới là ghi đè: một bài giữ MỘT video.",
       "Lưới không phát video (file quá lớn để gửi qua iframe) — muốn xem thì mở folder bài."],
     body: body,
   });
@@ -1243,7 +1444,7 @@ function linkCards(row) {
     linkCard("🎬 Link video (B4)", row.b4link, "(chưa có — mở tab B4 rồi gõ ở ô 🎬)", true,
       ["Chỉ là CHỮ trong story.json · b4.link — video nằm nơi khác (YouTube, Drive…) thì ghi link ở đây.",
        "Không đổi màu ô B4: ô đó luôn nói về FILE `video.*` trong folder."]),
-    linkCard("📁 File video trong folder", row.b4meta, "(chưa có — tải bằng mục “🎬 B4 · Video” phía trên lưới)", false,
+    linkCard("📁 File video trong folder", row.b4meta, "(chưa có — tải file ở thẻ 🎬 Video trong folder, tab B4)", false,
       ["File thật trong folder bài: tên · dung lượng · tải lúc nào.",
        "Xóa file ngoài ổ thì ô B4 về cam “mất file”."]),
   ];
@@ -1353,9 +1554,11 @@ function modalNode() {
     tools.appendChild(sel);
   }
   if (ref.tab === "b4") {
-    // chỉ CHỌN bài (id đi qua event, bytes không đi): file Uploader native đứng ngoài lưới mới nhận được video
-    tools.appendChild(button("🎬 Chọn bài này để tải video",
-      "Mở mục “🎬 B4 · Video” phía trên lưới với sẵn " + row.id + " — chọn file từ ổ đĩa ở đó rồi bấm Lưu",
+    // P21c: ô tải ngay trong modal lo được file tới trần modal, nên nút này CHỈ còn việc mở mục native
+    // cho video lớn hơn — nhãn phải nói thật phần việc còn lại, không phải đường tắt thứ hai.
+    tools.appendChild(button("📂 Mục native (video lớn hơn " + vidMb(vidModalMax()) + " MB)",
+      "Mở mục “🎬 B4 · Video” phía trên lưới với sẵn " + row.id + " — nhận tới " + mib(MODEL.video_max, 200)
+        + " MB vì file từ đó không đi qua message component; chọn file rồi bấm Lưu",
       bb => { bb.disabled = true; send({ source: "b4_pick", id: row.id }); }, "act"));
   }
   if (tools.children.length) modal.appendChild(tools);  // tab không có việc giao nào (Link) thì khỏi hở một thanh rỗng
@@ -1391,7 +1594,9 @@ function repaint() {
            video_max: MODEL.video_max,
            copy_response: MODEL.copy_response, summary: MODEL.summary, queue_ids: MODEL.queue_ids,
            error_ids: MODEL.error_ids, providers: MODEL.providers, defaults: MODEL.defaults, cols: MODEL.cols,
-           io: MODEL.io, io_response: {} }, true);  // io_response đã nạp rồi: vẽ lại cục bộ không được nạp lại lần hai
+           io: MODEL.io, io_response: {}, video_response: {},  // response đã nạp rồi: vẽ lại cục bộ không được nạp lại lần hai
+           video_modal_max: MODEL.video_modal_max, video_chunk: MODEL.video_chunk,
+           video_types: MODEL.video_types }, true);
 }
 
 function linkEditor(row, td) {
@@ -1672,6 +1877,16 @@ let IO_BUSY = false;    // đã gửi một file, chờ lưới trả lời: ô 
                         // repaint() dựng lại input nên `pick.disabled = true` chỉ sống tới lượt vẽ kế.
 let IO_PASTE = "";      // chữ anh dán ở ô Import — sống ở module vì repaint() dựng lại textarea
                         // mỗi 2s khi luồng nền chạy; để mất chữ đang gõ giữa chừng thì không ai dùng nổi.
+// P21c · tải video NGAY TRONG modal B4. Không gửi cả file một lần: bytes đi qua message component,
+// mà message vài MB là đóng băng tab (đo P22d: 4 MB base64 là trình duyệt ngừng phản hồi). Nên một
+// file là một chuỗi "gửi mẩu → chờ server xác nhận → gửi mẩu kế", và mọi thứ của lượt tải phải nằm
+// ở module chứ không nằm ở DOM (repaint() dựng lại modal mỗi 2s).
+let VID = null;         // {up, sid, name, total, got, seq, chunk, busy, err, line} — seq < 0 là chuỗi đã dừng
+let VID_FILE = null;    // File đang tải — server chỉ giữ các mẩu đã gửi, muốn gửi tiếp phải còn nguồn
+let VID_PICK = null;    // {id, file, name, size} đã chọn mà chưa bấm Tải lên — repaint() dựng lại input nên phải giữ ở đây
+let VID_MSG = null;     // {id, text, bad} chữ báo ngay dưới ô chọn file (vượt trần, file rỗng…)
+let VID_TIMER = null;   // đồng hồ báo "mẩu này không được xác nhận", kẻo ngồi ⏳ mãi như IO_BUSY cũ
+const VID_WAIT_MS = 20000;
 const IO_CAPS = new Set();  // link nào đang MỞ caption đầy đủ — cùng lý do: bảng dựng lại mỗi tick,
                             // trạng thái để trong DOM thì mất trước khi anh kịp đọc.
 
@@ -2275,7 +2490,7 @@ function modalSig() {
   return JSON.stringify([ref.id, ref.tab, stampOf(row), row.flow, row.prov, row.b0meta, row.b4, row.b4meta,
     row.video, row.image, row.link, row.b4link, row.b2ref,
     row.copyable, row.preset, SHOW_MD, (MODEL.copy_response || {}).request_id || "", (MODEL.providers || []).join("|"),
-    String(MODEL.image_max || 0), String(MODEL.video_max || 0)]);
+    String(MODEL.image_max || 0), String(MODEL.video_max || 0), vidSig(), String(MODEL.video_modal_max || 0)]);
 }
 
 function syncModal() {
@@ -2384,9 +2599,14 @@ function render(args, force) {
     cols: args.cols && typeof args.cols === "object" ? args.cols : {},
     io: args.io && typeof args.io === "object" ? args.io : {},
     io_response: args.io_response && typeof args.io_response === "object" ? args.io_response : {},
+    video_modal_max: Number(args.video_modal_max || 0),
+    video_chunk: Number(args.video_chunk || 0),
+    video_types: Array.isArray(args.video_types) ? args.video_types : [],
+    video_response: args.video_response && typeof args.video_response === "object" ? args.video_response : {},
   };
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
   ingestIo();        // tương tự cho bảng Import/Export — preview phải hiện ngay lượt vẽ này
+  ingestVideo();     // và cho mẩu video vừa được server xác nhận (P21c)
   const alive = new Set(rows().map(r => String(r.id)));
   Array.from(PICKED).forEach(id => { if (!alive.has(id)) PICKED.delete(id); });
   if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
