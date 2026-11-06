@@ -125,6 +125,15 @@
   .ioitem { font-size:12px; color:var(--muted); border-left:2px solid var(--border); padding-left:7px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mcard .cbd input[type=file] { font:inherit; font-size:12px; color:var(--muted); max-width:100%; }
+  /* P22c: TRÁI = hai ô thao tác (import trên, export dưới), PHẢI = ô XEM TRƯỚC nội dung thật.
+     auto-fit để bảng hẹp thì preview tự xuống dưới, không bao giờ bị bóp mất chữ. */
+  .mbody.iogrid { grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); }
+  .iocol { display:flex; flex-direction:column; gap:10px; min-width:0; min-height:0; overflow:auto;
+    scrollbar-color:#3b4c63 var(--bg); }
+  /* thẻ thao tác lấy THEO CHIỀU CAO CHỮ của nó, không chia đều 1/3 cột — chia đều (hay cho co lại) thì
+     ô Import bị bóp còn mỗi cái đầu thẻ, đúng lúc anh cần thấy ô chọn file + nút Tạo. Bí chiều cao thì
+     cả cột cuộn MỘT lần, còn hơn là ba ô con cùng cuộn dây chuyền. */
+  .iocol > .mcard { flex:0 0 auto; }
   /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
   button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
@@ -1712,16 +1721,7 @@ function ioImportCard() {
     const kept = Number(st.rows || 0);
     const cap = Number(st.with_caption || 0);
     state = st.again ? "done" : kept ? "queued" : "error";
-    body.push(ioNote("📄 " + st.name + " · " + String(st.line || "")));
-    (st.items || []).forEach(item => body.push(el("div", "ioitem",
-      String(item.url || "(không link)") + " — " + item.head
-      + (Number(item.imgs) > 0 ? " · " + item.imgs + " ảnh trong file" : ""))));
-    const hidden = Number(st.total || 0) - (st.items || []).length;
-    if (hidden > 0) body.push(ioNote("· … còn " + hidden + " bài nữa trong file (modal chỉ liệt kê " + (st.items || []).length + " dòng đầu)"));
-    // Python đã viết sẵn "bỏ dòng …" / "bỏ link trùng …" — thêm chữ "bỏ" nữa là đọc trùng.
-    (st.skipped || []).forEach(line => body.push(ioNote("· " + line)));
-    if (Number(st.skipped_more || 0) > 0) body.push(ioNote("· … còn " + st.skipped_more + " dòng bị bỏ nữa"));
-    if (st.again) body.push(ioNote("✓ File này vừa import xong — chọn lại một file khác, hoặc Export rồi sửa trong workspace.", "ok"));
+    body.push(ioNote("📄 “" + String(st.name || "") + "” · " + kept + " bài hợp lệ → xem ở ô Xem trước."));
     const go = button((st.again ? "✓ Đã tạo " : "➕ Tạo ") + kept + " bài mới" + (cap ? " (B0 chỉ tải ảnh)" : " + trích B0"),
       !kept ? "Không có dòng hợp lệ nào — link Facebook ở cột A, hoặc {url, text, media} đúng dạng lưới Export."
         : st.again ? "File này vừa import lần trước rồi — bấm lại là nhân đôi bài."
@@ -1734,7 +1734,8 @@ function ioImportCard() {
         send({ source: "import_commit", name: String((IO_FILE || {}).name || st.name || ""), data: String((IO_FILE || {}).data || "") });
       });
     go.disabled = !kept || !!st.again || !IO_FILE;
-    if (!IO_FILE && !st.again && kept) body.push(ioNote("· lưới không giữ hộ file giữa hai lần mở bảng — chọn lại file ở ô trên rồi bấm Tạo."));
+    if (!IO_FILE && !st.again && kept) body.push(ioNote("· lưới không giữ hộ file giữa hai lần mở bảng — chọn lại file ở ô trên rồi bấm Tạo.", "bad"));
+    if (st.again) body.push(ioNote("✓ File này vừa import xong — chọn lại một file khác, hoặc Export rồi sửa trong workspace.", "ok"));
     body.push(go);
   } else if (st.kind === "commit") {
     state = st.again ? "error" : "done";
@@ -1742,13 +1743,14 @@ function ioImportCard() {
     if (!st.again && Number(st.made || 0))
       body.push(ioNote("⏳ " + st.made + " bài đã vào luồng nền trích B0 — ô B0 xanh lá khi từng bài xong."));
   } else {
-    body.push(ioNote("Chưa chọn file. Caption và ảnh chỉ lấy được từ bài công khai — bài trong group riêng tư sẽ báo lỗi ở ô B0."));
+    body.push(ioNote("Chưa chọn file. CSV/TXT/XLSX: một dòng một link → B0 trích caption + ảnh. "
+      + "JSON đúng dạng Export: caption + ảnh lấy THẲNG từ file, B0 chỉ tải ảnh."));
   }
-  return card({ title: "📥 Import file → bài mới", state: state, wide: true, body: body,
+  return card({ title: "📥 Import file → bài mới", state: state, body: body,
     help: ["Import: file ở máy → folder story mới, ĐỌC TRƯỚC rồi mới tạo.",
       "CSV/TXT/XLSX: mỗi dòng một link bài viết/reel (cột A) — B0 trích caption + ảnh từ link đó.",
       "JSON: đúng dạng lưới Export — caption lấy thẳng từ “text”, ảnh từ “media[].photo_image.uri”, nên B0 chỉ tải ảnh chứ không đọc lại bài.",
-      "Trần " + ioCap() + " MB và " + Number(ioModel().max_rows || 200) + " bài một lần; dòng trùng link tự bỏ, dòng vượt trần hiện ngay trong thẻ này.",
+      "Trần " + ioCap() + " MB và " + Number(ioModel().max_rows || 200) + " bài một lần; dòng trùng link tự bỏ, dòng vượt trần hiện ở ô Xem trước.",
       "Bấm “➕ Tạo N bài mới” là tạo thật N folder + hẹn B0 — chưa bấm thì chưa có gì thay đổi.",
       "Import xong mà bài vẫn thiếu caption (link riêng tư) → dùng thẻ “🔁 B0 còn thiếu” bên dưới."] });
 }
@@ -1770,7 +1772,7 @@ function ioExportCard() {
   const keep = Math.min(ids.length, max);
   const body = [ioNote("Xuất " + keep + " bài ĐANG HIỆN (trần " + max + "/lần) — theo đúng “Lọc bài” + ô tìm"
     + (ids.length > max ? " · phần dư bị cắt, thu nhỏ bộ lọc lại" : "")
-    + ". Lưới không ghi file nào ra ổ: phải bấm ⬇ thì trình duyệt mới lưu.")];
+    + ". Chữ dựng ra nằm ở ô Xem trước, bấm ⬇ ở đó mới lưu.")];
   if (!ids.length) body.push(ioNote("· hàng đang hiện trống — xóa chữ ở ô tìm hoặc đổi bộ lọc trước.", "bad"));
   IO_EXPORTS.forEach(spec => {
     const b = button(spec[1], spec[2], bb => {
@@ -1779,24 +1781,82 @@ function ioExportCard() {
     });
     b.disabled = ids.length === 0;
     body.push(b);
-    if (st.format !== spec[0]) return;
-    if (st.error) body.push(ioNote("⚠ " + st.error, "bad"));
-    else if (st.text) {
-      const dropped = Number(st.asked || 0) - Number(st.count || 0);
-      body.push(ioNote("✓ " + String(st.name || "") + " · " + Number(st.count || 0) + " bài"
-        + (dropped > 0 ? " · bỏ " + dropped + " bài không có link nguồn" : "")
-        + (st.note ? " · " + st.note : ""), "ok"));
-      body.push(button("⬇ Lưu " + String(st.name || "file"), spec[3]
-        + " — tải về bằng trình duyệt (thường vào folder Downloads). Nội dung đã dựng xong nên bấm không gọi Python lại.",
-        () => downloadIo(st)));
-    } else if (st.line) body.push(ioNote("⚠ " + st.line, "bad"));  // quá trần: nói rõ chứ không cắt im
   });
   return card({ title: "📤 Export phần đang hiện", state: st.error ? "error" : st.text ? "done" : "pending", body: body,
     help: ["Export lấy đúng phần ĐANG HIỆN trên lưới: bộ lọc “Lọc bài” + chữ trong ô tìm kiếm.",
       "JSON {url, text, media}: import lại chính file này ở máy khác là nguyên văn caption + link ảnh, B0 khỏi trích.",
       "CSV 2 cột “link nguồn · link đã đăng”, có BOM nên Excel mở ra tiếng Việt không thành chữ lạ.",
-      "Bài không có link nguồn bị bỏ ở cả hai dạng — số bài bị bỏ ghi ngay trên dòng ⬇.",
+      "Bài không có link nguồn bị bỏ ở cả hai dạng — số bài bị bỏ ghi ngay ở ô Xem trước.",
       "File chỉ nằm trong bộ nhớ trình duyệt cho tới khi bấm ⬇; đóng bảng là mất, server không giữ bản nháp."] });
+}
+
+// Ô XEM TRƯỚC: chữ lưới vừa dựng, KHÔNG phải mô tả. Import thì liệt kê từng bài sẽ vào + lý do dòng
+// bị bỏ; export thì hiện tên file, bao nhiêu bài và nút ⬇. Server không giữ bản nháp nên đây cũng
+// chỉ là bản mới nhất — mở lại bảng là sạch.
+function ioPreviewSpec(fmt) { return IO_EXPORTS.find(s => s[0] === String(fmt || "")) || []; }
+
+function ioPreviewCard() {
+  const st = IO_STATE || {};
+  const ex = IO_EXPORT || {};
+  const body = [];
+  let state = "pending";
+  if (st.error || ex.error) {
+    state = "error";
+    if (st.error) body.push(ioNote("⚠ Import “" + String(st.name || "?") + "”: " + st.error, "bad"));
+    if (ex.error) body.push(ioNote("⚠ Export: " + ex.error, "bad"));
+  }
+  if (st.kind === "reading") {
+    state = "running";
+    body.push(ioNote("⏳ Đang đọc “" + st.name + "” — chưa tạo bài nào."));
+  } else if (st.kind === "preview") {
+    state = st.again ? "done" : Number(st.rows || 0) ? "queued" : "error";
+    body.push(ioNote("📄 " + String(st.name || "") + " · " + String(st.line || "")));
+    if ((st.items || []).length) body.push(ioNote("Sẽ vào " + Number(st.rows || 0) + " bài:"));
+    (st.items || []).forEach(item => body.push(el("div", "ioitem",
+      String(item.url || "(không link)") + " — " + item.head
+      + (Number(item.imgs) > 0 ? " · " + item.imgs + " ảnh trong file" : ""))));
+    const hidden = Number(st.total || 0) - (st.items || []).length;
+    if (hidden > 0) body.push(ioNote("· … còn " + hidden + " bài nữa trong file (bảng chỉ liệt kê " + (st.items || []).length + " dòng đầu)"));
+    // Python đã viết sẵn "bỏ dòng …" / "bỏ link trùng …" — thêm chữ "bỏ" nữa là đọc trùng.
+    (st.skipped || []).forEach(line => body.push(ioNote("· " + line)));
+    if (Number(st.skipped_more || 0) > 0) body.push(ioNote("· … còn " + st.skipped_more + " dòng bị bỏ nữa"));
+    if (Number(st.capped || 0) > 0) body.push(ioNote("· " + st.capped + " dòng cuối vượt trần "
+      + Number(ioModel().max_rows || 200) + "/lần — chưa vào, thu nhỏ file lại.", "bad"));
+  }
+  if (ex.format && (ex.text || ex.line)) {
+    const spec = ioPreviewSpec(ex.format);
+    const dropped = Number(ex.asked || 0) - Number(ex.count || 0);
+    if (ex.text) {
+      state = "done";
+      body.push(ioNote("📦 " + String(ex.name || "") + " · " + Number(ex.count || 0) + " bài"
+        + (dropped > 0 ? " · bỏ " + dropped + " bài không có link nguồn" : "")
+        + (ex.note ? " · " + ex.note : ""), "ok"));
+      body.push(el("pre", "doc", ioPreviewSample(ex)));
+      body.push(button("⬇ Lưu " + String(ex.name || "file"), (spec[3] || "")
+        + " — tải về bằng trình duyệt (thường vào folder Downloads). Nội dung đã dựng xong nên bấm không gọi Python lại.",
+        () => downloadIo(ex)));
+    } else body.push(ioNote("⚠ " + String(ex.line || ""), "bad"));  // quá trần: nói rõ chứ không cắt im
+  }
+  if (!body.length) body.push(ioNote("Chưa có gì để xem. Chọn file ở ô Import, hoặc bấm một dạng ở ô Export —"
+    + " nội dung thật sẽ hiện ngay đây trước khi anh bấm Tạo / ⬇ Lưu."));
+  return card({ title: "👁 Xem trước", state: state, body: body,
+    help: ["Chữ lưới ĐỌC ĐƯỢC từ file/vừa dựng, không phải chữ diễn giải — nên đây là chỗ phát hiện chọn sai file.",
+      "Import: mỗi dòng là một bài sẽ tạo (link — caption đầu bài · số ảnh trong file). Dòng bị bỏ hiện kèm lý do.",
+      "Export: xem trước đoạn ĐẦU của file (nội dung đầy đủ vẫn tải về bằng ⬇, kể cả khi ở đây bị cắt).",
+      "Bảng này không phải hàng đợi: chưa bấm ➕ Tạo / ⬇ Lưu thì chưa có folder hay file nào."],
+    actions: [ex.text ? copyTextIcon(ex.text, "ioprev",
+      "Copy nguyên văn nội dung file export vừa dựng (chưa cắt) vào clipboard máy anh — không gọi Python") : null] });
+}
+
+// Xem trước thì cắt, tải về thì nguyên văn: đưa cả file vài MB vào DOM chỉ để đọc 20 dòng đầu là tự làm nặng lưới.
+const IO_PREVIEW_CHARS = 2600;
+
+function ioPreviewSample(ex) {
+  const text = String(ex.text || "");
+  return text.length > IO_PREVIEW_CHARS
+    ? text.slice(0, IO_PREVIEW_CHARS) + "\n… còn " + (text.length - IO_PREVIEW_CHARS).toLocaleString("vi-VN")
+      + " ký tự nữa — bấm ⬇ Lưu để lấy nguyên file."
+    : text;
 }
 
 function ioB0Card() {
@@ -1806,7 +1866,7 @@ function ioB0Card() {
   const body = [];
   if (st.error) body.push(ioNote("⚠ " + st.error, "bad"));
   else if (told) body.push(ioNote((n ? "⏳ " : "✓ ") + String(st.line || ""), n ? "" : "ok"));
-  else body.push(ioNote(n ? "Còn " + n + " bài có link nguồn mà B0 chưa ra caption (chưa chạy, lỗi, hoặc treo)."
+  else body.push(ioNote(n ? "Còn " + n + " bài có link nguồn mà B0 chưa ra caption."
     : "Không bài nào chờ trích B0 — mọi bài có link nguồn đều đã có caption."));
   const b = button("▶ Trích B0 cho " + n + " bài",
     n ? "Giao luồng nền đọc lại link nguồn từng bài để lấy caption + ảnh — số bài lấy từ folder tại lúc bấm, "
@@ -1833,6 +1893,7 @@ function ioNode() {
   head.appendChild(el("span", "muted", String(MODEL.workspace || "").split(/[\\/]/).pop() || "(workspace?)"));
   head.appendChild(el("span", "mpos", visible().length + "/" + rows().length + " bài đang hiện"));
   head.appendChild(helpChip(["Bảng Import/Export — làm cả hai chiều mà không rời khỏi lưới.",
+    "Bố cục: TRÁI là những ô thao tác (trên Import, giữa Export, dưới B0), PHẢI là ô Xem trước nội dung thật — bên trái bấm gì thì bên phải hiện chữ đó trước khi tạo file/folder.",
     "Import: chọn file → lưới đọc và ĐẾM (chưa tạo gì) → bấm “➕ Tạo N bài mới” mới sinh folder + hẹn B0.",
     "Export: bấm một dạng → lưới dựng nội dung từ đúng phần đang hiện → bấm “⬇ Lưu …” trình duyệt mới tải file về.",
     "Mọi số liệu lấy từ folder story tại thời điểm bấm, không có bản nháp nào được giữ hộ giữa hai lần mở bảng.",
@@ -1840,10 +1901,14 @@ function ioNode() {
     "Việc dài (B0, import hàng loạt) chạy trong luồng nền — đóng bảng không làm nó dừng."]));
   head.appendChild(button("✕", "Đóng (Esc)", closeIo));
   modal.appendChild(head);
-  const body = el("div", "mbody mcards");
-  body.appendChild(ioImportCard());
-  body.appendChild(ioExportCard());
-  body.appendChild(ioB0Card());
+  // P22c: TRÁI = thao tác (import trên, export dưới, B0 cuối), PHẢI = ô Xem trước nội dung thật.
+  const body = el("div", "mbody mcards iogrid");
+  const left = el("div", "iocol");
+  left.appendChild(ioImportCard());
+  left.appendChild(ioExportCard());
+  left.appendChild(ioB0Card());
+  body.appendChild(left);
+  body.appendChild(ioPreviewCard());
   modal.appendChild(body);
   overlay.appendChild(modal);
   overlay.addEventListener("click", e => { if (e.target === overlay) closeIo(); });

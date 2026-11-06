@@ -4033,6 +4033,16 @@ check("P22b ô chọn file khóa bằng cờ SỐNG QUA LƯỢT VẼ (IO_BUSY) �
 check("P22b modal KHÔNG viết lại chữ 'bỏ' trước lý do bỏ dòng — Python đã trả 'bỏ dòng …', UI thêm nữa là đọc trùng",
       'ioNote("· bỏ dòng' not in _p22_fe
       and '(st.skipped || []).forEach(line => body.push(ioNote("· " + line)))' in _p22_fe)
+check("P22c bố cục modal: TRÁI = ô thao tác (import trên, export dưới, B0 cuối) · PHẢI = ô Xem trước — preview không nằm trong thẻ Import nữa",
+      '"mbody mcards iogrid"' in _p22_fe and "left.appendChild(ioImportCard())" in _p22_fe
+      and "left.appendChild(ioExportCard())" in _p22_fe and "body.appendChild(ioPreviewCard())" in _p22_fe
+      and ".mbody.iogrid { grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); }" in _p22_fe
+      and "wide: true" not in _p22_fe.split("function ioImportCard")[1].split("const IO_EXPORTS")[0]
+      and "(st.items || []).forEach" in _p22_fe.split("function ioPreviewCard")[1].split("function ioB0Card")[0])
+check("P22c ô Xem trước cắt file export dài thay vì nhét cả MB vào DOM, còn ⬇ Lưu vẫn tải NGUYÊN VĂN",
+      "IO_PREVIEW_CHARS" in _p22_fe and 'el("pre", "doc", ioPreviewSample(ex))' in _p22_fe
+      and "downloadIo(ex)" in _p22_fe
+      and "text.length > IO_PREVIEW_CHARS" in _p22_fe.split("function ioPreviewSample")[1].split("function ioB0Card")[0])
 shutil.rmtree(_p22_box, ignore_errors=True)
 # --- hết P22a ---
 
