@@ -4043,6 +4043,35 @@ check("P22c ô Xem trước cắt file export dài thay vì nhét cả MB vào D
       "IO_PREVIEW_CHARS" in _p22_fe and 'el("pre", "doc", ioPreviewSample(ex))' in _p22_fe
       and "downloadIo(ex)" in _p22_fe
       and "text.length > IO_PREVIEW_CHARS" in _p22_fe.split("function ioPreviewSample")[1].split("function ioB0Card")[0])
+# P22d: dán chữ PHẢI đi đúng hàng đợi của file — không có event/đường đọc thứ hai.
+_p22_before = sorted(p.name for p in _p22_root.iterdir())
+_p22_paste = ga.io_preview("chữ-dán.json", base64.b64encode(_p22_src_json).decode("ascii"))
+check("P22d JSON DÁN vào (không có file) đọc y hệt file chọn: 2 bài hợp lệ, cả 2 đã có caption nên B0 chỉ tải ảnh",
+      _p22_paste["rows"] == 2 and _p22_paste["with_caption"] == 2
+      and _p22_paste["name"] == "chữ-dán.json" and not _p22_paste.get("error")
+      and _p22_paste["items"][0]["imgs"] == 1
+      and "JOSH ALLEN" in _p22_paste["items"][0]["head"])
+check("P22d Xem trước chữ dán KHÔNG ghi folder nào — tạo thật vẫn đợi nút ➕ (preview chỉ đọc)",
+      sorted(p.name for p in _p22_root.iterdir()) == _p22_before)
+_p22_ppaste = ga.io_preview("chữ-dán.txt", base64.b64encode(
+    "https://www.facebook.com/permalink.php?story_fbid=pfbid0CCC&id=6155\n".encode("utf-8")).decode("ascii"))
+check("P22d dán DANH SÁCH LINK thì đọc theo cột A như file txt: 1 bài, caption trống nên B0 tự trích",
+      _p22_ppaste["rows"] == 1 and _p22_ppaste["with_caption"] == 0
+      and "chưa có chữ" in _p22_ppaste["items"][0]["head"])
+_p22_paste_slice = _p22_fe.split("function ioPasteField")[1].split("function ioImportCard")[0]
+check("P22d ô dán nằm TRONG thẻ Import và gửi lại đúng import_read — không mở event 'import_paste' thứ hai",
+      "body = [ioFilePicker(), ioPasteField()]" in _p22_fe
+      and _p22_fe.count('source: "import_read"') == 2
+      and 'send({ source: "import_read", name, data: IO_FILE.data })' in _p22_paste_slice
+      and "import_paste" not in _p22_fe and "import_paste" not in _p22_grid_src)
+check("P22d bản nháp dán SỐNG QUA LƯỢT VẼ (IO_PASTE ở module, nạp lại vào textarea) — repaint mỗi 2s khi luồng nền chạy không xóa chữ đang gõ",
+      "let IO_PASTE = " in _p22_fe and "ta.value = IO_PASTE;" in _p22_paste_slice
+      and "IO_PASTE = ta.value;" in _p22_paste_slice and "ta.disabled = IO_BUSY" in _p22_paste_slice)
+check("P22d tên giả theo NỘI DUNG (mở đầu [ hay { -> .json, còn lại cột A) — parse_import vẫn là nơi duy nhất chọn cách đọc",
+      "/^[\\[{]/" in _p22_fe and '"chữ-dán.json"' in _p22_fe and '"chữ-dán.txt"' in _p22_fe
+      and "ga.column_a" not in _p22_grid_src)
+check("P22d dán rỗng/quá trần thì bỏ IO_FILE để nút ➕ Tạo KHÔNG gửi lại bytes của lần trước",
+      _p22_paste_slice.count("IO_FILE = null") == 2 and "vượt trần " in _p22_paste_slice)
 shutil.rmtree(_p22_box, ignore_errors=True)
 # --- hết P22a ---
 

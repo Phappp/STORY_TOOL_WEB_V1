@@ -134,6 +134,9 @@
      ô Import bị bóp còn mỗi cái đầu thẻ, đúng lúc anh cần thấy ô chọn file + nút Tạo. Bí chiều cao thì
      cả cột cuộn MỘT lần, còn hơn là ba ô con cùng cuộn dây chuyền. */
   .iocol > .mcard { flex:0 0 auto; }
+  /* P22d: ô dán chữ thay cho chọn file — cùng một hàng chờ, cùng một event import_read. */
+  .iopaste { display:flex; flex-direction:column; gap:6px; min-width:0; }
+  .iopaste textarea.ta { flex:0 0 auto; min-height:84px; resize:vertical; }
   /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
   button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
@@ -1647,6 +1650,8 @@ let IO_B0 = {};         // payload "trích B0 còn thiếu" gần nhất
 let IO_SEQ = 0;         // đếm response đã nạp — chữ ký khỏi phải stringify cả file export vài MB
 let IO_BUSY = false;    // đã gửi một file, chờ lưới trả lời: ô chọn file PHẢI khóa tới lúc đó, vì
                         // repaint() dựng lại input nên `pick.disabled = true` chỉ sống tới lượt vẽ kế.
+let IO_PASTE = "";      // chữ anh dán ở ô Import — sống ở module vì repaint() dựng lại textarea
+                        // mỗi 2s khi luồng nền chạy; để mất chữ đang gõ giữa chừng thì không ai dùng nổi.
 
 function ioModel() { return MODEL.io && typeof MODEL.io === "object" ? MODEL.io : {}; }
 function ioCap() { return mib(ioModel().max_bytes, 8); }
@@ -1660,8 +1665,8 @@ function closeIo() { IO_OPEN = false; repaint(); }
 
 function ioButton() {
   const todo = Number(ioModel().b0_todo || 0);
-  const b = button("📥 Import · Export", "Thêm bài từ file link/JSON (có xem trước rồi mới tạo folder) và xuất"
-    + " đúng phần đang hiện ra file" + (todo ? " · còn " + todo + " bài chờ trích B0" : ""),
+  const b = button("📥 Import · Export", "Thêm bài từ file link/JSON hoặc chữ dán (có xem trước rồi mới tạo folder)"
+    + " và xuất đúng phần đang hiện ra file" + (todo ? " · còn " + todo + " bài chờ trích B0" : ""),
     () => { if (IO_OPEN) closeIo(); else openIo(); });
   b.id = "iobtn";
   return b;
@@ -1707,9 +1712,76 @@ function ioFilePicker() {
   return pick;
 }
 
+// P22d: dán chữ đi cùng một hàng đợi với chọn file — base64 UTF-8, rồi import_read/import_commit như cũ.
+// Tên giả chỉ để parse_import chọn CÁCH ĐỌC (mở đầu bằng [ hay { -> JSON, còn lại một dòng một link);
+// không mở thêm đường đọc thứ hai, nên "file hay chữ" không đổi kết quả tạo folder.
+function b64Utf8(text) {
+  const bytes = new TextEncoder().encode(String(text));
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 8192)
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  return btoa(bin);
+}
+
+function ioPasteName(text) {
+  return /^[\[{]/.test(String(text).replace(/^\ufeff+/, "")) ? "chữ-dán.json" : "chữ-dán.txt";
+}
+
+function ioPasteField() {
+  const wrap = el("div", "iopaste");
+  const ta = document.createElement("textarea");
+  ta.className = "ta";
+  ta.value = IO_PASTE;
+  ta.placeholder = "…hoặc dán thẳng nội dung vào đây thay vì lưu file: JSON đúng dạng lưới Export"
+    + " (caption + link ảnh có sẵn, B0 chỉ tải ảnh), hoặc mỗi dòng một link Facebook.";
+  ta.title = "Dán chữ thay cho chọn file — lưới vẫn ĐỌC TRƯỚC rồi mới tạo bài, chưa sửa folder nào."
+    + " Mở đầu bằng [ hay { thì đọc là JSON, còn lại coi là một dòng một link. Trần " + ioCap() + " MB."
+    + " Chọn file SAU thì file đó là nội dung sẽ tạo, dán chữ SAU thì chữ đó.";
+  const max = Number(ioModel().max_bytes || 0);
+  const go = button("👁 Xem trước chữ vừa dán",
+    "Đếm bài + liệt kê từng bài ở ô Xem trước — chưa tạo folder nào. Bấm “➕ Tạo N bài mới” mới thật sự tạo.",
+    b => {
+      b.disabled = true;
+      const text = String(IO_PASTE || "").trim();
+      if (!text) {
+        IO_FILE = null;
+        IO_STATE = { kind: "preview", name: "chữ vừa dán",
+                     error: "Ô dán đang trống — dán JSON dạng lưới Export, hoặc mỗi dòng một link Facebook." };
+        repaint();
+        return;
+      }
+      const size = new TextEncoder().encode(text).length;
+      if (max && size > max) {  // đừng gửi mấy chục MB qua WebSocket chỉ để Python từ chối
+        IO_FILE = null;
+        IO_STATE = { kind: "preview", name: "chữ vừa dán",
+                     error: (size >= 1048576 ? Math.round(size / 1048576) + " MB"
+                       : size >= 1024 ? Math.round(size / 1024) + " KB" : size + " B")
+                       + " vượt trần " + ioCap() + " MB của một lần import — dán ít bài hơn, hoặc lưu ra file rồi chọn." };
+        repaint();
+        return;
+      }
+      const name = ioPasteName(text);
+      IO_BUSY = true;  // một event mỗi lượt vẽ: chờ lưới đọc xong mới được dán/xem lại
+      IO_FILE = { name, data: b64Utf8(text) };
+      IO_STATE = { kind: "reading", name };
+      send({ source: "import_read", name, data: IO_FILE.data });
+      repaint();
+    });
+  ta.disabled = IO_BUSY;
+  go.disabled = IO_BUSY || !ta.value.trim();
+  ta.addEventListener("input", () => {
+    IO_PASTE = ta.value;
+    go.disabled = !!IO_BUSY || !ta.value.trim();  // bật nút ngay khi có chữ, khỏi chờ lượt vẽ kế
+  });
+  ta.addEventListener("click", e => e.stopPropagation());
+  wrap.appendChild(ta);
+  wrap.appendChild(go);
+  return wrap;
+}
+
 function ioImportCard() {
   const st = IO_STATE || {};
-  const body = [ioFilePicker()];
+  const body = [ioFilePicker(), ioPasteField()];
   let state = "pending";
   if (st.error) {
     state = "error";
@@ -1734,8 +1806,12 @@ function ioImportCard() {
         send({ source: "import_commit", name: String((IO_FILE || {}).name || st.name || ""), data: String((IO_FILE || {}).data || "") });
       });
     go.disabled = !kept || !!st.again || !IO_FILE;
-    if (!IO_FILE && !st.again && kept) body.push(ioNote("· lưới không giữ hộ file giữa hai lần mở bảng — chọn lại file ở ô trên rồi bấm Tạo.", "bad"));
-    if (st.again) body.push(ioNote("✓ File này vừa import xong — chọn lại một file khác, hoặc Export rồi sửa trong workspace.", "ok"));
+    if (!IO_FILE && !st.again && kept)
+      body.push(ioNote("· lưới không giữ hộ nội dung giữa hai lần mở bảng —"
+        + " chọn lại file hoặc dán lại chữ ở ô trên rồi bấm Tạo.", "bad"));
+    if (st.again)
+      body.push(ioNote("✓ Nội dung này vừa import xong — chọn file khác / dán chữ khác,"
+        + " hoặc Export rồi sửa trong workspace.", "ok"));
     body.push(go);
   } else if (st.kind === "commit") {
     state = st.again ? "error" : "done";
@@ -1743,13 +1819,16 @@ function ioImportCard() {
     if (!st.again && Number(st.made || 0))
       body.push(ioNote("⏳ " + st.made + " bài đã vào luồng nền trích B0 — ô B0 xanh lá khi từng bài xong."));
   } else {
-    body.push(ioNote("Chưa chọn file. CSV/TXT/XLSX: một dòng một link → B0 trích caption + ảnh. "
-      + "JSON đúng dạng Export: caption + ảnh lấy THẲNG từ file, B0 chỉ tải ảnh."));
+    body.push(ioNote("Chưa có gì để import. Chọn file ở ô trên, hoặc dán chữ vào ô dưới."
+      + " CSV/TXT/XLSX: một dòng một link → B0 trích caption + ảnh. "
+      + "JSON đúng dạng Export: caption + ảnh lấy THẲNG từ nội dung, B0 chỉ tải ảnh."));
   }
-  return card({ title: "📥 Import file → bài mới", state: state, body: body,
-    help: ["Import: file ở máy → folder story mới, ĐỌC TRƯỚC rồi mới tạo.",
+  return card({ title: "📥 Import — file hoặc dán chữ", state: state, body: body,
+    help: ["Import: file ở máy hoặc chữ dán vào ô → folder story mới, ĐỌC TRƯỚC rồi mới tạo.",
       "CSV/TXT/XLSX: mỗi dòng một link bài viết/reel (cột A) — B0 trích caption + ảnh từ link đó.",
       "JSON: đúng dạng lưới Export — caption lấy thẳng từ “text”, ảnh từ “media[].photo_image.uri”, nên B0 chỉ tải ảnh chứ không đọc lại bài.",
+      "Ô dán chữ đi ĐÚNG đường của file (cùng xem trước, cùng bấm Tạo, cùng trần dung lượng) — mở đầu bằng [ hay { thì đọc là JSON, còn lại là một dòng một link.",
+      "Chọn file và dán chữ là hai nguồn của cùng một lần tạo: nguồn nào bấm Xem trước SAU thì nguồn đó sẽ được tạo.",
       "Trần " + ioCap() + " MB và " + Number(ioModel().max_rows || 200) + " bài một lần; dòng trùng link tự bỏ, dòng vượt trần hiện ở ô Xem trước.",
       "Bấm “➕ Tạo N bài mới” là tạo thật N folder + hẹn B0 — chưa bấm thì chưa có gì thay đổi.",
       "Import xong mà bài vẫn thiếu caption (link riêng tư) → dùng thẻ “🔁 B0 còn thiếu” bên dưới."] });
@@ -1837,10 +1916,10 @@ function ioPreviewCard() {
         () => downloadIo(ex)));
     } else body.push(ioNote("⚠ " + String(ex.line || ""), "bad"));  // quá trần: nói rõ chứ không cắt im
   }
-  if (!body.length) body.push(ioNote("Chưa có gì để xem. Chọn file ở ô Import, hoặc bấm một dạng ở ô Export —"
-    + " nội dung thật sẽ hiện ngay đây trước khi anh bấm Tạo / ⬇ Lưu."));
+  if (!body.length) body.push(ioNote("Chưa có gì để xem. Chọn file hoặc dán chữ ở ô Import, hoặc bấm một dạng ở ô"
+    + " Export — nội dung thật sẽ hiện ngay đây trước khi anh bấm Tạo / ⬇ Lưu."));
   return card({ title: "👁 Xem trước", state: state, body: body,
-    help: ["Chữ lưới ĐỌC ĐƯỢC từ file/vừa dựng, không phải chữ diễn giải — nên đây là chỗ phát hiện chọn sai file.",
+    help: ["Chữ lưới ĐỌC ĐƯỢC từ file/nội dung dán/vừa dựng, không phải chữ diễn giải — nên đây là chỗ phát hiện chọn sai file.",
       "Import: mỗi dòng là một bài sẽ tạo (link — caption đầu bài · số ảnh trong file). Dòng bị bỏ hiện kèm lý do.",
       "Export: xem trước đoạn ĐẦU của file (nội dung đầy đủ vẫn tải về bằng ⬇, kể cả khi ở đây bị cắt).",
       "Bảng này không phải hàng đợi: chưa bấm ➕ Tạo / ⬇ Lưu thì chưa có folder hay file nào."],
@@ -1894,7 +1973,7 @@ function ioNode() {
   head.appendChild(el("span", "mpos", visible().length + "/" + rows().length + " bài đang hiện"));
   head.appendChild(helpChip(["Bảng Import/Export — làm cả hai chiều mà không rời khỏi lưới.",
     "Bố cục: TRÁI là những ô thao tác (trên Import, giữa Export, dưới B0), PHẢI là ô Xem trước nội dung thật — bên trái bấm gì thì bên phải hiện chữ đó trước khi tạo file/folder.",
-    "Import: chọn file → lưới đọc và ĐẾM (chưa tạo gì) → bấm “➕ Tạo N bài mới” mới sinh folder + hẹn B0.",
+    "Import: chọn file HOẶC dán chữ → lưới đọc và ĐẾM (chưa tạo gì) → bấm “➕ Tạo N bài mới” mới sinh folder + hẹn B0.",
     "Export: bấm một dạng → lưới dựng nội dung từ đúng phần đang hiện → bấm “⬇ Lưu …” trình duyệt mới tải file về.",
     "Mọi số liệu lấy từ folder story tại thời điểm bấm, không có bản nháp nào được giữ hộ giữa hai lần mở bảng.",
     "File import đi trong event nên có trần " + ioCap() + " MB; nhiều hơn thì tách file hoặc chép thẳng vào workspace.",
