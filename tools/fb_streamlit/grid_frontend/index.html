@@ -137,6 +137,7 @@
   .ioitem .ioc { min-width:0; flex:1 1 auto; display:flex; flex-direction:column; gap:3px; }
   .ioitem .ioux { display:flex; gap:5px; align-items:center; min-width:0; }
   .ioitem .ioux a { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ioitem .iomut { font-style:italic; opacity:.8; flex:0 0 auto; }
   .ioitem .iocap { line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere;
     display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
   .ioitem .iocap.full { -webkit-line-clamp:unset; display:block; }
@@ -1947,7 +1948,7 @@ function ioItemCard(item) {
     a.rel = "noopener noreferrer";
     a.title = "Mở bài gốc để đối chiếu — chưa tạo folder nào.";
     line.appendChild(a);
-  } else line.appendChild(el("span", "iocap none", "(không link)"));
+  } else line.appendChild(el("span", "iomut", "(không link)"));
   if (n) line.appendChild(el("span", "ioimg", n + " ảnh"));
   col.appendChild(line);
   const capText = String(item.caption || "").trim();

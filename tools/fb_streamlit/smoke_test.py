@@ -4090,6 +4090,10 @@ check("P22e ảnh tải không được thì Ô TỰ NÓI ✕ Kèm lý do — im
 check("P22e trạng thái 'xem hết' caption SỐNG QUA LƯỢT VẼ (IO_CAPS ở module + có mặt trong ioSig) — để trong DOM thì tick 2s xóa sạch",
       "const IO_CAPS = new Set()" in _p22_fe and "Array.from(IO_CAPS).sort().join" in _p22_fe.split("function ioSig")[1].split("function syncIo")[0]
       and "IO_CAPS.add(raw)" in _p22_item_src and '"iocap" + (IO_CAPS.has(raw) ? " full" : "")' in _p22_item_src)
+check("P22e '.iocap' CHỈ là caption — nhãn '(không link)' phải class riêng, nếu không querySelector('.iocap') đầu tiên vớ phải nó thay vì chữ của bài",
+      'el("span", "iomut", "(không link)")' in _p22_item_src
+      and '"iocap none"' not in _p22_fe.split("function ioItemCard")[1].split("function ioPreviewCard")[0]
+      and ".ioitem .iomut" in _p22_fe)
 _p22_paste_slice = _p22_fe.split("function ioPasteField")[1].split("function ioImportCard")[0]
 check("P22d ô dán nằm TRONG thẻ Import và gửi lại đúng import_read — không mở event 'import_paste' thứ hai",
       "body = [ioFilePicker(), ioPasteField()]" in _p22_fe
