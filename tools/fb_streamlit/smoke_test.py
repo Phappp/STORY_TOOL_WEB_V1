@@ -2717,26 +2717,26 @@ _yes, _no = _link_cell.split("if (raw.trim()) {", 1)[1].split("} else {", 1)
 check("P18b hàng lưới mang link NGUYÊN VĂN — JS copy thẳng từ row, không phải rút gọn để hiển thị",
       _p18b_rows[_p18b_sid]["link"] == "https://fb.watch/p18b-full"
       and _p18b_rows[_p18b_blank]["link"] == "")
-check("P18b 📋 copy tại chỗ bằng copyToClipboard(raw) — link đã nằm trong row nên không đốt một lượt event như ô B1/B3",
+check("P18b nút copy tại chỗ bằng copyToClipboard(raw) — link đã nằm trong row nên không đốt một lượt event như ô B1/B3",
       'copyToClipboard(raw' in _link_cell and "send(" not in _link_cell
       and "requestContent" not in _link_cell and "copyField" not in _link_cell)
-check("P18b link trống thì KHÔNG vẽ nút copy — đừng hứa một cú bấm rỗng; ✎ vẫn còn để nhập",
-      "📋" in _yes and "📋" not in _no and 'el("span", "muted", "—")' in _no
-      and 'button("✎"' in _link_cell and "EDITING = { id:" in _link_cell)
-check("P18b kéo cột Link hẹp vẫn còn đủ hai nút: chữ link co lại bằng \"…\", 📋/✎ không bị cắt",
+check("P18b link trống thì KHÔNG vẽ nút copy — đừng hứa một cú bấm rỗng; nút bút vẫn còn để nhập",
+      'iconButton("copy"' in _yes and 'iconButton("copy"' not in _no and 'el("span", "muted", "—")' in _no
+      and 'iconButton("pencil"' in _link_cell and "EDITING = { id:" in _link_cell)
+check("P18b kéo cột Link hẹp vẫn còn đủ hai nút: chữ link co lại bằng \"…\", hai nút icon không bị cắt",
       "td.link .lnk { display:flex" in _js_p18b
       and "td.link .lnk a.link { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis" in _js_p18b
       and "td.link .lnk button.ln { flex:0 0 auto" in _js_p18b)
 check("P18b tiêu đề cột + chữ gợi ý nói đủ ba việc của ô Link (mở · copy · sửa) — một nút một việc",
-      '📋 = copy nguyên link' in _js_p18b and "Copy nguyên link đã đăng" in _link_cell
-      and "📋 ở cột Link để copy nguyên link đã đăng" in _js_p18b)
+      'nút copy = nguyên văn link' in _js_p18b and "Copy nguyên link đã đăng" in _link_cell
+      and "nút copy ở cột Link để copy nguyên link đã đăng" in _js_p18b)
 shutil.rmtree(_p18b_box, ignore_errors=True)
 
 # --- P18c: ← / → trong modal nhảy bài trước/kế ngay trên danh sách đang thấy, giữ nguyên tab ---
 _js_p18c = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
 _nav_p18c = _js_p18c[_js_p18c.index("function neighbours"):_js_p18c.index("function navButton")]
 _navbtn_p18c = _js_p18c[_js_p18c.index("function navButton"):_js_p18c.index("\n}", _js_p18c.index("function navButton"))]
-_head_p18c = _js_p18c[_js_p18c.index("head.appendChild(tabs);"):_js_p18c.index('button("✕"')]
+_head_p18c = _js_p18c[_js_p18c.index("head.appendChild(tabs);"):_js_p18c.index('iconButton("cross", "Đóng (Esc)"')]
 _keys_p18c = _js_p18c[_js_p18c.index('document.addEventListener("keydown"'):
                       _js_p18c.index("\n});", _js_p18c.index('document.addEventListener("keydown"'))]
 _sig_p18c = _js_p18c[_js_p18c.index("function modalSig"):
@@ -3782,9 +3782,9 @@ check("P20 'không scroll' nằm ở CSS chứ không phải chữ hứa: hàng 
       and "flex:1 1 auto; min-height:0; overflow:hidden; }" in _css20
       and ".mcard .cbd {" in _css20 and "overflow:auto" in _css20[_css20.index(".mcard .cbd {"):_css20.index(".mcard textarea.ta")]
       and "max-height:calc(100vh - 40px); display:flex; flex-direction:column;" in _css20)
-check("P20 copy trong thẻ là ICON (📋/↗/🔤) — hành động vẫn đúng một việc, chữ giải thích đi title + data-tip",
-      'button("📋", tip, bb => copyField(row, field, bb, flashId, true), "ico")' in _f20("copyIcon")
-      and 'el("a", "link ico open", "↗")' in _f20("openIcon")
+check("P20 copy trong thẻ là ICON một mình (copy · mở · 🔤) — hành động vẫn đúng một việc, chữ giải thích đi title + data-tip",
+      'iconButton("copy", tip, bb => copyField(row, field, bb, flashId, true), "ico")' in _f20("copyIcon")
+      and 'iconLink("external", tip, url, "ico")' in _f20("openIcon")
       and 'title: "📝 Prompt "' in _f20("promptCard") and "actions: actions" in _f20("promptCard"))
 check("P20 icon copy nhỏ đủ để hai thẻ nằm ngang không bị nuốt: button.b.ico thắng button.b (khai báo sau cùng lớp)",
       "button.b.ico {" in _css20 and "a.link.ico {" in _css20 and ".qhelp {" in _css20)
@@ -4384,14 +4384,102 @@ check("P21e chỉ đổi NHÃN báo, không đổi thứ vào clipboard: cột L
       "copyToClipboard(raw, ok =>" in _p21e_cell and "copyToClipboard(saved, ok =>" in _p21e_bar)
 check("P21e ✓ là trạng thái TẠM: flash() ghi nhãn cũ lại sau 1.4s — tick dính vĩnh viễn thì hàng sẽ "
       "còn báo 'đã copy' dù link vừa bị đổi/xóa",
-      "const old = b.textContent;" in _p21e_flash and "b.textContent = old;" in _p21e_flash
-      and "}, 1400);" in _p21e_flash)
+      "const old = b.dataset.icon ? iconNode(b.dataset.icon) : b.textContent;" in _p21e_flash
+      and "b.replaceChildren(old);" in _p21e_flash and "}, 1400);" in _p21e_flash)
 check("P21e không lan sang đường copy QUA PYTHON: ô B1/B3 trong lưới vẫn dùng chữ (không phải icon), "
       "còn icon 📋 trong đầu thẻ vẫn một ký tự — nguyên tắc 'icon thì ngắn' nằm ở tham số short",
       'const yes = short ? "✓" : "✓ đã copy"' in _p21e_fe
       and 'copyField(row, STEP_FIELD[step], b, b.dataset.flash);' in _p21e_fe
       and "copyField(row, field, bb, flashId, true)" in _p21e_fe)
 # --- hết P21e ---
+
+# --- P21f: icon SVG theo ngôn ngữ legacy FX97 cho các NÚT MỘT MÌNH (copy · tick · mở · bút · cộng · xóa · bảng) ---
+_p21f_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p21f_css = _p21f_fe[:_p21f_fe.index("</style>")]
+_p21f_reg = _p21f_fe.split("const ICON_PATHS = {")[1].split("\n};")[0]
+_p21f_icon_btn = _p21f_fe.split("function iconButton(")[1].split("\n}")[0]
+_p21f_icon_link = _p21f_fe.split("function iconLink(")[1].split("\n}")[0]
+_p21f_menu_item = _p21f_fe.split("function menuItem(")[1].split("\n}")[0]
+_p21f_flash = _p21f_fe.split("function flash(")[1].split("\n}")[0]
+_p21f_link = _p21f_fe.split("function linkCell")[1].split("\n}")[0]
+_p21f_edit = _p21f_fe.split("function linkEditor")[1].split("\n}")[0]
+_p21f_queue = _p21f_fe.split("function queueCell")[1].split("\n}")[0]
+_p21f_act = _p21f_fe.split("function actCell")[1].split("\n}")[0]
+_p21f_menu = _p21f_fe.split("function rowMenu")[1].split("\n}")[0]
+
+check("P21f icon dùng ĐÚNG luật của legacy FX97 (status_grid_frontend:211 'outline SVG, no emoji, "
+      "no icon fonts'): viewBox 24 + fill:none + nét stroke:currentColor -> class .ok/.bad đổi MÀU được, "
+      "điều emoji 📋 làm không được vì glyph màu không đọc CSS",
+      'svg.setAttribute("viewBox", "0 0 24 24");' in _p21f_fe
+      and "svg.ic { width:16px; height:16px; display:block; fill:none; stroke:currentColor; stroke-width:1.9;" in _p21f_css
+      and "stroke-linecap:round; stroke-linejoin:round; }" in _p21f_css
+      and "font-awesome" not in _p21f_css and "cdn." not in _p21f_css)
+check("P21f hai glyph chép NGUYÊN VĂN đường dẫn legacy (copy của FX11049_ICONS · layout của FX1126_ICONS); "
+      "bốn glyph còn lại (check · cross · external · pencil · plus · trash) legacy chưa vẽ thì vẽ thêm "
+      "cùng kiểu — registry là hằng số, không có URL icon nào",
+      '<rect x="8" y="8" width="12" height="12" rx="2"/>' in _p21f_reg
+      and '<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M12 4v16"/>' in _p21f_reg
+      and all(k + ":" in _p21f_reg for k in ("check", "cross", "external", "pencil", "plus", "trash"))
+      and "http" not in _p21f_reg)
+check("P21f innerHTML CHỈ nối hằng số tự viết, dựng MỘT lần lúc tải trang rồi cloneNode: chữ của hàng "
+      "lưới / URL / tên file không được đi vào đường vẽ icon (link là chữ người đưa lên)",
+      _p21f_fe.count("svg.innerHTML = ICON_PATHS[name];") == 1
+      and "Object.keys(ICON_PATHS).forEach" in _p21f_fe and ".cloneNode(true)" in _p21f_fe
+      and "row." not in _p21f_reg and "MODEL." not in _p21f_reg and "+" not in _p21f_reg)
+check("P21f nút MỘT MÌNH không còn là emoji: cột Link (copy · bút) · nút ✓/✕ khi sửa link · ô hàng đợi "
+      "chưa xếp · bảng mở modal · hai nút ✕ đóng — và icon thì phải có aria-label vì trên nút hết chữ",
+      'iconButton("copy"' in _p21f_link and 'iconButton("pencil"' in _p21f_link
+      and 'iconButton("check"' in _p21f_edit and 'iconButton("cross"' in _p21f_edit
+      and 'iconButton("plus"' in _p21f_queue and 'iconButton("layout"' in _p21f_act
+      and _p21f_fe.count('button("📋"') == 0 and _p21f_fe.count('button("✎"') == 0
+      and _p21f_fe.count('button("☰"') == 0 and 'button("✕", "Đóng (Esc)"' not in _p21f_fe
+      and 'b.setAttribute("aria-label", title);' in _p21f_icon_btn
+      and 'a.setAttribute("aria-label", title);' in _p21f_icon_link)
+check("P21f bài ĐÃ xếp hàng vẫn hiện CON SỐ thứ tự bằng chữ (P10a: nhãn phải nói đúng trạng thái) — "
+      "chỉ ô CHƯA xếp mới là dấu cộng; hai tooltip cũ (xếp CUỐI / rút thật) giữ nguyên từng chữ",
+      'button(String(row.queue_pos || "·"), tip, fn, "q on")' in _p21f_queue
+      and "＋" not in _p21f_queue and "xếp CUỐI" in _p21f_queue and "rút luôn" in _p21f_queue)
+check("P21f flash trên nút icon: ✓/✕ là SVG check/cross (không phải glyph chữ) và restore về ĐÚNG ICON "
+      "GỐC — ghi textContent rồi khôi phục '' thì ô 22px sẽ thành ô TRỐNG sau 1,4 giây",
+      'const old = b.dataset.icon ? iconNode(b.dataset.icon) : b.textContent;' in _p21f_flash
+      and 'iconNode(label === "✓" ? "check" : "cross")' in _p21f_flash
+      and "b.replaceChildren(old);" in _p21f_flash and "b.textContent = old;" not in _p21f_flash)
+check("P21f menu ⋮ = icon + chữ (khuôn fx1126Attr của legacy): chữ nằm ở span .mlabel vì nút arming đổi "
+      "chữ, gán textContent lên CHÍNH nút sẽ xóa phăng cái icon; nút xóa phải manual để arm được 2 click",
+      'menuItem("trash", "Dời folder vào .trash", null, "danger", true)' in _p21f_menu
+      and "danger.label.textContent" in _p21f_menu
+      and 'el("span", "mlabel", label)' in _p21f_menu_item
+      and "if (!manual) b.addEventListener" in _p21f_menu_item
+      and 'add("external", "Mở bài này ở trang Tạo bài"' in _p21f_menu
+      and "🗑" not in _p21f_menu and "☑" not in _p21f_menu and "✅" not in _p21f_menu)
+check("P21f ô bấm không teo theo icon: nút icon flex-center + nút .act tối thiểu 26px, "
+      "còn .ln (22px) / .ico (26px) / .q (28px) giữ bề rộng riêng đã đo từ P18b/P20",
+      "button.b.i { display:inline-flex; align-items:center; justify-content:center; padding:0; }" in _p21f_css
+      and "button.b.act { min-width:26px; }" in _p21f_css
+      and "button.ln { width:22px;" in _p21f_css and "button.b.ico { width:26px;" in _p21f_css
+      and "button.q { min-width:28px;" in _p21f_css)
+check("P21f KHÔNG lan sang nút CÓ CHỮ (⚡ · ▶ · ⚠ · 💾 · 🔤 · ⋮ · 📥): những chỗ đó chữ là nội dung, "
+      "thu gọn nhãn là việc P21g — hai việc tách nhau để mỗi lần đổi một thứ",
+      'button("⚡", "Chạy đủ pipeline' in _p21f_act and 'button("⋮"' in _p21f_act
+      and 'button("▶ Bắt đầu"' in _p21f_fe and 'button("⚠ Xếp lỗi vào hàng đợi"' in _p21f_fe
+      and 'button("💾 Lưu"' in _p21f_fe and 'button("🔤"' in _p21f_fe
+      and 'button("📥 Import · Export"' in _p21f_fe)
+check("P21f chữ hướng dẫn không còn gọi một glyph không còn trên nút: tip cột Link · header cột # · "
+      "thẻ Link · dấu ? modal · dòng hint đều nói bằng TÊN VIỆC (nút copy / nút bút / nút bảng)",
+      "📋 = copy" not in _p21f_fe and "☰ mở modal" not in _p21f_fe and "↗ = mở" not in _p21f_fe
+      and "🗑 Dời folder" not in _p21f_fe and "bấm ＋ trước" not in _p21f_fe
+      and "nút copy = nguyên văn link" in _p21f_fe and "nút bảng mở modal" in _p21f_fe)
+check("P21f màu báo THẬT SỰ hiện — lỗi cũ đo được: flash có gắn .ok/.bad nhưng `button.b` khai báo SAU, "
+      "cùng specificity nên color/background/border không đổi một chút (rgb(199,213,229) cả hai trạng thái); "
+      "giờ selector hai lớp .b thắng, và nét vẽ currentColor nên tích/cross lên xanh/càng cua",
+      "button.b.ok { background:var(--done); color:var(--done-t); border-color:var(--done-b); }" in _p21f_css
+      and "button.b.bad { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }" in _p21f_css
+      and "button.ok {" not in _p21f_css and "button.bad {" not in _p21f_css)
+check("P21f giới hạn có chủ đích: rule .ok/.bad nằm TRƯỚC các rule trạng thái pill nên ô B1/B2/B3 vẫn giữ "
+      "màu trạng thái của nó khi flash (flash đổi glyph + class, không được vẽ đè màu 'đang chạy/lỗi')",
+      _p21f_css.index("button.b.ok {") < _p21f_css.index("button.sq.done {")
+      and _p21f_css.index("button.b.bad {") < _p21f_css.index("button.sq.error {"))
+# --- hết P21f ---
 
 # cleanup test rows
 c = db.connect()

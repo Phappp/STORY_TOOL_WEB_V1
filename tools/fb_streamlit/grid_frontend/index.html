@@ -57,12 +57,15 @@
   input.lin { width:calc(100% - 62px); height:22px; font:inherit; font-size:12px; padding:1px 5px;
     border:1px solid var(--accent); border-radius:5px; background:var(--field); color:var(--text); }
   button.ln { width:22px; padding:0; height:22px; margin-left:2px; }
-  /* ô Link có hai nút icon (📋 ✎): cho chữ link co lại bằng "…", hai nút KHÔNG bị cắt khi kéo cột hẹp */
+  /* ô Link có hai nút icon (copy · bút): cho chữ link co lại bằng "…", hai nút KHÔNG bị cắt khi kéo cột hẹp */
   td.link .lnk { display:flex; align-items:center; gap:2px; min-width:0; }
   td.link .lnk a.link { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   td.link .lnk button.ln { flex:0 0 auto; margin-left:0; }
-  button.ok { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
-  button.bad { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }
+  /* P21f đo thật: hai class báo này trước đây CHẾT hẳn — `button.b` khai báo SAU (offset 19675 so với
+     4281) mà cùng specificity nên color/background/border-color không nhúc nhích, flash chỉ là đổi glyph.
+     Thêm lớp .b thắng đúng nghĩa (0,2,1 > 0,1,1); icon SVG vẽ bằng currentColor nên tích/cross lên màu. */
+  button.b.ok { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
+  button.b.bad { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }
   /* modal result của bước — mở bằng click đúp ô B1/B2/B3 */
   .overlay { position:fixed; inset:0; z-index:40; background:rgba(4,8,14,.66);
     display:flex; align-items:flex-start; justify-content:center; padding:20px 12px; }
@@ -77,7 +80,7 @@
     height:24px; padding:0 9px; cursor:pointer; color:var(--muted); }
   .mtab.on { background:var(--running); color:var(--running-t); border-color:var(--running-b); font-weight:650; }
   .mtools { display:flex; gap:6px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
-  /* P18d: ô Link ngay dưới đầu modal — sửa link đã đăng / link video tại chỗ, khỏi đóng modal bấm ✎ ở cột */
+  /* P18d: ô Link ngay dưới đầu modal — sửa link đã đăng / link video tại chỗ, khỏi đóng modal bấm nút bút ở cột */
   .mlink { display:flex; gap:6px; align-items:center; padding:6px 10px; border-bottom:1px solid var(--border);
     flex-wrap:wrap; background:var(--header); }
   .mlink .k { color:var(--muted); font-size:12px; }
@@ -175,6 +178,18 @@
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
     flex:0 0 auto; border:1px solid var(--border); border-radius:6px; background:var(--btn); font-size:12px; }
   a.link.ico:hover { background:var(--btn-h); text-decoration:none; }
+  /* P21f: icon SVG theo ngôn ngữ FX97 — nét vẽ nên ĐỔI MÀU theo currentColor (emoji 📋 là glyph màu
+     cứng, không đọc được class .ok/.bad), và 16px cố định trong ô 22/26px không phụ thuộc phông máy.
+     Nút chỉ có icon phải flex-center, nếu không svg là block sẽ dính mép trên. */
+  svg.ic { width:16px; height:16px; display:block; fill:none; stroke:currentColor; stroke-width:1.9;
+    stroke-linecap:round; stroke-linejoin:round; }
+  button.b.i { display:inline-flex; align-items:center; justify-content:center; padding:0; }
+  /* Nút icon không có cls riêng (✕ đóng modal, các nút ở cột Thao tác) vẫn phải là mục tiêu 26px —
+     icon 16px trơ trọi trong ô 16px là bấm hụt. .ln/.ico/.q đã có bề rộng riêng nên không đụng. */
+  button.b.act { min-width:26px; }
+  a.link.i { display:inline-flex; align-items:center; gap:4px; }
+  .menu button { display:flex; align-items:center; gap:7px; }
+  .menu button svg.ic { width:14px; height:14px; flex:0 0 auto; }
   /* Dấu "?" dẫn chữ: đi đúng đường thẻ hover của viên pill (P13b) — nó mang data-tip nên
      delegated handler bắt được, không cần thêm listener riêng cho modal. */
   .qhelp { flex:0 0 auto; width:19px; height:19px; border-radius:50%; border:1px solid var(--border);
@@ -267,14 +282,14 @@ const GRID_STEPS = ["b0", "b1", "b2", "b3", "b4"];
 const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy · xanh dương đang chạy · xanh lá xong · đỏ lỗi · đỏ nét đứt treo >15 phút · cam mất file";
 // Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
 const COLS = [
-  { key: "q", label: "#", w: 40, min: 34, align: "c", tip: "# = thứ tự hàng đợi: bài bấm ＋ trước làm trước, bài mới xếp cuối. Bấm số đó để bỏ khỏi hàng đợi." },
+  { key: "q", label: "#", w: 40, min: 34, align: "c", tip: "# = thứ tự hàng đợi: bài bấm dấu cộng trước làm trước, bài mới xếp cuối. Bấm số đó để bỏ khỏi hàng đợi." },
   { key: "id", label: "story", w: 92, min: 64 },
   { key: "src", label: "nguồn", w: 210, min: 80 },
   // 5 viên pill 32px + kẽ 3px mỗi viên + đệm ô 8+8 = 191px; min chặn để prefs cũ (156) không cắt chữ B4
   { key: "steps", label: "B0 B1 B2 B3 B4", w: 198, min: 192, align: "c" },
   { key: "img", label: "ảnh", w: 48, min: 40, align: "c" },
   { key: "status", label: "status", w: 66, min: 50, align: "c" },
-  { key: "link", label: "Link", w: 220, min: 90, tip: "Link bài của bạn đã đăng — chữ = mở bài, 📋 = copy nguyên link, ✎ = sửa link ngay tại ô" },
+  { key: "link", label: "Link", w: 220, min: 90, tip: "Link bài của bạn đã đăng — chữ = mở bài · nút copy = nguyên văn link · nút bút = sửa link ngay tại ô" },
   { key: "act", label: "", w: 108, min: 96 },
 ];
 const COLS_KEY = "fbgrid:cols:v1";
@@ -398,6 +413,67 @@ function button(label, title, fn, cls) {
   return b;
 }
 
+// ---- P21f: icon cho các nút một mình (copy · tick · mở-ra-ngoài · sửa · hàng đợi · xóa · mở modal) ----
+// Luật icon lấy nguyên từ legacy FX97 (status_grid_frontend/index.html:211: "outline SVG, no emoji and
+// no external icon fonts"): viewBox 24, fill:none, stroke:currentColor, nét ~1.9, đầu nối tròn.
+// copy + layout là đường dẫn COPY LẠI của legacy (FX11049_ICONS.copy · FX1126_ICONS.layout);
+// check · cross · external · pencil · plus · trash legacy chưa vẽ nên vẽ thêm ĐÚNG CÙNG kiểu.
+// Không dùng emoji: glyph màu không đổi màu theo .ok/.bad, rộng theo phông máy, và ô 22px thì lệch tâm.
+const SVG_NS = "http://www.w3.org/2000/svg";
+const ICON_PATHS = {
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
+  layout: '<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M12 4v16"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  cross: '<path d="M18 6 6 18M6 6l12 12"/>',
+  external: '<path d="M14 4h6v6M20 10l-9 9"/><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/>',
+  pencil: '<path d="M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7 7.5 20h9l1-13"/><path d="M10 11v6M14 11v6"/>',
+};
+// Dựng MỘT lần lúc tải trang từ hằng số tự viết (không chứa chữ của hàng lưới/URL nào), sau đó nhân bản.
+const ICON_NODE = {};
+Object.keys(ICON_PATHS).forEach(name => {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("class", "ic");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.innerHTML = ICON_PATHS[name];
+  ICON_NODE[name] = svg;
+});
+function iconNode(name) { return (ICON_NODE[name] || ICON_NODE.copy).cloneNode(true); }
+// Icon một mình thì không còn chữ trên nút, nên phần giải thích phải đi aria-label (title vẫn giữ).
+function iconButton(name, title, fn, cls) {
+  const b = button("", title, fn, (cls ? cls + " " : "") + "i");
+  b.dataset.icon = name;
+  b.appendChild(iconNode(name));
+  b.setAttribute("aria-label", title);
+  return b;
+}
+function iconLink(name, title, url, cls) {
+  const a = el("a", "link i " + (cls || ""));
+  a.appendChild(iconNode(name));
+  a.href = String(url);
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.title = title;
+  a.setAttribute("aria-label", title);
+  a.addEventListener("click", e => e.stopPropagation());
+  return a;
+}
+// Nút menu: icon + chữ (cùng khuôn legacy fx1126Attr). Chữ nằm ở span riêng vì nút arming đổi chữ,
+// gán thẳng textContent lên nút sẽ xóa phăng cái icon. manual=True -> caller tự gắn click
+// (nút "dời vào .trash" phải giữ menu mở cho cú xác nhận thứ hai, nên không dùng khuôn đóng-menu).
+function menuItem(icon, label, fn, cls, manual) {
+  const b = el("button", "i " + (cls || ""));
+  b.type = "button";
+  b.appendChild(iconNode(icon));
+  const text = el("span", "mlabel", label);
+  b.appendChild(text);
+  if (!manual) b.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); closeMenu(); fn(); });
+  return { node: b, label: text };
+}
+
 let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {} };
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
@@ -472,10 +548,13 @@ function fallbackRich(value, html) {
 }
 function flash(b, label, cls) {
   if (!b) return;
-  const old = b.textContent;
-  b.textContent = label;
+  // P21f: mặt của nút icon là SVG chứ không phải chữ — giữ nguyên kiểu cũ (ghi textContent) thì khi
+  // restore, ô 22px còn lại là ô TRỐNG vì textContent của một nút chỉ có svg rỗng.
+  const old = b.dataset.icon ? iconNode(b.dataset.icon) : b.textContent;
+  b.replaceChildren(b.dataset.icon && (label === "✓" || label === "✕")
+    ? iconNode(label === "✓" ? "check" : "cross") : label);
   if (cls) b.classList.add(cls);
-  setTimeout(() => { b.textContent = old; if (cls) b.classList.remove(cls); }, 1400);
+  setTimeout(() => { b.replaceChildren(old); if (cls) b.classList.remove(cls); }, 1400);
 }
 function flashSel(sel, label, cls) {
   if (!sel) return;
@@ -672,27 +751,22 @@ function copyField(row, field, b, flashId, short) {
   flash(b, "…", "");
 }
 
-// P20: copy trong đầu thẻ là ICON 📋 một mình — chữ "Copy prompt" dài chiếm hết chỗ của thẻ bên cạnh,
+// P20: copy trong đầu thẻ là ICON một mình — chữ "Copy prompt" dài chiếm hết chỗ của thẻ bên cạnh,
 // mà công việc vẫn đúng một việc: lấy nguyên văn thứ đang hiện. Giải thích đã có ở title và dấu "?".
+// P21f: icon đó là SVG nét vẽ, nên ✓/✕ báo kết quả đổi màu được theo class .ok/.bad.
 function copyIcon(row, field, flashId, tip) {
-  const b = button("📋", tip, bb => copyField(row, field, bb, flashId, true), "ico");
+  const b = iconButton("copy", tip, bb => copyField(row, field, bb, flashId, true), "ico");
   b.dataset.flash = flashId;
   return b;
 }
 // Chữ đã nằm sẵn trong hàng lưới (link, nguồn) thì copy tại chỗ, KHÔNG xin Python một lượt.
 function copyTextIcon(value, flashId, tip) {
-  const b = button("📋", tip, bb => copyToClipboard(String(value), ok => flash(bb, ok ? "✓" : "✕", ok ? "ok" : "bad")), "ico");
+  const b = iconButton("copy", tip, bb => copyToClipboard(String(value), ok => flash(bb, ok ? "✓" : "✕", ok ? "ok" : "bad")), "ico");
   b.dataset.flash = flashId;
   return b;
 }
 function openIcon(url, tip) {
-  const a = el("a", "link ico open", "↗");
-  a.href = String(url);
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
-  a.title = tip;
-  a.addEventListener("click", e => e.stopPropagation());
-  return a;
+  return iconLink("external", tip, url, "ico");
 }
 
 function stateOf(row, step) {
@@ -749,7 +823,7 @@ function stepsCell(row) {
   return td;
 }
 
-// ---- modal kết quả bước: mở bằng click đúp ô B1/B2/B3 (hoặc ☰), chạy bước ngay trong modal ----
+// ---- modal kết quả bước: mở bằng click đúp ô B1/B2/B3 (hoặc nút bảng ở cột Thao tác), chạy bước ngay trong modal ----
 function modalRef() {
   let raw = null;
   try { raw = JSON.parse(lsGet(MODAL_KEY) || "null"); } catch (_) { raw = null; }
@@ -1042,7 +1116,7 @@ const EDITORS = {
 
 // P18d: hai ô link trong modal — cùng một hình, khác chỗ lưu trong story.json và khác tab hiện ra.
 // Link đã đăng hiện ở mọi tab chữ (đang xem caption/SEO thì ghi link ngay tại chỗ, khỏi đóng modal
-// rồi bấm ✎ ở cột); link video chỉ hiện ở tab B4 vì nó không phải thứ cần nhìn khi xem chữ.
+// rồi bấm nút bút ở cột); link video chỉ hiện ở tab B4 vì nó không phải thứ cần nhìn khi xem chữ.
 const LINK_BARS = {
   link: { label: "🔗 Link đã đăng", source: "link_save", stored: "story.json · link",
           tabs: ["b1", "b2", "b3", "link"],
@@ -1155,9 +1229,11 @@ function linkBar(row, kind) {
   bar.appendChild(input);
   bar.appendChild(save);
   if (saved.trim()) {
-    bar.appendChild(button("📋", "Copy nguyên link đang có của " + row.id + " (" + cfg.stored + ") — dán thẳng, khỏi xóa ô",
-      b => copyToClipboard(saved, ok => flash(b, ok ? "✓" : "✕", ok ? "ok" : "bad")), "act"));  // P21e: bản sao của nút 📋 ở cột Link — cùng một kiểu báo
-    const open = el("a", "link", "↗ mở");
+    bar.appendChild(iconButton("copy", "Copy nguyên link đang có của " + row.id + " (" + cfg.stored + ") — dán thẳng, khỏi xóa ô",
+      b => copyToClipboard(saved, ok => flash(b, ok ? "✓" : "✕", ok ? "ok" : "bad")), "act"));  // P21e: bản sao của nút copy ở cột Link — cùng một kiểu báo
+    const open = el("a", "link i");  // P21f: mũi tên ra ngoài là SVG, chữ "mở" vẫn ở lại để đọc hiểu
+    open.appendChild(iconNode("external"));
+    open.appendChild(el("span", "", "mở"));
     open.href = saved;
     open.target = "_blank";
     open.rel = "noopener noreferrer";
@@ -1441,7 +1517,7 @@ function vidPlayer(row) {
   clip.title = (v.name || row.b4meta) + " — bấm ▶ để xem ngay trong modal";
   box.appendChild(clip);
   box.appendChild(el("div", "ioline", "▶ đang phát " + String(v.name || row.b4meta)
-    + " trực tiếp từ folder · ↗ ở góc thẻ mở tab mới"));
+    + " trực tiếp từ folder · nút mở ở góc thẻ mở tab mới"));
   return box;
 }
 
@@ -1492,7 +1568,7 @@ function linkCards(row) {
     linkCard("🔗 Đã đăng", row.link, "(chưa có — gõ ở ô 🔗 phía trên rồi Enter)", true,
       ["Link bài của bạn đã đăng — storage: story.json · link",
        "Sửa tại chỗ: gõ ở ô 🔗 ngay dưới đầu modal, Enter là lưu, lưới và cột Link đổi theo.",
-       "📋 = copy nguyên link, ↗ = mở đúng bài."]),
+       "nút copy = nguyên văn link, nút mở = mở đúng bài."]),
     linkCard("🧭 Nguồn (B0)", row.source, "(chưa có — bài chưa import link)", true,
       ["Link nguồn mà B0 đọc để lấy caption + ảnh refs/ — do B0 ghi, không sửa tay ở đây.",
        "Đổi nguồn: import lại link ở đầu lưới."]),
@@ -1555,10 +1631,10 @@ function modalNode() {
     "Bấm 1 lần ở ô B1/B3 ngoài lưới = copy (B3 copy BẢN ĐÃ RENDER, chữ sạch hết ## và **, dán vào Docs/WordPress/Word còn Heading + in đậm), bấm đúp = mở modal này.",
     "← → hoặc hai nút đầu modal: sang bài trước/kế TRONG ĐÚNG danh sách đang hiện, giữ nguyên tab.",
     "Sửa chữ trong modal là ghi thẳng vào file trong folder bài — file vẫn là nguồn thật; xóa file ngoài ổ thì ô về cam “mất file”.",
-    "Ô 🔗/🎬 ngay dưới đầu modal sửa link (Enter = lưu, 📋 = copy nguyên link, ↗ = mở).",
+    "Ô 🔗/🎬 ngay dưới đầu modal sửa link (Enter = lưu, nút copy = nguyên văn link, nút mở = mở bài).",
     "Dropdown trong thanh dưới là provider riêng cho bước này của bài này, ghi vào story.json — để trống là theo workspace/preset.",
     "Ảnh B2 mở trong modal tới " + mib(MODEL.image_max, 2) + " MB; video không đi qua iframe nên B4 chỉ nhập link."]));
-  head.appendChild(button("✕", "Đóng (Esc)", () => closeModal()));
+  head.appendChild(iconButton("cross", "Đóng (Esc)", () => closeModal(), "act"));
   modal.appendChild(head);
 
   // Thanh hành động: chỉ việc GIAO VIỆC còn giữ nút chữ; copy/chuyển kiểu đã thành icon trong đầu thẻ.
@@ -1630,11 +1706,13 @@ function modalNode() {
 function queueCell(row) {
   const td = el("td", "q");
   const queued = !!row.queued;
-  td.appendChild(button(queued ? String(row.queue_pos || "·") : "＋",
-    queued ? "Bỏ khỏi hàng đợi — số này là thứ tự làm (bài bấm trước làm trước). Nếu bài đã được ⚡ giao vào"
+  const tip = queued
+    ? "Bỏ khỏi hàng đợi — số này là thứ tự làm (bài bấm trước làm trước). Nếu bài đã được ⚡ giao vào"
       + " luồng nền mà chưa bắt đầu thì rút luôn; bài ĐANG chạy thì không cắt giữa lượt AI."
-           : "Thêm bài vào hàng đợi — xếp CUỐI, luồng nền làm hết bài trước rồi tới nó (chạy bằng ⚡ Chạy hàng đợi)",
-    () => send({ source: queued ? "queue_remove" : "queue_add", id: row.id }), "q" + (queued ? " on" : "")));
+    : "Thêm bài vào hàng đợi — xếp CUỐI, luồng nền làm hết bài trước rồi tới nó (chạy bằng ⚡ Chạy hàng đợi)";
+  const fn = () => send({ source: queued ? "queue_remove" : "queue_add", id: row.id });
+  // P21f: bài CHƯA xếp hàng là dấu cộng SVG; bài đã xếp vẫn hiện CON SỐ thứ tự — đó là dữ liệu, không phải icon.
+  td.appendChild(queued ? button(String(row.queue_pos || "·"), tip, fn, "q on") : iconButton("plus", tip, fn, "q"));
   return td;
 }
 
@@ -1672,8 +1750,8 @@ function linkEditor(row, td) {
     send({ source: "link_save", id: row.id, value });
   }
   td.appendChild(input);
-  td.appendChild(button("✓", "Lưu link vào story.json của " + row.id, () => save(), "ln"));
-  td.appendChild(button("✕", "Hủy, giữ link cũ", () => { EDITING = null; leave(); repaint(); }, "ln"));
+  td.appendChild(iconButton("check", "Lưu link vào story.json của " + row.id, () => save(), "ln"));
+  td.appendChild(iconButton("cross", "Hủy, giữ link cũ", () => { EDITING = null; leave(); repaint(); }, "ln"));
   setTimeout(() => { input.focus(); input.select(); }, 0);
 }
 
@@ -1681,7 +1759,7 @@ function linkCell(row) {
   const td = el("td", "link");
   if (EDITING && String(EDITING.id) === String(row.id)) { linkEditor(row, td); return td; }
   const raw = String(row.link || "");
-  // Một hàng ba việc riêng: chữ = mở bài, 📋 = copy nguyên link, ✎ = sửa link.
+  // Một hàng ba việc riêng: chữ = mở bài, nút copy = nguyên link, nút bút = sửa link.
   // Link đã nằm sẵn trong row nên copy KHÔNG phải xin Python một lượt như ô B1/B3.
   const line = el("div", "lnk");
   if (raw.trim()) {
@@ -1691,12 +1769,12 @@ function linkCell(row) {
     a.rel = "noopener noreferrer";
     a.title = raw;
     line.appendChild(a);
-    line.appendChild(button("📋", "Copy nguyên link đã đăng của " + row.id + " — dán thẳng, khỏi mở modal",
+    line.appendChild(iconButton("copy", "Copy nguyên link đã đăng của " + row.id + " — dán thẳng, khỏi mở modal",
       b => copyToClipboard(raw, ok => flash(b, ok ? "✓" : "✕", ok ? "ok" : "bad")), "ln"));  // P21e: NÚT là icon, chữ "đã copy" không nhét vừa ô 22 px
   } else {
     line.appendChild(el("span", "muted", "—"));  // chưa có link thì không vẽ nút copy — khỏi hứa một cú bấm rỗng
   }
-  line.appendChild(button("✎", (raw ? "Sửa link" : "Nhập link") + " của " + row.id,
+  line.appendChild(iconButton("pencil", (raw ? "Sửa link" : "Nhập link") + " của " + row.id,
     () => { EDITING = { id: String(row.id), value: raw }; repaint(); }, "ln"));
   td.appendChild(line);
   return td;
@@ -1738,34 +1816,30 @@ function rowMenu(anchor, row) {
   if (MENU && MENU_ANCHOR === anchor) { closeMenu(); return; }  // bấm ⋮ lần nữa là đóng
   closeMenu();
   const menu = el("div", "menu");
-  const add = (label, fn, cls) => {
-    const b = el("button", cls || "");
-    b.type = "button";
-    b.textContent = label;
-    b.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); closeMenu(); fn(); });
-    menu.appendChild(b);
-    return b;
+  const add = (icon, label, fn, cls) => {
+    const it = menuItem(icon, label, fn, cls);
+    menu.appendChild(it.node);
+    return it;
   };
-  add("↗ Mở bài này ở trang Tạo bài", () => send({ source: "open", id: row.id }));
-  add("✅ Đánh dấu đã đăng", () => send({ source: "mark_posted", id: row.id }));
-  add("☑ Đưa vào / ra hàng đợi", () => send({ source: row.queued ? "queue_remove" : "queue_add", id: row.id }));
-  const danger = el("button", "danger");  // tự xử lý click: add() đóng menu ngay nên không arm được
-  danger.type = "button";
-  danger.textContent = "🗑 Dời folder vào .trash";
+  add("external", "Mở bài này ở trang Tạo bài", () => send({ source: "open", id: row.id }));
+  add("check", "Đánh dấu đã đăng", () => send({ source: "mark_posted", id: row.id }));
+  add("plus", "Đưa vào / ra hàng đợi", () => send({ source: row.queued ? "queue_remove" : "queue_add", id: row.id }));
+  // tự xử lý click: add() đóng menu ngay nên không arm được
+  const danger = menuItem("trash", "Dời folder vào .trash", null, "danger", true);
   let armed = false;
-  danger.addEventListener("click", e => {
+  danger.node.addEventListener("click", e => {
     e.preventDefault();
     e.stopPropagation();
     if (!armed) {
       armed = true;
-      danger.textContent = "🗑 xác nhận dời " + row.id + " vào .trash?";
-      setTimeout(() => { danger.textContent = "🗑 Dời folder vào .trash"; armed = false; }, 4000);
+      danger.label.textContent = "xác nhận dời " + row.id + " vào .trash?";
+      setTimeout(() => { danger.label.textContent = "Dời folder vào .trash"; armed = false; }, 4000);
       return;
     }
     closeMenu();
     send({ source: "archive", id: row.id });
   });
-  menu.appendChild(danger);
+  menu.appendChild(danger.node);
   document.body.appendChild(menu);
   const r = anchor.getBoundingClientRect();
   menu.style.top = Math.max(6, Math.min(r.bottom + 2, window.innerHeight - menu.offsetHeight - 6)) + "px";
@@ -1805,7 +1879,7 @@ function statusCell(row) {
 
 function actCell(row) {
   const td = el("td", "act");
-  td.appendChild(button("☰", "Mở modal xem kết quả từng bước của " + row.id, () => openModal(row.id, "b1"), "act"));
+  td.appendChild(iconButton("layout", "Mở modal xem kết quả từng bước của " + row.id, () => openModal(row.id, "b1"), "act"));
   td.appendChild(button("⚡", "Chạy đủ pipeline B1 → (B2 ∥ B3)", () => send({ source: "run_all", id: row.id }), "act"));
   td.appendChild(button("⋮", "Thêm thao tác với " + row.id + " — mở ở trang Tạo bài · đã đăng · hàng đợi · dời vào .trash",
     b => rowMenu(b, row), "act"));
@@ -1874,7 +1948,7 @@ function patchCells(list) {
       const old = tr.children[k];
       // chỉ ô đang NHẬN CHỮ (Link sửa tay) mới để yên cho tick sau vá — kẻo anh gõ dở bị xóa giữa
       // chữ. Bỏ qua mọi ô có focus thì sai: Chrome cho <button> nhận focus khi bấm
-      // nên ô ＋/# bị hoãn vô hạn, badge đứng yên dù server đã đổi.
+      // nên ô dấu cộng/# bị hoãn vô hạn, badge đứng yên dù server đã đổi.
       if (!old || isTypingIn(a, old)) return;
       const td = cellNode(row, c.key);
       tr.replaceChild(td, old);
@@ -2311,7 +2385,7 @@ function ioNode() {
     "Mọi số liệu lấy từ folder story tại thời điểm bấm, không có bản nháp nào được giữ hộ giữa hai lần mở bảng.",
     "File import đi trong event nên có trần " + ioCap() + " MB; nhiều hơn thì tách file hoặc chép thẳng vào workspace.",
     "Việc dài (B0, import hàng loạt) chạy trong luồng nền — đóng bảng không làm nó dừng."]));
-  head.appendChild(button("✕", "Đóng (Esc)", closeIo));
+  head.appendChild(iconButton("cross", "Đóng (Esc)", closeIo, "act"));
   modal.appendChild(head);
   // P22c: TRÁI = thao tác (import trên, export dưới, B0 cuối), PHẢI = ô Xem trước nội dung thật.
   const body = el("div", "mbody mcards iogrid");
@@ -2701,7 +2775,7 @@ function render(args, force) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, còn thêm bài hàng loạt thì làm ở nút “📥 Import · Export” cạnh ô tìm · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · ☰ mở modal · ⋮ thêm thao tác (↗ trang Tạo bài · ✅ đã đăng · hàng đợi · 🗑 dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · 📋 ở cột Link để copy nguyên link đã đăng (khỏi mở modal), ✎ để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · ← → trong modal đổi bài · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
+    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, còn thêm bài hàng loạt thì làm ở nút “📥 Import · Export” cạnh ô tìm · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · nút bảng mở modal · ⋮ thêm thao tác (mở ở trang Tạo bài · đánh dấu đã đăng · hàng đợi · dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · nút copy ở cột Link để copy nguyên link đã đăng (khỏi mở modal), nút bút để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · ← → trong modal đổi bài · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
   root.appendChild(wrap);
   unmarkSent();
   const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này
