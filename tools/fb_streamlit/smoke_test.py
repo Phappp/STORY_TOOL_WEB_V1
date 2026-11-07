@@ -5916,7 +5916,7 @@ shutil.rmtree(_p23a_box, ignore_errors=True)
 
 # --- P24a: lưới chỉ VẼ 20 bài mới nhất, ▴ mở dần — chạy thật bằng node chứ không soi chữ ---
 _p24a_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
-_p24a_src = re.search(r"(const PAGE_ROWS = 20;.*?)\nfunction lsGet", _p24a_fe, re.S).group(1)
+_p24a_src = re.search(r"(function rows\(\).*?)\nfunction lsGet", _p24a_fe, re.S).group(1)
 _p24a_node = shutil.which("node")
 if _p24a_node:
     _p24a_js = """
@@ -5928,39 +5928,56 @@ const el = (tag, cls, text) => {
               addEventListener(kind, fn) { o._h = fn; } };
   return o;
 };
+const mk = n => Array.from({ length: n }, (_, i) => ({ id: "story_" + String(i).padStart(3, "0"),
+                                                      topic: "Bai " + i }));
+let MODEL = { rows: mk(40) };
 %s
-const mk = n => Array.from({ length: n }, (_, i) => ({ id: "story_" + String(i).padStart(3, "0") }));
-const full40 = mk(40);
 const out = [];
 SEARCH = ""; SHOWN = 20;
-const w20 = windowed(full40);
-out.push(["cửa sổ lấy ĐUÔI 20 bài mới nhất (id 020..039), không phải đầu",
-          w20.length === 20 && w20[0].id === "story_020" && w20[19].id === "story_039"]);
+// P24b: Python gửi TĂNG dần (`list_story_ids`) nên `visible()` phải trả GIẢM dần, và phải là BẢN
+// SAO — `reverse()` sửa tại chỗ sẽ lộn luôn MODEL.rows, tức mọi chỗ đọc rows() đổi theo dữ liệu.
+const asc = MODEL.rows.map(r => r.id).join(",");
+const v = visible();
+out.push(["visible() đảo thành GIẢM dần: story_039 trên đầu, story_000 đáy",
+          v.length === 40 && v[0].id === "story_039" && v[39].id === "story_000"]);
+out.push(["visible() KHÔNG đụng MODEL.rows (slice trước reverse) — dữ liệu gốc vẫn tăng dần nguyên vẹn",
+          MODEL.rows.map(r => r.id).join(",") === asc]);
+const w20 = windowed(v);
+out.push(["cửa sổ lấy ĐẦU 20 = 20 bài MỚI NHẤT (039..020); phần bị cắt là bài CŨ nằm dưới đáy",
+          w20.length === 20 && w20[0].id === "story_039" && w20[19].id === "story_020"]);
 SEARCH = "   ";
 out.push(["ô tìm chỉ có khoảng trắng = không tìm gì -> vẫn cắt còn 20",
-          windowed(full40).length === 20]);
-SEARCH = "hue";
-out.push(["đang tìm thì vẽ HẾT kết quả (40 bài khớp không phải bấm thêm)",
-          windowed(full40).length === 40]);
+          windowed(visible()).length === 20]);
+SEARCH = "story_";
+out.push(["đang tìm thì vẽ HẾT kết quả (40 bài khớp, không phải bấm thêm) và vẫn giảm dần — "
+          + "từng chữ trong ô tìm là MỘT điều kiện AND nên 'bai 1' khớp cả story_031 (có '1' trong id)",
+          windowed(visible()).length === 40 && visible()[0].id === "story_039"
+          && visible()[39].id === "story_000"]);
+SEARCH = "bai 1";
+out.push(["tìm ra DƯỚI 20 kết quả thì cửa sổ không che gì (13 bài khớp 'bai 1' hiện hết)",
+          windowed(visible()).length === 13 && visible()[0].id === "story_031"]);
 SEARCH = "";
+MODEL = { rows: mk(20) };
 out.push(["workspace <= 20 bài không bị cắt và không có nút",
-          windowed(mk(20)).length === 20 && showMoreButton(mk(20), windowed(mk(20))) === null
-          && showMoreButton(mk(5), windowed(mk(5))) === null]);
-const b20 = showMoreButton(full40, w20);
-out.push(["nhãn nói đủ hai số: hiện thêm 20, còn 20",
-          !!b20 && b20.text === "▴ Hiện 20 bài cũ hơn (còn 20)"]);
-out.push(["title nói thẳng chỉ phần VẼ bị cắt, dữ liệu vẫn nguyên cho tìm/modal/Export",
-          !!b20 && b20.title.includes("Chỉ phần VẼ bị cắt") && b20.title.includes("Export vẫn đi hết")]);
+          windowed(visible()).length === 20 && showMoreButton(visible(), windowed(visible())) === null]);
+MODEL = { rows: mk(40) };
+const b20 = showMoreButton(visible(), windowed(visible()));
+out.push(["nhãn ▾ (nút ở CUỐI lưới, mở thêm là nối xuống dưới) nói đủ hai số: thêm 20, còn 20",
+          !!b20 && b20.text === "▾ Hiện 20 bài cũ hơn (còn 20)"]);
+out.push(["title nói thẳng chỉ phần VẼ bị cắt + thêm ở dưới, dữ liệu vẫn nguyên cho tìm/modal/Export",
+          !!b20 && b20.title.includes("Chỉ phần VẼ bị cắt") && b20.title.includes("Export vẫn đi hết")
+          && b20.title.includes("bài cũ hơn ở dưới")]);
 out.push(["bấm một lần = thêm đúng 20 hàng và gọi repaint đúng 1 lần",
           (function () { const before = SHOWN; b20._h(); return SHOWN === before + 20 && repaintCalls.length === 1; })()]);
 SHOWN = 40;
 out.push(["mở tới hết thì nút biến mất (không bấm mãi được)",
-          windowed(full40).length === 40 && showMoreButton(full40, windowed(full40)) === null]);
+          windowed(visible()).length === 40 && showMoreButton(visible(), windowed(visible())) === null]);
 SHOWN = 20;
-const b5 = showMoreButton(mk(25), windowed(mk(25)));
-out.push(["dư 5 bài thì nút đòi đúng 5, không đòi 20", !!b5 && b5.text === "▴ Hiện 5 bài cũ hơn (còn 5)"]);
-SHOWN = 20;
-out.push(["nút bẹp khi list rỗng", showMoreButton([], []) === null]);
+MODEL = { rows: mk(25) };
+const b5 = showMoreButton(visible(), windowed(visible()));
+out.push(["dư 5 bài thì nút đòi đúng 5, không đòi 20", !!b5 && b5.text === "▾ Hiện 5 bài cũ hơn (còn 5)"]);
+out.push(["Export theo đúng thứ tự ĐANG HIỆN: id đầu tiên là bài mới nhất (cắt trần lấy phần mới)",
+          visible().map(r => String(r.id))[0] === "story_024"]);
 console.log(JSON.stringify(out));
 """ % _p24a_src
     _p24a_tmp = Path(tempfile.mkdtemp(prefix="fbjs24a_")) / "window.js"
@@ -5974,18 +5991,21 @@ console.log(JSON.stringify(out));
             _p24a_rows = []
     for _p24a_name, _p24a_ok in _p24a_rows:
         check("P24a %s" % _p24a_name, _p24a_ok)
-    check("P24a harness node phải chạy được và trả đủ 10 nhận định (lỗi cú pháp trong khối windowed "
-          "là lưới chết im lặng, suite chữ không thấy gì)", len(_p24a_rows) == 10)
+    check("P24a harness node phải chạy được và trả đủ 13 nhận định (lỗi cú pháp trong khối windowed "
+          "là lưới chết im lặng, suite chữ không thấy gì)", len(_p24a_rows) == 13)
     shutil.rmtree(_p24a_tmp.parent, ignore_errors=True)
 else:
     print("(bỏ qua harness P24a: không có node trong PATH)")
 
 _p24a_render = _p24a_fe.split("function render(")[1].split("window.addEventListener")[0]
-check("P24a nút ▴ đứng NGOÀI <tbody> — patchCells/listSigOf đếm LAST_TBODY.children theo chỉ số hàng, "
+check("P24b nút ▾ đứng NGOÀI <tbody> — patchCells/listSigOf đếm LAST_TBODY.children theo chỉ số hàng, "
       "thêm node vào tbody là lệch ô của mọi bài sau đó",
       "wrap.appendChild(more)" in _p24a_render and "tbody.appendChild(more)" not in _p24a_fe
-      and _p24a_render.index("wrap.appendChild(more)")
-      < _p24a_render.index('tbody = document.createElement("tbody")'))
+      and "tbody.appendChild(more)" not in _p24a_render)
+check("P24b nút ▾ đứng SAU bảng: `wrap.appendChild(more)` phải tới sau `wrap.appendChild(scroll)` — "
+      "danh sách giờ GIẢM dần nên bài bị cắt là bài CŨ nằm đáy, mở thêm là nối xuống dưới đúng chỗ "
+      "mắt đang dừng. Đảo thứ tự mà quên dời nút là nút treo trên đầu, bấm xong phải cuộn ngược lên",
+      _p24a_render.index("wrap.appendChild(more)") > _p24a_render.index("wrap.appendChild(scroll)"))
 check("P24a chữ ký vá ô tính trên CỬA SỔ ĐÃ VẼ (`list`), không phải cả danh sách — nếu lấy `full` thì "
       "mở thêm bài sẽ bị fast-path bỏ qua vì 'lưới không đổi'",
       "const lsig = listSigOf(list)" in _p24a_render and "patchCells(list)" in _p24a_render
@@ -5993,10 +6013,19 @@ check("P24a chữ ký vá ô tính trên CỬA SỔ ĐÃ VẼ (`list`), không p
 check("P24a đổi workspace thì cửa sổ về lại 20 (đừng để SHOWN phình sang bộ khác) và có rule CSS .more "
       "nên nút không hiện như chữ trần",
       "REFRESH_PENDING = null; SHOWN = PAGE_ROWS;" in _p24a_fe and ".more {" in _p24a_fe)
-check("P24a ô đếm nói ĐỦ hai số + trỏ đúng chỗ tìm bài cũ ('hiện 20/40 bài (mới nhất — ▴ xem bài cũ hơn)') "
-      "chứ không chỉ báo 20 rồi để người đọc đoán",
-      'return "hiện " + drawn' in _p24a_fe and "(mới nhất — ▴ xem bài cũ hơn)" in _p24a_fe
+check("P24b ô đếm nói ĐỦ hai số + trỏ đúng chỗ tìm bài cũ ('hiện 20/40 bài (mới nhất — ▾ xem bài cũ hơn)') "
+      "với mũi tên CHỈ XUỐNG vì bài cũ nằm đáy — chữ ▴ ở đây là dấu chưa đảo xong "
+      "(▴ vẫn còn ở các nút 'gọn lại' của ô Import, chỗ đó không liên quan)",
+      'return "hiện " + drawn' in _p24a_fe and "(mới nhất — ▾ xem bài cũ hơn)" in _p24a_fe
+      and "▴ xem bài cũ hơn" not in _p24a_fe
       and 'const drawn = windowed(full).length;' in _p24a_fe)
+check("P24b `visible()` đảo bằng `.slice().reverse()` chứ không `rows().reverse()` — reverse() sửa tại "
+      "chỗ nên MODEL.rows bị lộn luôn, kéo theo mọi chỗ đọc rows() (số dòng, chữ ký lưới) đổi theo "
+      "mà không ai giải thích được",
+      ".slice().reverse()" in _p24a_src and "rows().reverse()" not in _p24a_src)
+check("P24b cửa sổ lấy ĐẦU bằng `list.slice(0, SHOWN)` — còn `list.length - SHOWN` là tiền đề ĐÃ SANG "
+      "TRANG của P24a (bài mới ở đáy); hai thứ phải đi cặp, lệch một là lưới hiện sai phần bài",
+      "return list.slice(0, SHOWN);" in _p24a_src and "list.length - SHOWN" not in _p24a_src)
 # --- hết P24a ---
 
 

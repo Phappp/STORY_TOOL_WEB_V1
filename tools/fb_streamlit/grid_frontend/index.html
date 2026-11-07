@@ -277,9 +277,9 @@
   button.b.tog.on { background:var(--accent); color:#0b1620; border-color:var(--accent); }
   button.b.tog.on:hover { filter:brightness(1.1); }
   .empty { padding:20px; color:var(--muted); }
-  /* P24a: nút nới cửa sổ VẼ. Đứng NGOÀI <tbody> (ngay dưới .bar) vì patchCells đếm
-     LAST_TBODY.children theo chỉ số hàng — thêm node vào tbody là lệch cả bảng. */
-  .more { margin:6px 10px 0; padding:3px 10px; font:inherit; font-size:12px; color:var(--muted);
+  /* P24a+b: nút nới cửa sổ VẼ — ĐỨNG CUỐI lưới (danh sách giảm dần nên bài cũ nằm dưới) và NGOÀI
+     <tbody> vì patchCells đếm LAST_TBODY.children theo chỉ số hàng. */
+  .more { margin:0 10px 8px; padding:3px 10px; font:inherit; font-size:12px; color:var(--muted);
     background:var(--btn); border:1px solid var(--border); border-radius:6px; cursor:pointer;
     align-self:flex-start; }
   .more:hover { color:var(--text); border-color:var(--accent); }
@@ -526,35 +526,41 @@ function searchFields(row) {
   return [row.id, row.topic, row.source, row.link, row.status].map(v => String(v || "").toLowerCase());
 }
 function visible() {
+  // P24b: HIỆN giảm dần — bài mới nhất trên đầu. Python gửi TĂNG dần (`list_story_ids`), đảo ngay
+  // tại đây thì mọi chỗ đọc visible() (lưới, ◂ ▸ modal, ↑ ↓, ô đếm, Export) tự theo đúng thứ tự
+  // anh nhìn thấy, không chỗ nào phải biết có chuyện đảo. `slice()` trước `reverse()` vì reverse
+  // sửa tại chỗ — MODEL.rows mà bị lộn thì lượt vẽ sau so chữ ký và các chỗ đọc rows() đổi theo.
   const terms = SEARCH.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!terms.length) return rows();
-  return rows().filter(row => {
-    const fields = searchFields(row);
-    return terms.every(t => fields.some(f => f.indexOf(t) >= 0));
-  });
+  const list = terms.length
+    ? rows().filter(row => {
+        const fields = searchFields(row);
+        return terms.every(t => fields.some(f => f.indexOf(t) >= 0));
+      })
+    : rows();
+  return list.slice().reverse();
 }
 
-// P24a: VẼ tối đa SHOWN hàng, nhưng phần DỮ LIỆU vẫn là cả workspace.
+// P24a+b: VẼ tối đa SHOWN hàng, nhưng phần DỮ LIỆU vẫn là cả workspace.
 // Vì sao cắt ở DOM chứ không cắt ở payload: ô tìm, ◂ ▸ trong modal (`neighbours`) và Export đều đọc
 // `visible()`/`rows()` client-side (P6d+P18c) — Python mà chỉ gửi 20 bài thì ba chỗ đó âm thầm chỉ
-// còn thấy 20, tức là "tìm không ra" dễ bị hiểu thành "không có bài". Nút ▴ đầu lưới chỉ nới cửa sổ
-// VẼ, mọi tính năng khác giữ nguyên. Bài MỚI NHẤT nằm CUỐI danh sách (`list_story_ids` sắp tăng dần
-// theo id) nên cửa sổ lấy ĐUÔI.
+// còn thấy 20, tức là "tìm không ra" dễ bị hiểu thành "không có bài". Nút ▾ cuối lưới chỉ nới cửa sổ
+// VẼ, mọi tính năng khác giữ nguyên. Từ P24b danh sách hiện GIẢM DẦN nên bài mới nằm ĐẦU — cửa sổ
+// lấy ĐẦU, phần bị cắt là những bài CŨ nằm dưới đáy.
 const PAGE_ROWS = 20;
-let SHOWN = PAGE_ROWS;   // số hàng được vẽ — reset khi đổi workspace
+let SHOWN = PAGE_ROWS;       // số hàng được vẽ — reset khi đổi workspace
 function windowed(list) {
   // Đang tìm thì vẽ HẾT: 5 kết quả trong 400 bài mà còn bắt bấm "xem thêm" là nói dối người đọc.
   if (SEARCH.trim() || list.length <= SHOWN) return list;
-  return list.slice(list.length - SHOWN);
+  return list.slice(0, SHOWN);
 }
 function showMoreButton(full, drawn) {
   const rest = full.length - drawn.length;
   if (rest <= 0) return null;
   const step = Math.min(PAGE_ROWS, rest);
-  const b = el("button", "more", "▴ Hiện " + step + " bài cũ hơn (còn " + rest + ")");
+  const b = el("button", "more", "▾ Hiện " + step + " bài cũ hơn (còn " + rest + ")");
   b.type = "button";
   b.title = "Lưới đang vẽ " + drawn.length + " bài MỚI NHẤT trong " + full.length
-    + " bài của bộ lọc này cho nhẹ trang. Bấm để vẽ thêm " + step + " bài cũ hơn.\n"
+    + " bài của bộ lọc này cho nhẹ trang. Bấm để vẽ thêm " + step + " bài cũ hơn ở dưới.\n"
     + "Chỉ phần VẼ bị cắt — dữ liệu vẫn nguyên: ô tìm, ◂ ▸ trong modal và Export vẫn đi hết cả "
     + full.length + " bài.";
   b.addEventListener("click", () => { SHOWN += PAGE_ROWS; repaint(); });
@@ -2895,7 +2901,7 @@ function countText() {
   const full = visible();
   const drawn = windowed(full).length;
   return "hiện " + drawn + (drawn < full.length ? "/" + full.length : "") + " bài"
-    + (drawn < full.length ? " (mới nhất — ▴ xem bài cũ hơn)" : "")
+    + (drawn < full.length ? " (mới nhất — ▾ xem bài cũ hơn)" : "")
     + (SEARCH.trim() ? " trong " + rows().length + " bài" : "")
     + (MODEL.workspace ? " · " + MODEL.workspace : "");
 }
@@ -3082,7 +3088,6 @@ function render(args, force) {
       + " bài đang hiện — thử từ ngắn hơn (id, một chữ trong chủ đề) hoặc xoá ô tìm."));
   } else {
     const more = showMoreButton(full, list);
-    if (more) wrap.appendChild(more);  // ở ĐẦU lưới vì bài mới nhất nằm cuối: mở thêm là thêm lên trên
     const scroll = el("div", "scroll");
     table = document.createElement("table");
     const group = el("colgroup");
@@ -3107,6 +3112,9 @@ function render(args, force) {
     applyWidths(W, table);
     scroll.appendChild(table);
     wrap.appendChild(scroll);
+    // P24b: nút ▾ nằm CUỐI lưới vì danh sách hiện giảm dần — phần bị cắt là bài CŨ nằm dưới đáy,
+    // mở thêm là nối xuống dưới, đúng chỗ mắt đang dừng sau khi đọc hết trang. Vẫn ngoài <tbody>.
+    if (more) wrap.appendChild(more);
   }
   // P21h: dòng hướng dẫn dưới đáy đã bỏ theo anh — mọi giải thích giờ nằm ở chỗ nó giải thích
   // (title của từng nút, tip của từng cột, dấu "?" trong modal), không còn block chữ dài nào nữa.
@@ -3148,12 +3156,19 @@ function paintCursor() {
   });
 }
 function moveCursor(delta) {
-  const list = visible();
+  // P24b: ↑ ↓ đi trong PHẦN ĐANG VẼ. Đứng ở hàng CUỐI được vẽ mà bấm ↓ nữa thì mở rộng cửa sổ thêm
+  // một trang (đúng việc nút ▾ làm) rồi hãy nhảy — CURSOR trỏ một hàng không vẽ là bàn phím im lặng
+  // trong khi người dùng vẫn thấy con trỏ đứng nguyên chỗ cũ.
+  const full = visible();
+  let list = windowed(full);
   if (!list.length) { CURSOR = ""; return; }
   const at = list.findIndex(r => String(r.id) === CURSOR);
-  const next = at < 0 ? (delta > 0 ? 0 : list.length - 1)
-    : Math.min(list.length - 1, Math.max(0, at + delta));
-  CURSOR = String(list[next].id);
+  const stepDown = delta > 0 && at === list.length - 1 && list.length < full.length;
+  if (stepDown) { SHOWN += PAGE_ROWS; repaint(); list = windowed(visible()); }
+  const land = stepDown ? list.length - 1
+    : (at < 0 ? (delta > 0 ? 0 : list.length - 1)
+             : Math.min(list.length - 1, Math.max(0, at + delta)));
+  CURSOR = String(list[land].id);
   paintCursor();
 }
 
