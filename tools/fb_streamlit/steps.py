@@ -19,7 +19,7 @@ import stories
 MAX_KEYWORDS = 4
 PER_KEYWORD = 4
 # steps.py không được import grid_actions (layering nằm ngược chiều), nên tên bước tự giữ ở đây
-STEP_LABEL = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO"}
+STEP_LABEL = {"b1": "B1 caption", "b2": "B2 ảnh", "b3": "B3 SEO", "b4": "B4 ghép video"}
 # Chữ "Cách" hiện trong thẻ hover ô B2 — kể ảnh này do đường nào tạo ra, theo kind của provider
 IMAGE_METHOD = {"codex_cli": "Codex CLI imagegen", "openai": "API ảnh /images/generations"}
 # P19a — ảnh refs vào B2 của bộ API bằng MỘT lượt Vision (xem b2_ref_desc)

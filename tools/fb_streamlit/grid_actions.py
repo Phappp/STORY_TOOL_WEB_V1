@@ -387,6 +387,37 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False) -> list[str]:
             f"{round(float(block.get('bytes') or 0) / 1048576, 1)} MB · ffmpeg {round(spent, 1)} s{over}"]
 
 
+def b4_skip_reason(root: Path, sid: str, setup: dict | None = None) -> str:
+    """⚡/▶ có ghép B4 cho bài này không: trả "" là giao việc, ngược lại là LÝ DO bỏ qua.
+
+    Bốn lý do đầu là của CẢ workspace (ffmpeg + bộ sưu tập), hai lý do sau là của riêng bài.
+    KHÔNG xét "bài đã có ảnh B2 chưa": trong dây chuyền ⚡, B2 chạy ngay trước B4 nên ảnh sẽ có
+    sau lượt này — `merge_b4` tự báo nếu tới lúc ghép vẫn không có ảnh.
+    """
+    setup = setup if setup is not None else audio_setup(root)
+    if not setup["ffmpeg"]["found"]:
+        return "không có ffmpeg chạy được"
+    if not setup["collection"]:
+        return "workspace chưa chọn bộ sưu tập tiếng"
+    if setup["missing"]:
+        return f"bộ “{setup['collection']}” không còn folder"
+    if not setup["files"]:
+        return f"bộ “{setup['collection']}” chưa có file tiếng"
+    story = stories.load_story(root, sid)
+    old = stories.video_file(_folder(story, root, sid))
+    if old is None:
+        return ""
+    if str((story.get("b4") or {}).get("method") or "") == MANUAL_METHOD:
+        return f"bài đã có video ANH TẢI TAY `{old.name}` — hàng loạt không đè"
+    return f"bài đã có video `{old.name}` (xanh lá)"
+
+
+def b4_plan(root: Path, ids: list[str]) -> dict[str, str]:
+    """Cả loạt một lượt: prefs + dò ffmpeg đọc MỘT lần, rồi mỗi bài chỉ đọc story.json của nó."""
+    setup = audio_setup(root)
+    return {str(sid): b4_skip_reason(root, str(sid), setup) for sid in ids if str(sid)}
+
+
 def provider_pool(ctx: Ctx, story: dict, step: str) -> list[str]:
     """Thứ tự provider bước này CÓ THỂ dùng — rỗng nghĩa là để steps tự theo preset/default.
 

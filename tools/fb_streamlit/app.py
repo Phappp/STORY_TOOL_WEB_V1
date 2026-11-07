@@ -959,8 +959,9 @@ def page_audio(c):
     )
     st.warning("Nút GHÉP đã chạy thật: modal B4 của lưới, mỗi bài MỘT cú bấm (bài đang có video bạn tải "
                "tay thì hai cú để xác nhận ghi đè). Hai giá trị dưới đây được dùng thật từ đó. "
-               "Còn P25c: ghép HÀNG LOẠT qua hàng đợi / ⚡ — chưa làm, hiện mỗi lần ghép là ffmpeg chạy "
-               "ngay tại chỗ (60 s cỡ 10 giây trên máy này). "
+               "P25c cũng đã xong: ⚡ (một bài) và ▶ Chạy hàng đợi (cả loạt) ghép B4 ngay sau B3 của "
+               "từng bài, chạy nền NỐI TIẾP nhau (một ffmpeg một lúc); bài đã có video tải tay thì "
+               "hàng loạt BỎ QUA và ghi rõ lý do trong log. "
                "Lưu ý: bộ sưu tập THÊM hay BỚT file có thể đổi bài nào nhận file nào vì file chọn theo id bài.")
     _audio_ffmpeg()
     _audio_collections()

@@ -371,6 +371,11 @@ def hand_off(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     notes += refused
     if accepted:  # P14c: một cú bấm là MỘT việc, không còn "còn N lượt kế tiếp" như hồi cắt batch
         notes.append(accepted[0])
+    # P25c: B4 đã nằm trong dây chuyền ⚡/hàng đợi, nên bài nào KHÔNG ghép được phải nói rõ lý do
+    # ngay cạnh dòng "Đã giao" — nhất là bài có video anh tải tay (hàng loạt không đè).
+    for job, msg in zip(jobs, msgs):
+        if msg not in refused:
+            notes += gr.b4_notes(job)
     out = ga.Outcome(lines=notes)
     _collect(out, event)
     return out
@@ -755,8 +760,11 @@ def mark_flow(rows: list[dict], snap: dict) -> list[dict]:
         slot = dict(flow.get(row["id"]) or {})
         states = row.get("states") or {}
         for step, mark in slot.items():
-            real = str(row.get("b0") if step == "b0" else states.get(step) or "")
-            if mark == "running" and real not in BUSY_STATES:
+            real = str(row.get("b0") if step == "b0" else
+                       row.get("b4") if step == "b4" else states.get(step) or "")
+            # P25c: B4 không ghi state `running` vào story.json (không có bước AI nào tự ghi), nên
+            # chính luồng nền là chỗ DUY NHẤT biết ffmpeg đang chạy — không hạ nó xuống "waiting".
+            if mark == "running" and step != "b4" and real not in BUSY_STATES:
                 slot[step] = "waiting"
         row["flow"] = slot
     return rows

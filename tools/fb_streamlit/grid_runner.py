@@ -30,6 +30,8 @@ ALL_STEPS = ("b1", "b2", "b3")
 # B0 không dùng provider AI nào (nó tải từ Facebook) nên không có "bộ" để chiếm — gom hết B0
 # vào MỘT chỗ chung để cú import 150 link không spawn 150 lượt yt-dlp cùng lúc.
 B0_SLOT = "B0 (trích link)"
+# P25c: ghép video B4 (ffmpeg) cũng không phải bước AI — một chỗ chung, bài ghép nối tiếp như B0.
+MERGE_SLOT = "B4 (ghép video)"
 TICK = 1.0  # nhịp thử lại khi còn việc nhưng chưa bộ nào rảnh
 
 _GA = None  # grid_actions nạp MỘT lần rồi giữ tham chiếu, xem actions()
@@ -59,10 +61,12 @@ def _step_name(step: str) -> str:
 def free_provider(root: Path, sid: str, step: str, busy: set[str]) -> tuple[str, str]:
     """Bộ chạy sẽ giao cho việc này — chữ kỹ ở grid_actions.free_provider.
 
-    B0 không có pool nên chiếm B0_SLOT: rảnh là được, bận thì chờ.
+    B0 và B4 không dùng provider AI nên mỗi thứ chiếm một chỗ chung: rảnh là chạy, bận thì chờ.
     """
     if step == "b0":
         return ("" if B0_SLOT in busy else B0_SLOT), ""
+    if step == "b4":
+        return ("" if MERGE_SLOT in busy else MERGE_SLOT), ""
     return actions().free_provider(root, sid, step, busy)
 
 
@@ -79,6 +83,8 @@ class Job:
     steps: list[str] = field(default_factory=list)
     name: str = ""
     counted: bool = False  # batch: nhãn kèm số bài, rút bài là số phải đổi theo
+    # P25c: sid -> lý do KHÔNG ghép B4 ("" = ghép được). job_for quyết một lần cho cả loạt.
+    b4: dict[str, str] = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -111,6 +117,9 @@ def tasks_for(job: Job) -> list[Task]:
     P15a: ⚡/hàng đợi BỎ QUA bước đã xanh lá của chính bài đó (file đã có kết quả) — chạy lại là
     ghi đè anh đang dùng và tốn thêm một lượt AI. B1 đã xong thì B2/B3 không còn gì để chờ,
     xuống thẳng hàng đợi ready thay vì khóa trong `_hold` mãi mãi.
+
+    P25c: B4 (ghép ảnh + tiếng) là bước CUỐI của dây chuyền, và chỉ vào dây chuyền khi job.b4
+    nói bài đó ghép được — prefs/ffmpeg/bộ sưu tập không có thì không ai giao việc ffmpeg cả.
     """
     chained = list(job.steps) == list(ALL_STEPS)
     tasks: list[Task] = []
@@ -124,6 +133,10 @@ def tasks_for(job: Job) -> list[Task]:
             tasks += [Task(sid=sid, step=step, job=job, dep="b1", chained=True) for step in keep if step != "b1"]
         else:
             tasks += [Task(sid=sid, step=step, job=job, chained=True) for step in keep]
+        if job.b4.get(sid, "chưa xét") == "":
+            # dep "b3" chỉ là cái mốc: B2/B3 xong lệch nhau, nên `_finish` nhả B4 khi bài hết
+            # việc AI (xem _finish). Cả ba B đã xanh lá thì không có gì để chờ -> chạy ngay.
+            tasks.append(Task(sid=sid, step="b4", job=job, dep="b3" if keep else "", chained=True))
     return tasks
 
 
@@ -209,7 +222,9 @@ class Runner:
             self._ensure_thread()
             self._cv.notify_all()
         n = len(tasks)
-        skipped = len(ALL_STEPS) * len(ids) - n if chained else 0
+        # "bỏ qua N B" chỉ nói về B1-B3: B4 không bao giờ xanh lá sẵn trong cùng nghĩa đó, nó có
+        # lý do riêng (job.b4) và `b4_notes` in ra từng lý do.
+        skipped = len(ALL_STEPS) * len(ids) - sum(1 for t in tasks if t.step in ALL_STEPS) if chained else 0
         tail = f" — bỏ qua {skipped} B đã xong (xanh lá)" if skipped else ""
         if done_now:
             tail += f" ({len(done_now)} bài đã xanh lá cả 3 B)"
@@ -365,11 +380,14 @@ class Runner:
                     self._cv.wait(TICK)
 
     def _run_task(self, task: Task) -> None:
-        event = ({"source": "b0_run", "id": task.sid} if task.step == "b0" else
-                 {"source": "run_step", "id": task.sid, "step": task.step, "provider": task.provider,
-                  # ⚡ sinh ra từng việc lẻ theo B — executor không tự biết nó là chuỗi hay anh bấm ▶,
-                  # mà B2 đã khóa thì chỉ chuỗi mới được bỏ qua (P17c).
-                  "chained": task.chained})
+        # B4 (P25c) là ffmpeg ghép, không gọi AI: event chạy lại đúng nút "b4_merge" một-một của P25b,
+        # nên toàn bộ luật "video tải tay thì bỏ qua + log" ở merge_b4 vẫn nguyên, thread nền chỉ là ống.
+        event = ({"source": "b0_run", "id": task.sid} if task.step == "b0"
+                 else {"source": "b4_merge", "id": task.sid} if task.step == "b4"
+                 else {"source": "run_step", "id": task.sid, "step": task.step, "provider": task.provider,
+                       # ⚡ sinh ra từng việc lẻ theo B — executor không tự biết nó là chuỗi hay anh bấm ▶,
+                       # mà B2 đã khóa thì chỉ chuỗi mới được bỏ qua (P17c).
+                       "chained": task.chained})
         try:
             lines = self.executor(event, task.job.root) or []
         except Exception as exc:  # thread nền không được chết âm thầm
@@ -401,6 +419,15 @@ class Runner:
             moved = [t for t in self._hold if t.sid == task.sid and t.dep == "b1"]
             self._hold = [t for t in self._hold if t not in moved]
             self._ready += moved
+        # P25c: B4 chờ CẢ dây chuyền chứ không chỉ B3 — B2 và B3 xong lệch nhau, còn B3 có thể
+        # đã xanh lá từ trước nên không có việc nào để "xong sau nó". Nhả B4 khi bài này không
+        # còn việc AI nào đang chờ/chạy: nhả sớm là ffmpeg chạy trước khi ảnh B2 được ghi.
+        others = [t for t in self._ready + self._hold + list(self._slots.values())
+                  if t.sid == task.sid and t.step != "b4"]
+        if not others:
+            moved = [t for t in self._hold if t.sid == task.sid and t.step == "b4"]
+            self._hold = [t for t in self._hold if t not in moved]
+            self._ready += moved
         live = {t.sid for t in self._ready + self._hold} | {t.sid for t in self._slots.values()}
         self._jobs = [j for j in self._jobs if any(i in live for i in j.ids)]
         left = self._open.get(task.sid, 0) - 1
@@ -411,11 +438,41 @@ class Runner:
             self.done += 1
 
 
+def _ids_text(ids: list[str], cap: int = 6) -> str:
+    return ", ".join(ids[:cap]) + (f" … +{len(ids) - cap}" if len(ids) > cap else "")
+
+
+def b4_notes(job: Job) -> list[str]:
+    """B4 bị bỏ ở bài nào và VÌ SAO — nhất là video anh tải tay, thứ hàng loạt không được đè.
+
+    In sau dòng "Đã giao cho luồng nền" của chính việc đó, gộp theo lý do để 150 bài cũng chỉ
+    vài dòng. Bài ghép được (lý do "") không nhắc tới.
+    """
+    skip = {sid: why for sid, why in (job.b4 or {}).items() if why}
+    if not skip:
+        return []
+    manual = [sid for sid, why in skip.items() if "TẢI TAY" in why]
+    lines = []
+    if manual:
+        lines.append(f"🎬 B4 không đụng video tải tay ({len(manual)} bài): {_ids_text(manual)} "
+                     "— muốn ghép đè thì mở bài, bấm 🎬 hai lần.")
+    groups: dict[str, list[str]] = {}
+    for sid, why in skip.items():
+        if sid not in manual:
+            groups.setdefault(why, []).append(sid)
+    for why, sids in groups.items():
+        lines.append(f"🎬 B4 bỏ qua {len(sids)} bài — {why}: {_ids_text(sids)}.")
+    return lines
+
+
 def job_for(event: dict, root: Path) -> tuple[list[Job], list[str]]:
     """Chuyển event grid thành việc nền.
 
     P14c bỏ luôn cảnh cắt batch thành "N lượt": đơn vị chạy là từng B của từng bài nên 150 bài
     là 150 dây chuyền nhỏ, bộ rảnh tới đâu hút tới đó — không còn MAX_BATCH đứng giữa.
+
+    P25c: ⚡ và hàng đợi ghép B4 luôn — nhưng chỉ bài nào thật sự ghép được (`ga.b4_plan`), và
+    lý do bỏ qua đi kèm job để `b4_notes` in ra sau dòng "Đã giao".
     """
     source = str(event.get("source") or "")
     sid = str(event.get("id") or "")
@@ -424,8 +481,10 @@ def job_for(event: dict, root: Path) -> tuple[list[Job], list[str]]:
         return [Job(event=event, root=root, ids=[sid], steps=[step],
                     name=f"{sid} · {_step_name(step)}")], []
     if source == "run_all":
+        plan = actions().b4_plan(root, [sid])
+        tail = " + B4" if plan.get(sid) == "" else ""
         return [Job(event=event, root=root, ids=[sid], steps=list(ALL_STEPS),
-                    name=f"{sid} · ⚡ đủ B1-B3")], []
+                    name=f"{sid} · ⚡ đủ B1-B3{tail}", b4=plan)], []
     if source == "b0_run":
         return [Job(event=event, root=root, ids=[sid], steps=["b0"], name=f"{sid} · B0 trích link")], []
     if source in ("batch_run", "b0_batch"):
@@ -434,7 +493,10 @@ def job_for(event: dict, root: Path) -> tuple[list[Job], list[str]]:
         if not ids:
             return [], ["Chưa chọn bài nào để chạy."]
         steps = ["b0"] if source == "b0_batch" else list(ALL_STEPS)
+        plan = actions().b4_plan(root, ids) if source == "batch_run" else {}
         name = "B0 trích link" if source == "b0_batch" else "⚡ đủ B1-B3"
+        if plan and any(why == "" for why in plan.values()):
+            name += " + B4"
         return ([Job(event={"source": source, "ids": ids}, root=root, ids=ids, steps=steps,
-                     name=name, counted=True)], [])
+                     name=name, counted=True, b4=plan)], [])
     return [], []

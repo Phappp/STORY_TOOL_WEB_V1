@@ -1336,8 +1336,11 @@ check("P15b bài không có trong workspace thì event B4 nói rõ lỗi, không
 j_b4, _ = gr.job_for({"source": "run_all", "id": s_b4}, p15b_root)
 ga.apply_event(b4_ctx, {"source": "queue_add", "id": s_b4})
 row_b4 = next(r for r in fbgrid.rows_for(b4_ctx) if r["id"] == s_b4)
-check("P15b B4 KHÔNG bao giờ là việc của luồng nền: ⚡ chỉ giao b1/b2/b3, hàng đợi vẫn đếm 1 bài 3 B",
+check("P15b B4 chỉ vào luồng nền khi P25c nói 'ghép được' (có ffmpeg + bộ sưu tập + chưa có video): "
+      "workspace này CHƯA CHỌN BỘ nên ⚡ vẫn chỉ giao b1/b2/b3, kế hoạch B4 của job mang lý do bỏ qua, "
+      "hàng đợi vẫn đếm 1 bài 3 B — luật cũ 'B4 không bao giờ là việc' chỉ còn đúng theo ĐIỀU KIỆN này",
       [t.step for t in gr.tasks_for(j_b4[0])] == ["b1", "b2", "b3"]
+      and bool(j_b4[0].b4.get(s_b4))
       and row_b4["queued"] and row_b4["queue_pos"] == 1
       and ga.count_buckets(fbgrid.rows_for(b4_ctx))["queued"] == 1)
 js_b4 = Path(__file__).resolve().parent.joinpath("grid_frontend", "index.html").read_text(encoding="utf-8")
@@ -2258,7 +2261,8 @@ check("P16 hết cảnh đẩy anh xuống HTTP_VERIFY_SSL cho lỗi driver — 
       and "HTTP_VERIFY_SSL" in prov.AV_HINT)  # vẫn gọi tên biến để anh biết lối tắt đó thật, nhưng nói rõ giới hạn
 check("P16 một sự thật duy nhất về tên B: grid_actions lấy nguyên bảng của steps",
       ga.STEP_NAMES is steps.STEP_LABEL
-      and gr._step_name("b2") == "B2 ảnh" and gr._step_name("b4") == "B4")
+      and gr._step_name("b2") == "B2 ảnh" and gr._step_name("b4") == "B4 ghép video"
+      and gr._step_name("zz") == "ZZ")  # P25c: B4 thành một việc của luồng nền nên có tên thật
 _p16_src = (Path(__file__).resolve().parent / "grid_runner.py").read_text(encoding="utf-8")
 check("P16 luồng nền chỉ import grid_actions MỘT lần trong actions() — hết import giữa nhịp tick/cấp phát",
       _p16_src.count("import grid_actions as ga") == 1
@@ -6302,8 +6306,8 @@ try:
           and _p25a_col_w.value == "Nhac ket"
           and float(_p25a_secs_w.value) == 25)
     check("P25a tab có ô ffmpeg + 3 nút ffmpeg + ô tạo bộ + bảng file thật; dòng đầu tab phải nói ĐÚNG "
-          "trạng thái HÔM NAY: ghép đã chạy thật trong modal B4, chỉ hàng loạt (P25c) là chưa — nhãn mà "
-          "còn 'sẽ nằm ở P25b' là nói chưa làm cái đã làm, và anh không dám bấm (cả hai chiều đều sai)",
+          "trạng thái HÔM NAY: ghép đã chạy thật TRONG modal B4 VÀ TRONG hàng đợi/⚡ (P25c) — nhãn mà còn "
+          "'sẽ nằm ở P25b' là nói chưa làm cái đã làm, và anh không dám bấm (cả hai chiều đều sai)",
           any(w.key == "aud_ff_path" for w in at_a.text_input)
           and {"aud_ff_save", "aud_ff_test", "aud_ff_clear"} <= {b.key for b in at_a.button}
           and any(b.key == "aud_del_col" for b in at_a.button)
@@ -6571,14 +6575,19 @@ try:
 
     check("P25b modal B4 nói lại ĐỦ hai đường ra video — dòng chữ cũ 'B4 là bước tải tay, không có AI, "
           "không vào hàng đợi' giờ chỉ còn đúng một nửa nên đã viết lại, và thẻ có nút ghép đứng giữa trình "
-          "xem và ô tải",
+          "xem và ô tải; P25c sửa tiếp nửa còn lại: ⚡/▶ CÓ ghép B4",
           "Ghép ảnh + tiếng" in _p25b_fe and "body.push(vidPlayer(row), mergeBox(row), vidBox(row))"
           in _p25b_fe.split("function videoCard")[1].split("function linkCard")[0]
           and "B4 là bước tải tay — không có AI" not in _p25b_fe
-          and "Ghép chạy NGAY khi bấm" in _p25b_fe)
+          and "Ghép chạy bằng ffmpeg trên máy" in _p25b_fe
+          and "ghép B4 cho mọi bài ghép được" in _p25b_fe
+          and "Cả hai đều không vào hàng đợi" not in _p25b_fe)
 
     # ---- chạy THẬT mergeBox bằng node: cửa hai cú bấm là logic, không phải chữ trong file ----
     _p25b_js_fn = re.search(r"(function mergeBox\(row\).*?)\nfunction videoCard", _p25b_fe, re.S).group(1)
+    # P25c: mergeBox đọc `flowNote(row, "b4")` của CHÍNH lưới — chép nguyên văn hàm đó vào harness
+    # thay vì viết lại, để luật "⏳ khóa nút" được đo bằng đúng hàm trình duyệt dùng.
+    _p25c_js_flow = re.search(r"(function flowNote\(row, step\).*?\n\})", _p25b_fe, re.S).group(1)
     _p25b_node = shutil.which("node")
     if _p25b_node:
         _p25b_nodejs = """
@@ -6592,6 +6601,7 @@ function button(label, title, fn, cls) {
              click: function () { fn(b); }};
   return b;
 }
+%s
 %s
 const out = [];
 const R = o => Object.assign({id: "story_005", b4audio: "mot.mp3 · 45 s", b4ready: true,
@@ -6627,8 +6637,18 @@ b = mergeBox(R({b4ready: false, b4audio: "workspace chưa chọn bộ sưu tập
 out.push(["Python nói chưa đủ điều kiện thì nút TẮT sẵn và title nói đúng lý do trong `b4audio` — " +
           "không để anh bấm rồi mới đọc lỗi",
           b.disabled === true && b.title.includes("workspace chưa chọn bộ sưu tập")]);
+SENT.length = 0;
+b = mergeBox(R({flow: {b4: "waiting"}})).kids[0];
+out.push(["P25c B4 đang XẾP trong hàng đợi thì nút 🎬 tự khóa và đổi chữ thành '⏳ B4 đã giao, chờ tới lượt' " +
+          "— mời bấm thêm là hai lượt ffmpeg cùng ghi một `video.mp4`",
+          b.disabled === true && b.textContent.indexOf("⏳ B4 đã giao, chờ tới lượt") === 0 && SENT.length === 0]);
+b = mergeBox(R({flow: {b4: "running"}})).kids[0];
+out.push(["P25c B4 đang GHÉP thì nút nói '⏳ B4 đang chạy' chứ không nói 'chưa có video' — nhãn phải đọc " +
+          "trạng thái thật của hàng, không phải trạng thái file cũ",
+          b.disabled === true && b.textContent.indexOf("⏳ B4 đang chạy") === 0
+          && b.textContent.indexOf("mot.mp3 · 45 s") > 0]);
 console.log(JSON.stringify(out));
-""" % _p25b_js_fn
+""" % (_p25b_js_fn, _p25c_js_flow)
         _p25b_tmp_js = Path(tempfile.mkdtemp(prefix="fbjs25b_")) / "mergebox.js"
         _p25b_tmp_js.write_text(_p25b_nodejs, encoding="utf-8")
         _p25b_nproc = subprocess.run([_p25b_node, str(_p25b_tmp_js)], capture_output=True,
@@ -6641,10 +6661,10 @@ console.log(JSON.stringify(out));
                 _p25b_jsrows = []
         for _p25b_jsname, _p25b_jsok in _p25b_jsrows:
             check("P25b mergeBox (node) " + _p25b_jsname, _p25b_jsok)
-        check("P25b harness node phải chạy được và trả đủ SÁU nhận định — `mergeBox` gọi `el`/`button`/`send` "
-              "của lưới, thiếu một cái là cả khối chết im lặng trong khi suite soi chữ vẫn PASS (bài học "
-              "P24a/P23c: lưới hỏng cả trang, không phải hỏng một thẻ)",
-              len(_p25b_jsrows) == 6 and _p25b_nproc.returncode == 0)
+        check("P25b/P25c harness node phải chạy được và trả đủ TÁM nhận định — `mergeBox` gọi "
+              "`el`/`button`/`send`/`flowNote` của lưới, thiếu một cái là cả khối chết im lặng trong khi "
+              "suite soi chữ vẫn PASS (bài học P24a/P23c: lưới hỏng cả trang, không phải hỏng một thẻ)",
+              len(_p25b_jsrows) == 8 and _p25b_nproc.returncode == 0)
         shutil.rmtree(_p25b_tmp_js.parent, ignore_errors=True)
     else:
         print("(bỏ qua harness mergeBox: không có node trong PATH)")
@@ -6733,6 +6753,217 @@ finally:
     audio._durations.clear()
     shutil.rmtree(_p25b_box, ignore_errors=True)
 # --- hết P25b ---
+
+# --- P25c: ghép B4 đi vào CHÍNH dây chuyền ⚡/▶ (một nút, không thêm nút thứ hai) ---
+_p25c_box = Path(tempfile.mkdtemp(prefix="fbsmoke_p25c_"))
+_p25c_dd, _p25c_rec = paths.data_dir, stories._recents_path
+_p25c_ffinfo_real = audio.ffmpeg_info
+paths.data_dir = lambda: _p25c_box / "DATA"
+stories._recents_path = lambda: _p25c_box / "workspaces.json"
+_p25c_root = stories.set_current(stories.validate_root(_p25c_box / "ws_p25c"))
+_p25c_ctx = ga.Ctx(root=_p25c_root, providers={}, presets={}, defaults={})
+_p25c_ga_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p25c_gr_src = (Path(__file__).resolve().parent / "grid_runner.py").read_text(encoding="utf-8")
+_p25c_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+
+
+def _p25c_stub(found: bool) -> None:
+    """ffmpeg giả: kiểm THỨ TỰ lý do được cả trên máy không có ffmpeg (E2E thật đã đo ở khối P25b)."""
+    audio.ffmpeg_info = lambda: {"ffmpeg": ("C:\\fake\\ffmpeg.exe" if found else ""), "ffprobe": "",
+                                 "source": "PATH" if found else "", "stored": "", "found": found}
+
+
+def _p25c_story(with_image: bool = True, all_b: bool = False, topic: str = "bai p25c") -> str:
+    s = stories.create_story(_p25c_root, topic=topic)
+    if all_b:
+        (s["folder"] / "caption.txt").write_text("caption da xong", encoding="utf-8")
+        (s["folder"] / "seo.md").write_text("seo da xong", encoding="utf-8")
+    if with_image or all_b:
+        (s["folder"] / "image.png").write_bytes(b"png gia, khong chay ffmpeg o day")
+    return s["id"]
+
+
+try:
+    _p25c_sid = _p25c_story()                     # có ảnh, chưa có video
+    _p25c_sid2 = _p25c_story(topic="bai p25c 2")  # sẽ mang video tải tay
+    _p25c_sid_auto = _p25c_story(topic="bai p25c 3")   # sẽ mang video do chính tool ghép
+    _p25c_sid_blank = _p25c_story(with_image=False, topic="bai trang")  # chưa có B nào
+    _p25c_sid_done = _p25c_story(all_b=True, topic="da xong ba B")
+    _p25c_sid_done2 = _p25c_story(all_b=True, topic="da xong ba B 2")
+
+    # ---- (1) sáu cảnh của `b4_skip_reason`, xét theo ĐÚNG thứ tự của merge_b4 ----
+    (_p25c_root / ga.PREFS_FILE).unlink(missing_ok=True)
+    _p25c_stub(False)
+    _p25c_why_ff = ga.b4_skip_reason(_p25c_root, _p25c_sid)
+    _p25c_stub(True)
+    _p25c_why_col = ga.b4_skip_reason(_p25c_root, _p25c_sid)
+    _p25c_col = audio.create("Nhac c")
+    ga.set_pref_audio(_p25c_root, collection=_p25c_col, seconds=30)
+    _p25c_why_empty = ga.b4_skip_reason(_p25c_root, _p25c_sid)
+    audio.rename(_p25c_col, "Nhac c doi")  # prefs vẫn gọi tên CŨ -> bộ "không còn folder"
+    _p25c_why_gone = ga.b4_skip_reason(_p25c_root, _p25c_sid)
+    audio.rename("Nhac c doi", _p25c_col)
+    audio.add_file(_p25c_col, _P25aUp(b"RIFFfake"), "mot.mp3")
+    _p25c_why_ready = ga.b4_skip_reason(_p25c_root, _p25c_sid)
+    with open(_p25c_root / _p25c_sid_auto / "image.png", "rb") as _p25c_fh:
+        stories.save_video(_p25c_root, _p25c_sid_auto, _p25c_fh, suffix=".mp4", method=audio.MERGE_METHOD)
+    _p25c_why_auto = ga.b4_skip_reason(_p25c_root, _p25c_sid_auto)
+    with open(_p25c_root / _p25c_sid2 / "image.png", "rb") as _p25c_fh:
+        stories.save_video(_p25c_root, _p25c_sid2, _p25c_fh, suffix=".mp4", method=ga.MANUAL_METHOD)
+    _p25c_why_manual = ga.b4_skip_reason(_p25c_root, _p25c_sid2)
+    check("P25c `b4_skip_reason` là NGUỒN QUYẾT ĐỊNH duy nhất cho việc 'có giao B4 hay không', và nó xét "
+          "cái của CẢ workspace trước cái của riêng bài: ffmpeg → chưa chọn bộ → bộ biến mất (nói đúng tên "
+          "đã mất) → bộ rỗng → mới tới video của bài. Video TẢI TAY có lý do RIÊNG ('hàng loạt không đè') "
+          "để log hàng loạt nói được vì sao nó bị bỏ, còn video do tool ghép là 'xanh lá' — cùng luật P15a",
+          "ffmpeg" in _p25c_why_ff
+          and "chưa chọn bộ sưu tập" in _p25c_why_col
+          and _p25c_col in _p25c_why_empty and "chưa có file tiếng" in _p25c_why_empty
+          and _p25c_col in _p25c_why_gone and "không còn folder" in _p25c_why_gone
+          and _p25c_why_ready == ""
+          and "xanh lá" in _p25c_why_auto
+          and "ANH TẢI TAY" in _p25c_why_manual and "hàng loạt không đè" in _p25c_why_manual)
+
+    # ---- (2) một lượt đọc prefs cho CẢ loạt ----
+    _p25c_setup_calls = []
+    _p25c_setup_real = ga.audio_setup
+
+    def _p25c_setup_count(root):
+        _p25c_setup_calls.append(root)
+        return _p25c_setup_real(root)
+
+    ga.audio_setup = _p25c_setup_count
+    try:
+        _p25c_plan = ga.b4_plan(_p25c_root, [_p25c_sid, _p25c_sid_blank, _p25c_sid2])
+    finally:
+        ga.audio_setup = _p25c_setup_real
+    check("P25c `b4_plan` đọc prefs + dò ffmpeg ĐÚNG MỘT lần cho cả loạt (150 bài không thành 150 lần spawn) "
+          "rồi mỗi bài chỉ đọc story.json của nó; kế hoạch mang đúng lý do của từng bài",
+          len(_p25c_setup_calls) == 1
+          and _p25c_plan == {_p25c_sid: "", _p25c_sid_blank: "", _p25c_sid2: _p25c_why_manual})
+
+    # ---- (3) hình dạng dây chuyền: B4 là việc CUỐI, và chỉ có mặt khi ghép được ----
+    _p25c_job_all, _p25c_notes_all = gr.job_for({"source": "run_all", "id": _p25c_sid_blank}, _p25c_root)
+    _p25c_tasks_all = gr.tasks_for(_p25c_job_all[0])
+    check("P25c ⚡ một bài = B1 → B2/B3 → B4: B4 đứng CUỐI dây chuyền, dep='b3' chỉ là cái mốc (B2/B3 xong "
+          "lệch nhau nên `_finish` mới là chỗ nhả), và tên việc nói '+ B4' để dòng log không hứa thiếu",
+          [t.step for t in _p25c_tasks_all] == ["b1", "b2", "b3", "b4"]
+          and [t.dep for t in _p25c_tasks_all] == ["", "b1", "b1", "b3"]
+          and _p25c_job_all[0].name == f"{_p25c_sid_blank} · ⚡ đủ B1-B3 + B4"
+          and _p25c_notes_all == [])
+    _p25c_job_done, _ = gr.job_for({"source": "run_all", "id": _p25c_sid_done}, _p25c_root)
+    check("P25c bài đã xanh lá cả ba B thì ⚡ vẫn có ĐÚNG MỘT việc — B4 với dep RỖNG (không còn gì để chờ). "
+          "Đây là chỗ dễ chết nhất: dep 'b3' mà không có việc b3 nào là việc B4 treo vĩnh viễn",
+          [(t.step, t.dep) for t in gr.tasks_for(_p25c_job_done[0])] == [("b4", "")])
+    _p25c_job_auto, _ = gr.job_for({"source": "run_all", "id": _p25c_sid_auto}, _p25c_root)
+    check("P25c bài đã có video ghép thì ⚡ KHÔNG giao lại B4 (cùng luật P15a: đừng ghi đè thứ anh đang "
+          "dùng), và bài có video TẢI TAY cũng vậy — hàng loạt không bao giờ tự đè video anh tải lên",
+          "b4" not in [t.step for t in gr.tasks_for(_p25c_job_auto[0])]
+          and "b4" not in [t.step for t in gr.tasks_for(
+              gr.job_for({"source": "run_all", "id": _p25c_sid2}, _p25c_root)[0][0])])
+
+    # ---- (4) chạy THẬT qua Runner: B4 là việc cuối, event chỉ mang id ----
+    _p25c_ran = []
+
+    def _p25c_exec(event, root):
+        _p25c_ran.append(dict(event))
+        return [f"{event.get('id')}: {event.get('source')} xong"]
+
+    _p25c_runner = gr.Runner(_p25c_exec, claim=claim_two)
+    _p25c_msg_all = _p25c_runner.submit(gr.job_for(
+        {"source": "run_all", "id": _p25c_sid_blank}, _p25c_root)[0][0])
+    _p25c_ok = wait_flow(_p25c_runner)
+    _p25c_snap = _p25c_runner.snapshot()
+    _p25c_steps = [e.get("step") or e.get("source") for e in _p25c_ran]
+    check("P25c luồng nền chạy THẬT cả bốn việc của một bài, và B4 là việc CUỐI: ffmpeg không bao giờ "
+          "chạy trước khi B2 ghi ảnh. Event của B4 là ĐÚNG cái event một-một của P25b — `{source: b4_merge, "
+          "id}`, không có đường dẫn/bộ sưu tập/số giây nào từ trình duyệt",
+          _p25c_ok and "Đã giao cho luồng nền" in _p25c_msg_all and "4 việc" in _p25c_msg_all
+          and _p25c_steps[0] == "b1" and _p25c_steps[-1] == "b4_merge"
+          and _p25c_steps.count("b4_merge") == 1
+          and _p25c_ran[-1] == {"source": "b4_merge", "id": _p25c_sid_blank}
+          and (_p25c_snap["done"], _p25c_snap["total"]) == (1, 1))
+    _p25c_msg_done = _p25c_runner.submit(gr.job_for(
+        {"source": "run_all", "id": _p25c_sid_done}, _p25c_root)[0][0])
+    wait_flow(_p25c_runner)
+    check("P25c dòng 'bỏ qua N B đã xong' chỉ đếm B1-B3: bài đã xanh lá cả ba B mà còn B4 thì phải là "
+          "1 việc + 'bỏ qua 3 B', KHÔNG được ra '-1 việc' hay 'mọi bước đã xong' — đếm sai là anh tưởng "
+          "bấm hụt",
+          "1 việc" in _p25c_msg_done and "bỏ qua 3 B đã xong" in _p25c_msg_done
+          and "bỏ qua -" not in _p25c_msg_done and "mọi bước đã xong" not in _p25c_msg_done)
+    _p25c_runner.stop()
+
+    # ---- (5) MỘT ffmpeg một lúc: B4 có chỗ chung như B0 ----
+    _p25c_gate = threading.Event()
+    _p25c_b4ran = []
+
+    def _p25c_slow(event, root):
+        if event.get("source") == "b4_merge":
+            _p25c_b4ran.append(event.get("id"))
+            _p25c_gate.wait(10)
+        return [f"{event.get('id')}: xong"]
+
+    _p25c_ser = gr.Runner(_p25c_slow)  # claim THẬT: free_provider của runner
+    _p25c_ser.submit(gr.job_for(
+        {"source": "batch_run", "ids": [_p25c_sid_done, _p25c_sid_done2]}, _p25c_root)[0][0])
+    _p25c_mid = wait_until(lambda: _p25c_ser.snapshot() if _p25c_b4ran else None)
+    check("P25c cả loạt thì B4 chạy NỐI TIẾP nhau trên MỘT chỗ chung (MERGE_SLOT) như B0: 150 bài không "
+          "spawn 150 ffmpeg cùng lúc, và việc thứ hai hiện đúng 'đã giao, chờ tới lượt'",
+          _p25c_mid is not None and list(_p25c_mid["slots"]) == [gr.MERGE_SLOT]
+          and _p25c_mid["queued"] == 1 and _p25c_b4ran == [_p25c_sid_done])
+    _p25c_gate.set()
+    _p25c_ok_ser = wait_flow(_p25c_ser)
+    _p25c_end = _p25c_ser.snapshot()
+    check("P25c chỗ ghép nhả ra là bài sau vào ngay, cả hai bài tính là xong — không có việc nào kẹt lại "
+          "sau khi ffmpeg trả về",
+          _p25c_ok_ser and (_p25c_end["done"], _p25c_end["total"]) == (2, 2)
+          and sorted(_p25c_b4ran) == sorted([_p25c_sid_done, _p25c_sid_done2]))
+    _p25c_ser.stop()
+
+    # ---- (6) ô B4 trên lưới: 'running' của B4 không bị hạ oan ----
+    _p25c_mf = fbgrid.mark_flow(
+        [{"id": "story_001", "b0": "pending", "b4": "pending", "states": {"b1": "running"}},
+         {"id": "story_002", "b0": "pending", "b4": "pending", "states": {"b1": "pending"}}],
+        {"flow": {"story_001": {"b4": "running"}, "story_002": {"b1": "running", "b4": "waiting"}}})
+    check("P25c `mark_flow` KHÔNG hạ B4 'running' xuống 'waiting' (story.json không có state running cho B4 "
+          "— chính luồng nền là chỗ biết ffmpeg đang chạy), còn bước AI vẫn giữ luật cũ: story.json chưa "
+          "nói running thì ô phải là 'đã giao, chờ tới lượt'",
+          _p25c_mf[0]["flow"] == {"b4": "running"}
+          and _p25c_mf[1]["flow"] == {"b1": "waiting", "b4": "waiting"})
+
+    # ---- (7) log hàng loạt nói rõ bài nào bị bỏ B4 và vì sao ----
+    _p25c_njob = gr.Job(event={}, root=_p25c_root,
+                        ids=[_p25c_sid, _p25c_sid2, _p25c_sid_auto], steps=list(gr.ALL_STEPS),
+                        b4=ga.b4_plan(_p25c_root, [_p25c_sid, _p25c_sid2, _p25c_sid_auto]))
+    _p25c_nl = gr.b4_notes(_p25c_njob)
+    _p25c_ntxt = "\n".join(_p25c_nl)
+    check("P25c log sau dòng 'Đã giao' nói RÕ từng nhóm bị bỏ B4: video TẢI TAY đứng riêng một dòng có "
+          "tên bài (đó là thứ không được đè), video 'xanh lá' gộp theo lý do kèm số bài, bài ghép được "
+          "KHÔNG bị nhắc; danh sách dài thì cắt bằng '… +N' chứ không in 150 id",
+          len(_p25c_nl) == 2 and _p25c_sid2 in _p25c_nl[0] and "tải tay" in _p25c_nl[0]
+          and "1 bài" in _p25c_nl[1] and _p25c_sid_auto in _p25c_nl[1]
+          and all(_p25c_sid not in ln for ln in _p25c_nl)
+          and gr.b4_notes(gr.Job(event={}, root=_p25c_root, b4={_p25c_sid: ""})) == []
+          and gr._ids_text([f"story_{i:03d}" for i in range(8)]).endswith("… +2"))
+
+    # ---- (8) KHÔNG có nút/event ghép hàng loạt riêng ----
+    check("P25c '1 (b)' = gộp THẲNG vào ⚡/▶ nên không có nút thứ hai trên thanh lưới và không có event "
+          "`b4_merge_batch` ở cả ba tầng; B4 cũng KHÔNG là HEAVY_SOURCES (nó là một VIỆC của luồng nền "
+          "do `tasks_for` sinh ra, không phải event trình duyệt gửi xuống)",
+          "b4_merge_batch" not in _p25c_ga_src and "b4_merge_batch" not in _p25c_gr_src
+          and "b4_merge_batch" not in _p25c_fe and "queueb4" not in _p25c_fe
+          and "mergeQueueButton" not in _p25c_fe and "b4" not in gr.HEAVY_SOURCES
+          and "b4_plan" in _p25c_gr_src and "MERGE_SLOT" in _p25c_gr_src)
+    check("P25c đường hàng loạt dùng ĐÚNG event một-một của P25b và KHÔNG BAO GIỜ gửi `force`: luật 'video "
+          "tải tay phải hai cú bấm' sống nguyên trên đường hàng loạt vì `merge_b4(force=False)` là thứ "
+          "duy nhất chạy trong thread nền",
+          '{"source": "b4_merge", "id": task.sid}' in _p25c_gr_src and "force" not in _p25c_gr_src)
+finally:
+    paths.data_dir = _p25c_dd
+    stories._recents_path = _p25c_rec
+    audio.ffmpeg_info = _p25c_ffinfo_real
+    audio._durations.clear()
+    shutil.rmtree(_p25c_box, ignore_errors=True)
+# --- hết P25c ---
 
 
 # cleanup test rows
