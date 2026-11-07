@@ -415,6 +415,10 @@ gconn = db.connect()
 db.add_provider(gconn, "GridAPI", "openai", "https://x/v1", "GRID_KEY_ENV", "m1,m2")
 db.add_provider(gconn, "GridCodex", "codex_cli", "", "", "")
 db.save_preset(gconn, None, "Grid preset", "", "cap: <CAPTION CŨ>", "img: <CAPTION MỚI TẠO>", "kw: <DỮ LIỆU>", "seo: <CAPTION MỚI TẠO>", "input", None)
+# P26b: preset không còn tự cấp provider — các block dưới chạy AI nên phải chọn bộ ngay từ đầu.
+ga.set_pref_providers(ga_root, "b1", ["GridAPI"])
+ga.set_pref_providers(ga_root, "b2", ["GridAPI"])
+ga.set_pref_providers(ga_root, "b3", ["GridCodex"])
 gctx = ga.build_ctx(gconn, ga_root)
 
 sid_ok = stories.create_story(ga_root, "Chủ đề grid", input_text="nội dung gốc cho grid")["id"]
@@ -451,7 +455,7 @@ images.search_images = lambda query, count=4: [{"url": "https://stock/x.jpg", "t
 out = ga.apply_event(gctx, {"source": "run_step", "id": sid_ok, "step": "b1"})
 check("dispatcher b1 ghi caption.txt + báo 1 dòng log",
       out.lines == ["B1 caption: OK"] and (ga_root / sid_ok / "caption.txt").is_file() and out.touched == [sid_ok])
-check("dispatcher b1 chọn provider+model từ preset khi story chưa lưu",
+check("dispatcher b1 chạy bộ từ pool đầu lưới (preset chỉ còn cấp prompt, P26b)",
       chat_calls[-1] == ("GridAPI", "m1"))
 out = ga.apply_event(gctx, {"source": "run_step", "id": sid_empty, "step": "b1"})
 check("chưa có input -> chặn trước khi gọi provider",
@@ -795,6 +799,7 @@ ga.apply_event(gdef, {"source": "run_step", "id": sid_pick, "step": "b3"})
 check("chọn riêng trong modal thắng mặc định đầu grid ngay khi chạy bước",
       chat_calls[-1] == ("GridAPI", "m1"))
 ga.set_pref_providers(ga_root, "b1", [])
+ga.set_pref_providers(ga_root, "b2", [])
 ga.set_pref_providers(ga_root, "b3", [])
 check("set_pref_providers rỗng xóa bỏ pool của bước",
       ga.pref_providers(ga_root) == {} and bool(ga.save_prefs(ga_root, {"auto_refresh": True})) is False)
@@ -807,7 +812,7 @@ check("P14b prefs dạng danh sách mới đọc được cả file cũ ghi mộ
 check("P14b provider_pool trả ĐÚNG THỨ TỰ anh xếp và bỏ tên trùng/rỗng",
       ga.provider_pool(p14_ctx, {}, "b3") == ["GridCodex", "GridAPI"]
       and ga.provider_pool(p14_ctx, {}, "b2") == [])
-check("P14b chưa chọn bộ nào cho bước = pool rỗng, steps vẫn tự theo preset/default",
+check("P14b chưa chọn bộ nào cho bước = pool rỗng (P26b: bấm chạy sẽ báo lỗi, không tự theo preset nữa)",
       ga.provider_pref(p14_ctx, {}, "b2") == "")
 chat_calls.clear()
 ga.apply_event(ga.build_ctx(gconn, ga_root), {"source": "run_step", "id": sid_ok, "step": "b3"})
@@ -833,11 +838,24 @@ check("P14c mọi bộ trong pool đều bận -> ('', '') = chưa tới lượt
       ga.free_provider(ga_root, sid_ok, "b3", {"GridCodex", "GridAPI"}) == ("", ""))
 names_ga = {x["name"] for x in db.list_providers(gconn)}
 free_b2 = ga.free_provider(ga_root, sid_ok, "b2", set())
-check("P14c bước chưa set bộ nào thì free_provider vẫn tìm ra bộ có thật (theo preset/default)",
-      free_b2[1] == "" and free_b2[0] in names_ga)
+check("P26b bước chưa chọn provider -> free_provider BÁO LỖI 'chưa chọn provider' chứ không tự lấy bộ "
+      "theo preset/default (preset chỉ còn cấp prompt)",
+      free_b2[0] == "" and "chưa chọn provider" in free_b2[1] and "Provider B2" in free_b2[1])
 missing = ga.free_provider(ga_root, "story_999", "b1", set())
 check("P14c bài mất folder -> trả lý do thật để luồng nền báo một lần rồi bỏ việc, khỏi chờ vô vọng",
       missing[0] == "" and missing[1] != "")
+_fp_src = inspect.getsource(ga.free_provider)
+check("P26b free_provider KHÔNG còn gọi resolve_provider_model — pool trống là LỖI chứ không lén lấy bộ "
+      "theo preset/default (preset chỉ còn cấp prompt)",
+      "resolve_provider_model" not in _fp_src and "chưa chọn provider" in _fp_src)
+chat_calls.clear()
+out_b2_empty = ga.apply_event(ga.build_ctx(gconn, ga_root), {"source": "run_step", "id": sid_ok, "step": "b2"})
+check("P26b chạy bước trong modal khi chưa chọn provider -> dòng lỗi nói đúng chỗ chọn, KHÔNG gọi bộ nào",
+      "chưa chọn provider" in out_b2_empty.lines[0] and "Provider B2" in out_b2_empty.lines[0]
+      and chat_calls == [])
+out_all_missing = ga.apply_event(ga.build_ctx(gconn, ga_root), {"source": "run_all", "id": sid_ok})
+check("P26b ⚡ cả bài mà thiếu bộ ở bước nào -> nói ĐÚNG bước thiếu ngay một dòng, không chạy nửa chừng",
+      "bước B2 chưa chọn provider" in out_all_missing.lines[0] and chat_calls == [])
 (ga_root / ga.PREFS_FILE).write_text("không phải json", encoding="utf-8")  # trả prefs về rỗng cho các block sau
 
 # --- P4d: import cột A link FB -> tạo bài + B0 trích caption/ảnh tham chiếu ---
@@ -863,9 +881,9 @@ check("pick_links chuẩn hóa link và báo đủ lý do cho từng dòng bị 
       and len(skipped_p4d) == 3 and any("dòng tiêu đề" in s for s in skipped_p4d)
       and any("link trùng" in s for s in skipped_p4d) and any("không phải link FB" in s for s in skipped_p4d))
 ids_p4d, imp_lines = ga.import_links(gctx, urls_p4d)
-check("import_links tạo một story cho mỗi link, cột Nguồn = link, B0 pending",
+check("import_links tạo một story cho mỗi link, cột Nguồn = link, B0 VÀNG vì chưa có caption lẫn ảnh (P26d)",
       len(ids_p4d) == 2 and all(stories.load_story(ga_root, s)["source"] == u for s, u in zip(ids_p4d, urls_p4d, strict=True))
-      and all(ga.b0_state(ga_root, s) == stories.PENDING for s in ids_p4d)
+      and all(ga.b0_state(ga_root, s) == stories.MISSING for s in ids_p4d)
       and imp_lines[0].startswith("Đã tạo 2 bài mới"))
 old_limit = ga.MAX_IMPORT
 ga.MAX_IMPORT = 1
@@ -951,11 +969,12 @@ for s in many_b0:
     stories.update_story(ga_root, s, source="https://fb.watch/reel-x")
 seen_b0 = []
 out = ga.apply_event(gctx, {"source": "b0_batch", "ids": many_b0}, on_batch=lambda b, i, n: seen_b0.append((b, i, n)))
-check("b0_batch chốt tối đa 5 bài/lượt và nói rõ phần còn lại",
+check("b0_batch chốt tối đa 5 bài/lượt và nói rõ phần còn lại — bài chưa chạy B0 là VÀNG "
+      "'thiếu caption/ảnh' (P26d) chứ không còn 'chưa chạy'",
       len(out.touched) == ga.MAX_BATCH and "để lượt sau" in out.lines[0]
       and seen_b0 == [(s, i, ga.MAX_BATCH) for i, s in enumerate(many_b0[:ga.MAX_BATCH], start=1)]
       and all(ga.b0_state(ga_root, s) == stories.DONE for s in many_b0[:ga.MAX_BATCH])
-      and all(ga.b0_state(ga_root, s) == stories.PENDING for s in many_b0[ga.MAX_BATCH:]))
+      and all(ga.b0_state(ga_root, s) == stories.MISSING for s in many_b0[ga.MAX_BATCH:]))
 
 # --- P5a: B0 nhập tay — caption sửa trong modal + ảnh tham chiếu gửi từ grid ---
 sid_manual = stories.create_story(ga_root, "B0 nhập tay")["id"]
@@ -972,20 +991,24 @@ check("B0 không đè caption tay: run_b0 bỏ qua, không gọi extract, chữ 
       "sửa tay" in out.lines[0] and len(b0_calls) == calls_before
       and (ga_root / sid_manual / "input.txt").read_text(encoding="utf-8").startswith("Caption tôi gõ tay"))
 row_m = next(r for r in fbgrid.rows_for(gctx) if r["id"] == sid_manual)
-check("ô B0 bài nhập tay hiện 'thủ công' và không bị gom vào danh sách trích lại",
-      row_m["b0"] == stories.DONE and ga.MANUAL_METHOD in row_m["b0meta"]
-      and sid_manual not in ga.b0_todo_ids(gctx))
+check("P26d ô B0 bài nhập tay CHƯA có ảnh tham chiếu là VÀNG (missing) dù story.json ghi done — "
+      "xanh phải đủ CẢ caption lẫn ảnh; method 'thủ công' vẫn nằm trong b0meta",
+      row_m["b0"] == stories.MISSING and ga.MANUAL_METHOD in row_m["b0meta"])
 ga.apply_event(gctx, {"source": "b0_save", "id": sid_manual, "text": "   "})
-check("xóa hết chữ -> ô B0 về 'chưa chạy' chứ không báo 'mất file'",
-      ga.b0_state(ga_root, sid_manual) == stories.PENDING)
+check("xóa hết chữ -> ô B0 VÀNG 'thiếu caption' (P26d), không thành lỗi — chữ pending trong "
+      "story.json chỉ còn là cái mốc",
+      ga.b0_state(ga_root, sid_manual) == stories.MISSING)
 ga.apply_event(gctx, {"source": "b0_save", "id": sid_manual, "text": "Caption tôi gõ tay"})
 png_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"p5a" * 20).decode("ascii")
 out = ga.apply_event(gctx, {"source": "b0_ref_add", "id": sid_manual, "data": png_b64, "name": "anh-cua-toi.PNG"})
 refs_m = stories.refs_of(ga_root, sid_manual)
-check("b0_ref_add: ảnh base64 từ grid thành refs/ref_N.png, đếm lại số ảnh trong block b0",
+check("b0_ref_add: ảnh base64 từ grid thành refs/ref_N.png, đếm lại số ảnh trong block b0 — "
+      "đủ caption lẫn ảnh là ô B0 XANH trở lại và ra khỏi danh sách trích lại (P26d)",
       len(refs_m) == 1 and refs_m[0].name == "ref_1.png"
       and refs_m[0].read_bytes().startswith(b"\x89PNG") and stories.load_story(ga_root, sid_manual)["b0"]["refs"] == 1
-      and any("ref_1.png" in line and "1 ảnh tham chiếu" in line for line in out.lines))
+      and any("ref_1.png" in line and "1 ảnh tham chiếu" in line for line in out.lines)
+      and ga.b0_state(ga_root, sid_manual) == stories.DONE
+      and sid_manual not in ga.b0_todo_ids(gctx))
 before_ref = len(stories.refs_of(ga_root, sid_manual))
 out = ga.apply_event(gctx, {"source": "b0_ref_add", "id": sid_manual, "data": png_b64, "name": "thuyet-minh.docx"})
 check("file không phải ảnh -> từ chối kèm danh sách kiểu được nhận, không ghi refs/",
@@ -1430,7 +1453,8 @@ rows_p6d = fbgrid.rows_for(gctx)
 r_b0 = next(r for r in rows_p6d if r["id"] == sid_b0err)
 b0_rows = ga.filter_rows(rows_p6d, ga.FILTER_B0)
 bucket_filters = [f for f in ga.FILTERS[1:] if f != ga.FILTER_B0]  # bỏ 'Tất cả' — nó trả mọi dòng, không phải một nhóm
-check("lọc 'B0 lỗi' bắt đúng bài trích link hỏng và chỉ bài đó",
+check("lọc 'B0 lỗi' bắt bài trích link hỏng, và P26d khiến mọi bài thiếu caption/ảnh (missing) "
+      "cũng nằm trong nhóm này — không bài nào lọt trạng thái ngoài ba kiểu",
       ga.FILTER_B0 in ga.FILTERS and sid_b0err in [r["id"] for r in b0_rows]
       and all(str(r["b0"]) in (stories.ERROR, ga.STALE, stories.MISSING) for r in b0_rows))
 check("bài B0 lỗi không bị tính vào 'Lỗi' của hàng đợi B1-B3 (nó còn chờ chạy, chỉ việc trích là hỏng)",
@@ -1979,9 +2003,10 @@ check("P14c 6 link = MỘT việc 6 viên B0, luồng nền tự chạy hết tr
               for line in at_im.session_state.get("grid_log", []))
       and not any("2 lượt" in line for line in at_im.session_state.get("grid_log", []))
       and all(ga.b0_state(smoke_root, s) == stories.DONE for s in made))
-check("dòng component mang state B0 để vẽ ô vuông + tổng kết",
+check("dòng component mang state B0 để vẽ ô vuông + tổng kết — 6 bài mới đủ caption+ảnh nên "
+      "xanh hết, bài CŨ (migrate/không refs) giờ là VÀNG 'thiếu' nên đếm đúng từng bài (P26d)",
       all("b0" in r for r in captured.get("rows", []))
-      and captured.get("summary", {}).get("b0_error") == 0
+      and captured.get("summary", {}).get("b0_error") == len(ids_before)
       and sum(1 for r in captured.get("rows", []) if r["b0"] == "done") == 6)
 captured.clear()
 at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-read2", "source": "import_read",
@@ -2004,10 +2029,11 @@ broken = made[-1]
 (smoke_root / broken / "input.txt").unlink()
 captured.clear()
 at_im.run()
-check("bài mất caption -> io.b0_todo hiện 1 cho modal đổi nhãn nút + lưới đếm đúng lỗi B0",
+check("bài mất caption -> io.b0_todo hiện 1 cho modal đổi nhãn nút + lưới đếm đúng: thêm ĐÚNG "
+      "một bài vàng nữa trên nền các bài cũ đã vàng sẵn (P26d)",
       not at_im.exception and (captured.get("io") or {}).get("b0_todo") == 1
       and any(r["b0"] == "missing" for r in captured.get("rows", []))
-      and captured.get("summary", {}).get("b0_error") == 1)
+      and captured.get("summary", {}).get("b0_error") == len(ids_before) + 1)
 captured.clear()
 at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-b0", "source": "b0_retry"}
 at_im.run()
@@ -2428,6 +2454,8 @@ db.save_preset(_p17c_conn, None, "P17cPreset", "", "CAP: <DỮ LIỆU>", "ẢNH:
 _p17c_preset = next(x for x in db.list_presets(_p17c_conn) if x["name"] == "P17cPreset")
 ga.set_pref_preset(_p17c_root, _p17c_preset["id"])
 ga.set_pref_providers(_p17c_root, "b2", ["P17cCodex"])  # bộ bó tay tạo ảnh được chọn RIÊNG cho B2
+ga.set_pref_providers(_p17c_root, "b1", ["P17cChat"])  # P26b: pool trống là lỗi — B1/B3 phải có bộ để ⚡ cả bài chạy được
+ga.set_pref_providers(_p17c_root, "b3", ["P17cChat"])
 _p17c_sid = stories.create_story(_p17c_root, "P17c B2", input_text="nội dung p17c")["id"]
 stories.save_step_text(_p17c_root, _p17c_sid, "b1", "CAPTION P17C")  # B2 cần caption để ghép prompt
 _p17c_sid2 = stories.create_story(_p17c_root, "P17c luồng nền", input_text="nội dung 2")["id"]
@@ -5976,6 +6004,9 @@ shutil.rmtree(_p23a_box, ignore_errors=True)
 # --- P24a: lưới chỉ VẼ 20 bài mới nhất, ▴ mở dần — chạy thật bằng node chứ không soi chữ ---
 _p24a_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
 _p24a_src = re.search(r"(function rows\(\).*?)\nfunction lsGet", _p24a_fe, re.S).group(1)
+# P26a: visible() gọi queueIds() mà hàm đó nằm NGOÀI cửa sổ trích (dưới lsGet) — phải chích mã thật vào
+# harness, nếu không node chết vì ReferenceError và toàn bộ 16 nhận định biến mất im lặng.
+_p24a_qsrc = re.search(r"function queueIds\(\) \{.*?\n\}", _p24a_fe, re.S).group(0)
 _p24a_node = shutil.which("node")
 if _p24a_node:
     _p24a_js = """
@@ -5990,6 +6021,7 @@ const el = (tag, cls, text) => {
 const mk = n => Array.from({ length: n }, (_, i) => ({ id: "story_" + String(i).padStart(3, "0"),
                                                       topic: "Bai " + i }));
 let MODEL = { rows: mk(40) };
+%s
 %s
 const out = [];
 SEARCH = ""; SHOWN = 20;
@@ -6037,8 +6069,23 @@ const b5 = showMoreButton(visible(), windowed(visible()));
 out.push(["dư 5 bài thì nút đòi đúng 5, không đòi 20", !!b5 && b5.text === "▾ Hiện 5 bài cũ hơn (còn 5)"]);
 out.push(["Export theo đúng thứ tự ĐANG HIỆN: id đầu tiên là bài mới nhất (cắt trần lấy phần mới)",
           visible().map(r => String(r.id))[0] === "story_024"]);
+// P26a: hàng đợi lên ĐẦU theo đúng thứ tự # của ▶; bài ngoài hàng đợi giảm dần theo SỐ id.
+MODEL = { rows: [{ id: "story_002" }, { id: "story_9" }, { id: "story_10" }, { id: "story_1" }],
+          queue_ids: ["story_9"] };
+out.push(["P26a queued nhảy lên đầu THEO THỨ TỰ # (story_9 đè cả story_10) và phần còn lại giảm dần "
+          + "theo SỐ id chứ không theo chữ (story_002 trước story_1 — so chữ thì '1' > '0' đảo ngược)",
+          visible().map(r => r.id).join(",") === "story_9,story_10,story_002,story_1"]);
+MODEL = { rows: mk(40), queue_ids: ["story_017", "story_003"] };
+const ascQ = MODEL.rows.map(r => r.id).join(",");
+const vq = visible();
+out.push(["P26a 40 bài + hàng đợi: hai bài queued đứng đầu ĐÚNG THỨ TỰ #, bài mới nhất ngoài hàng đợi "
+          + "kế tiếp (039), không mất bài nào",
+          vq[0].id === "story_017" && vq[1].id === "story_003" && vq[2].id === "story_039"
+          && vq.length === 40]);
+out.push(["P26a sort không đụng MODEL.rows (slice trước sort) — dữ liệu gốc tăng dần nguyên vẹn",
+          MODEL.rows.map(r => r.id).join(",") === ascQ]);
 console.log(JSON.stringify(out));
-""" % _p24a_src
+""" % (_p24a_qsrc, _p24a_src)
     _p24a_tmp = Path(tempfile.mkdtemp(prefix="fbjs24a_")) / "window.js"
     _p24a_tmp.write_text(_p24a_js, encoding="utf-8")
     _p24a_proc = subprocess.run([_p24a_node, str(_p24a_tmp)], capture_output=True, text=True, encoding="utf-8")
@@ -6050,8 +6097,8 @@ console.log(JSON.stringify(out));
             _p24a_rows = []
     for _p24a_name, _p24a_ok in _p24a_rows:
         check("P24a %s" % _p24a_name, _p24a_ok)
-    check("P24a harness node phải chạy được và trả đủ 13 nhận định (lỗi cú pháp trong khối windowed "
-          "là lưới chết im lặng, suite chữ không thấy gì)", len(_p24a_rows) == 13)
+    check("P24a harness node phải chạy được và trả đủ 16 nhận định (lỗi cú pháp trong khối windowed "
+          "là lưới chết im lặng, suite chữ không thấy gì)", len(_p24a_rows) == 16)
     shutil.rmtree(_p24a_tmp.parent, ignore_errors=True)
 else:
     print("(bỏ qua harness P24a: không có node trong PATH)")
@@ -6078,10 +6125,13 @@ check("P24b ô đếm nói ĐỦ hai số + trỏ đúng chỗ tìm bài cũ ('h
       'return "hiện " + drawn' in _p24a_fe and "(mới nhất — ▾ xem bài cũ hơn)" in _p24a_fe
       and "▴ xem bài cũ hơn" not in _p24a_fe
       and 'const drawn = windowed(full).length;' in _p24a_fe)
-check("P24b `visible()` đảo bằng `.slice().reverse()` chứ không `rows().reverse()` — reverse() sửa tại "
+check("P26a `visible()` sắp bằng `list.slice().sort(...)` chứ không `rows().reverse()` — sort sửa tại "
       "chỗ nên MODEL.rows bị lộn luôn, kéo theo mọi chỗ đọc rows() (số dòng, chữ ký lưới) đổi theo "
       "mà không ai giải thích được",
-      ".slice().reverse()" in _p24a_src and "rows().reverse()" not in _p24a_src)
+      "list.slice().sort(" in _p24a_src and "rows().reverse()" not in _p24a_src)
+check("P26a harness có chích mã `queueIds()` THẬT từ index.html (hàm nằm NGOÀI cửa sổ trích) — visible() "
+      "gọi nó, thiếu là node chết vì ReferenceError",
+      "function queueIds() {" in _p24a_qsrc and "MODEL.queue_ids" in _p24a_qsrc)
 check("P24b cửa sổ lấy ĐẦU bằng `list.slice(0, SHOWN)` — còn `list.length - SHOWN` là tiền đề ĐÃ SANG "
       "TRANG của P24a (bài mới ở đáy); hai thứ phải đi cặp, lệch một là lưới hiện sai phần bài",
       "return list.slice(0, SHOWN);" in _p24a_src and "list.length - SHOWN" not in _p24a_src)
@@ -6563,14 +6613,15 @@ try:
 
     _p25b_out = ga.apply_event(_p25b_ctx, {"source": "b4_merge", "id": _p25b_sid_noimg, "force": False})
     _p25b_branch = _p25b_ga_src.split('elif source == "b4_merge":')[1].split('elif source ==')[0]
-    check("P25b event `b4_merge` qua dispatcher CHỈ mang id (+ force): branch không đọc `path`/`file`/"
-          "`audio`/`collection`/`seconds` từ event và không ghi prefs — đường dẫn ffmpeg do server dò, bộ "
-          "sưu tập + số giây do server đọc từ prefs workspace. Browser không có cửa chọn file tiếng cho bài",
+    check("P25b event `b4_merge` qua dispatcher mang id + force + chọn riêng TỪNG BÀI (P26c): branch không "
+          "đọc `path`/`file`/`collection` từ event và không ghi prefs — đường dẫn ffmpeg do server dò, bộ "
+          "sưu tập do server đọc từ prefs workspace; `audio` chỉ là TÊN FILE (server đối chiếu với bộ, không "
+          "phải đường dẫn) và `seconds` là số nguyên (rác -> 0). Browser giờ CÓ cửa chọn file tiếng cho bài",
           _p25b_out.lines and _p25b_out.touched == [_p25b_sid_noimg]
-          and 'event.get("force")' in _p25b_branch and '"' not in _p25b_branch.split("merge_b4")[0]
+          and 'event.get("force")' in _p25b_branch
+          and 'event.get("audio")' in _p25b_branch and 'event.get("seconds")' in _p25b_branch
           and not any(k in _p25b_branch for k in ('event.get("path")', 'event.get("file")',
-                                                  'event.get("audio")', 'event.get("collection")',
-                                                  'event.get("seconds")'))
+                                                  'event.get("collection")'))
           and "set_pref_audio" not in _p25b_branch and "set_ffmpeg_path" not in _p25b_branch)
 
     check("P25b modal B4 nói lại ĐỦ hai đường ra video — dòng chữ cũ 'B4 là bước tải tay, không có AI, "
@@ -6964,6 +7015,167 @@ finally:
     audio._durations.clear()
     shutil.rmtree(_p25c_box, ignore_errors=True)
 # --- hết P25c ---
+
+# --- P26c: modal B4 chọn RIÊNG file tiếng + giây cho TỪNG bài (nút "🎧 Chọn file + giây") ---
+_p26c_box = Path(tempfile.mkdtemp(prefix="fbsmoke_p26c_"))
+_p26c_dd, _p26c_rec = paths.data_dir, stories._recents_path
+_p26c_merge_real = audio.merge
+paths.data_dir = lambda: _p26c_box / "DATA"
+stories._recents_path = lambda: _p26c_box / "workspaces.json"
+_p26c_root = stories.set_current(stories.validate_root(_p26c_box / "ws_p26c"))
+_p26c_ctx = ga.Ctx(root=_p26c_root, providers={}, presets={}, defaults={})
+_p26c_ga_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p26c_gd_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+_p26c_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p26c_app_src = (Path(__file__).resolve().parent / "app.py").read_text(encoding="utf-8")
+_p26c_merges = []
+
+
+def _p26c_merge(image, audio_file, out, seconds):
+    _p26c_merges.append((Path(image).name, Path(audio_file).name, int(seconds)))
+    out.write_bytes(b"mp4 gia p26c")
+    return 0.1
+
+
+audio.merge = _p26c_merge
+try:
+    _p26c_col = audio.create("Nhac p26c")
+    audio.add_file(_p26c_col, _P25aUp(b"RIFFfake"), "mot.mp3")
+    audio.add_file(_p26c_col, _P25aUp(b"RIFFfake"), "hai.mp3")
+    ga.set_pref_audio(_p26c_root, collection=_p26c_col, seconds=30)
+    _p26c_s1 = stories.create_story(_p26c_root, "bai p26c mot")["id"]
+    _p26c_s2 = stories.create_story(_p26c_root, "bai p26c hai")["id"]
+    (_p26c_root / _p26c_s1 / "image.png").write_bytes(b"png gia p26c")
+    (_p26c_root / _p26c_s2 / "image.png").write_bytes(b"png gia p26c")
+    _p26c_b4 = lambda sid: dict(stories.load_story(_p26c_root, sid).get("b4") or {})
+
+    _p26c_l1 = ga.merge_b4(_p26c_ctx, _p26c_s1)
+    _p26c_pick = _p26c_merges[-1][1]
+    check("P26c `merge_b4` không có chọn riêng vẫn theo `audio.pick` tất định + giây lấy từ prefs "
+          "workspace (30 s), và ghi ĐỦ dấu vết vào story.json: file · bộ · giây · ảnh nguồn — "
+          "lần ghép sau (kể cả ⚡/▶ nền không mang chọn theo) có chỗ mà nhớ lại",
+          _p26c_pick in ("mot.mp3", "hai.mp3")
+          and "(30 s" in _p26c_l1[0] and "image.png" in _p26c_l1[0]
+          and _p26c_b4(_p26c_s1)["audio"] == _p26c_pick
+          and _p26c_b4(_p26c_s1)["audio_seconds"] == 30
+          and _p26c_b4(_p26c_s1)["audio_collection"] == _p26c_col
+          and _p26c_b4(_p26c_s1)["audio_from"] == "image.png")
+
+    _p26c_l2 = ga.merge_b4(_p26c_ctx, _p26c_s1, audio_name="hai.mp3", seconds=9999)
+    check("P26c chọn tay file + giây: file đúng như chọn, giây KẸP vào trần 600 (không nhận 9999), "
+          "nhãn kết quả in cả hai con số thật",
+          _p26c_merges[-1] == ("image.png", "hai.mp3", 600)
+          and "(600 s" in _p26c_l2[0] and "“hai.mp3”" in _p26c_l2[0]
+          and _p26c_b4(_p26c_s1)["audio_seconds"] == 600)
+
+    _p26c_n = len(_p26c_merges)
+    _p26c_l3 = ga.merge_b4(_p26c_ctx, _p26c_s1, audio_name="mat.mp3")
+    check("P26c tên file không còn trong bộ là TỪ CHỐI THẲNG (nói rõ tên + bộ), không đoán bừa, "
+          "không chạy ffmpeg — trình duyệt không bao giờ đưa được đường dẫn qua cửa này",
+          "không còn trong bộ" in _p26c_l3[0] and "mat.mp3" in _p26c_l3[0] and _p26c_col in _p26c_l3[0]
+          and len(_p26c_merges) == _p26c_n)
+
+    _p26c_l4 = ga.merge_b4(_p26c_ctx, _p26c_s1)
+    check("P26c lần ghép KHÔNG mang chọn (đúng dáng ⚡/▶ gửi `{source: b4_merge, id}`) vẫn ghép theo "
+          "chọn đã NHỚ trong story.json: file `hai.mp3` + 600 s — không về lại mặc định 30 s",
+          _p26c_merges[-1] == ("image.png", "hai.mp3", 600) and "(600 s" in _p26c_l4[0])
+
+    _p26c_o1 = ga.apply_event(_p26c_ctx, {"source": "b4_merge", "id": _p26c_s2,
+                                          "audio": "mot.mp3", "seconds": "45"})
+    check("P26c dispatch `b4_merge` đọc đúng hai chìa mới `audio`/`seconds` từ event lưới (chuỗi từ "
+          "iframe): ghép đúng file và 45 s, touched đúng bài",
+          "“mot.mp3”" in _p26c_o1.lines[0] and "(45 s" in _p26c_o1.lines[0]
+          and _p26c_o1.touched == [_p26c_s2]
+          and _p26c_b4(_p26c_s2)["audio_seconds"] == 45)
+    _p26c_o2 = ga.apply_event(_p26c_ctx, {"source": "b4_merge", "id": _p26c_s2,
+                                          "audio": "hai.mp3", "seconds": "abc"})
+    check("P26c giây không phải số thì coi như trống (về prefs 30 s) chứ KHÔNG crash — "
+          "dispatch vẫn trả lời một dòng",
+          "(30 s" in _p26c_o2.lines[0] and _p26c_o2.touched == [_p26c_s2]
+          and _p26c_b4(_p26c_s2)["audio_seconds"] == 30)
+
+    check("P26c phía lưới: nút “🎧 Chọn file + giây” mở ô chọn trong modal B4, đọc ĐÚNG "
+          "`MODEL.audio.files` (payload mới của Python) + `row.b4rec` (chọn đã nhớ), và event gửi "
+          "CHỈ `audio: sel.value` + `seconds` (số, làm tròn) — không có đường dẫn nào trong payload",
+          "🎧 Chọn file + giây" in _p26c_fe and "MODEL.audio.files" in _p26c_fe
+          and "b4rec" in _p26c_fe and "audio: sel.value" in _p26c_fe
+          and "seconds: (Number.isFinite(n) && n > 0) ? Math.round(n) : 0" in _p26c_fe)
+    check("P26c phía Python: grid gửi `audio={collection, seconds, files}` cho JS và `b4rec` "
+          "từng hàng; grid_actions nhận `audio_name`/`seconds`; trang Cấu hình ▸ Âm thanh nói rõ "
+          "chuyện chọn riêng này",
+          'audio={"collection"' in _p26c_gd_src and '"b4rec"' in _p26c_gd_src
+          and "audio_name" in _p26c_ga_src and "không còn trong bộ" in _p26c_ga_src
+          and "🎧 Chọn file + giây" in _p26c_app_src)
+finally:
+    audio.merge = _p26c_merge_real
+    paths.data_dir = _p26c_dd
+    stories._recents_path = _p26c_rec
+    shutil.rmtree(_p26c_box, ignore_errors=True)
+# --- hết P26c ---
+
+# --- P26d: ô B0 suy từ FILE — đủ caption+ảnh = xanh, thiếu một thứ = vàng ---
+_p26d_box = Path(tempfile.mkdtemp(prefix="fbsmoke_p26d_"))
+_p26d_dd, _p26d_rec = paths.data_dir, stories._recents_path
+paths.data_dir = lambda: _p26d_box / "DATA"
+stories._recents_path = lambda: _p26d_box / "workspaces.json"
+_p26d_root = stories.set_current(stories.validate_root(_p26d_box / "ws_p26d"))
+_p26d_ga_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p26d_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p26d_ref = _p26d_box / "ref.png"
+_p26d_ref.write_bytes(b"\x89PNG\r\n\x1a\n" + b"p26d")
+
+
+def _p26d_story(name, text=""):
+    return stories.create_story(_p26d_root, name, input_text=text)["id"]
+
+
+try:
+    _p26d_fresh = _p26d_story("moi toanh")
+    check("P26d bài mới tinh (chưa B0, chưa file gì) là VÀNG 'thiếu caption lẫn ảnh' — không còn "
+          "màu trắng 'chưa chạy' vô nghĩa",
+          ga.b0_state(_p26d_root, _p26d_fresh) == stories.MISSING)
+    _p26d_cap = _p26d_story("chi co chu", "Caption co roi")
+    check("P26d có caption mà chưa có ảnh tham chiếu -> VÀNG (chưa đủ)",
+          ga.b0_state(_p26d_root, _p26d_cap) == stories.MISSING)
+    stories.save_ref(_p26d_root, _p26d_cap, _p26d_ref)
+    check("P26d thêm ảnh tham chiếu là đủ CẢ hai -> XANH ngay, không cần story.json ghi done",
+          ga.b0_state(_p26d_root, _p26d_cap) == stories.DONE)
+    (Path(_p26d_root / _p26d_cap) / "input.txt").unlink()
+    check("P26d xóa caption đi (còn ảnh) -> VÀNG trở lại",
+          ga.b0_state(_p26d_root, _p26d_cap) == stories.MISSING)
+    _p26d_done = _p26d_story("ghi done ma thieu", "co chu")
+    stories.update_story(_p26d_root, _p26d_done, b0={"state": stories.DONE, "url": "https://fb.watch/x"})
+    check("P26d story.json ghi done mà thiếu ảnh -> vẫn VÀNG — đúng ca 'đủ rồi nhưng vẫn trắng' "
+          "anh báo: màu giờ suy từ file chứ không tin chữ",
+          ga.b0_state(_p26d_root, _p26d_done) == stories.MISSING)
+    _p26d_run = _p26d_story("dang chay")
+    stories.update_story(_p26d_root, _p26d_run, b0={"state": stories.RUNNING, "updated_at": time.time()})
+    check("P26d 'running' mới toanh vẫn hiện ĐANG CHẠY (luật file không đè), treo 15 phút vẫn stale",
+          ga.b0_state(_p26d_root, _p26d_run) == stories.RUNNING)
+    stories.update_story(_p26d_root, _p26d_run, b0={"state": stories.RUNNING,
+                                                    "updated_at": time.time() - ga.STALE_SECONDS - 5})
+    check("P26d running treo quá hạn -> stale y như cũ",
+          ga.b0_state(_p26d_root, _p26d_run) == ga.STALE)
+    _p26d_err = _p26d_story("loi that", "co chu")
+    stories.save_ref(_p26d_root, _p26d_err, _p26d_ref)
+    stories.update_story(_p26d_root, _p26d_err, b0={"state": stories.ERROR, "detail": "loi mang"})
+    check("P26d ERROR vẫn là ERROR dù file đã đủ — lỗi phải nhìn ra để xử lý, không bị màu xanh che",
+          ga.b0_state(_p26d_root, _p26d_err) == stories.ERROR)
+    _p26d_rows = {r["id"]: r for r in fbgrid.rows_for(ga.Ctx(root=_p26d_root, providers={},
+                                                             presets={}, defaults={}))}
+    check("P26d ghi chú nói ĐÚNG thứ thiếu từng kiểu: caption / ảnh tham chiếu / cả hai — thẻ hover "
+          "không phải đoán",
+          "B0 vàng vì thiếu caption lẫn ảnh tham chiếu" in _p26d_rows[_p26d_fresh]["detail"]["b0"]
+          and "B0 vàng vì thiếu ảnh tham chiếu" in _p26d_rows[_p26d_done]["detail"]["b0"]
+          and "B0 vàng vì thiếu caption" in _p26d_rows[_p26d_cap]["detail"]["b0"])
+    check("P26d phía lưới: nhãn ô B0 'missing' đổi thành 'thiếu caption/ảnh' (không còn nói "
+          "'mất file' cho bài chưa từng có file) và b0_state suy từ refs_of",
+          "thiếu caption/ảnh" in _p26d_fe and "refs_of" in _p26d_ga_src)
+finally:
+    paths.data_dir = _p26d_dd
+    stories._recents_path = _p26d_rec
+    shutil.rmtree(_p26d_box, ignore_errors=True)
+# --- hết P26d ---
 
 
 # cleanup test rows

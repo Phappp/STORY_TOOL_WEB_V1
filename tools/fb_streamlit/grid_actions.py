@@ -330,12 +330,13 @@ def audio_label(setup: dict, sid: str, has_image: bool) -> tuple[str, bool]:
     return f"{audio.pick(setup['collection'], sid, setup['files']).name} · {setup['seconds']} s", True
 
 
-def merge_b4(ctx: Ctx, sid: str, force: bool = False) -> list[str]:
+def merge_b4(ctx: Ctx, sid: str, force: bool = False, audio_name: str = "", seconds: int = 0) -> list[str]:
     """Ghép `image.png` của chính bài này + một file tiếng trong bộ của workspace thành `video.mp4`.
 
-    Event CHỈ mang id bài: bộ nào + bao nhiêu giây lấy từ prefs workspace, file nào trong bộ lấy
-    theo id bài (`audio.pick`, tất định), đường dẫn ffmpeg lấy từ PATH hoặc Cấu hình ▸ Âm thanh.
-    Không có chỗ nào để trình duyệt gửi một đường dẫn xuống đây.
+    Event CHỈ mang id bài (kèm cùng lắm TÊN FILE + số giây để modal B4 chọn riêng từng bài — tên
+    phải có thật trong bộ, giây bị kẹp trong AUDIO_SECONDS_MIN..MAX): bộ nào lấy từ prefs workspace,
+    file mặc định lấy theo id bài (`audio.pick`, tất định), đường dẫn ffmpeg lấy từ PATH hoặc Cấu
+    hình ▸ Âm thanh. Không có chỗ nào để trình duyệt gửi một đường dẫn xuống đây.
     """
     setup = audio_setup(ctx.root)
     info = setup["ffmpeg"]
@@ -350,11 +351,28 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False) -> list[str]:
                 "(đổi tên hay xóa ở ngoài tool thì chọn lại bộ)."]
     if not setup["files"]:
         return [f"{sid}: chưa ghép được — bộ “{setup['collection']}” chưa có file âm thanh nào."]
+    names = {f.name for f in setup["files"]}
+    story = stories.load_story(ctx.root, sid)
+    prev = dict(story.get("b4") or {})
+    if audio_name:
+        # P26c: chọn tay ngay trong modal B4 — tên không còn trong bộ là nói thẳng, không đoán bừa.
+        if audio_name not in names:
+            return [f"{sid}: chưa ghép được — file “{audio_name}” không còn trong bộ “{setup['collection']}” "
+                    "(đổi tên hay xóa ở ngoài tool thì chọn lại)."]
+        clip_name, secs = audio_name, int(setup["seconds"])
+    elif str(prev.get("audio") or "") in names:
+        # Lần ghép trước đã chọn riêng cho bài này — ⚡/▶ nền không mang theo chọn nên phải tự nhớ:
+        # chỉ dùng khi file vẫn còn trong bộ, mất rồi thì về chọn tất định như chưa từng chọn.
+        clip_name, secs = str(prev["audio"]), int(prev.get("audio_seconds") or setup["seconds"])
+    else:
+        clip_name, secs = audio.pick(setup["collection"], sid, setup["files"]).name, int(setup["seconds"])
+    if seconds:
+        secs = min(AUDIO_SECONDS_MAX, max(AUDIO_SECONDS_MIN, int(seconds)))
+    secs = min(AUDIO_SECONDS_MAX, max(AUDIO_SECONDS_MIN, secs))
     image = stories.image_of(ctx.root, sid)
     if image is None:
         return [f"{sid}: chưa ghép được — bài này chưa có ảnh B2 (`image.png` trong folder bài)."]
-    clip = audio.pick(setup["collection"], sid, setup["files"])
-    story = stories.load_story(ctx.root, sid)
+    clip = next(f for f in setup["files"] if f.name == clip_name)
     old = stories.video_file(_folder(story, ctx.root, sid))
     method = str((story.get("b4") or {}).get("method") or "")
     if old is not None and method == MANUAL_METHOD and not force:
@@ -364,7 +382,7 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False) -> list[str]:
                 f"{round(old.stat().st_size / 1048576, 1)} MB) — bản ghép sẽ GHI ĐÉ. Bấm lại lần nữa để xác nhận."]
     tmp = audio.merge_tmp_dir() / f"{Path(str(sid)).name}-{int(time.time())}.mp4"
     try:
-        spent = audio.merge(image, clip, tmp, setup["seconds"])
+        spent = audio.merge(image, clip, tmp, secs)
         with open(tmp, "rb") as fh:
             stories.save_video(ctx.root, sid, fh, suffix=".mp4", method=audio.MERGE_METHOD)
     except (audio.AudioError, OSError, stories.WorkspaceError) as exc:
@@ -378,11 +396,11 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False) -> list[str]:
     block = dict(stories.load_story(ctx.root, sid).get("b4") or {})
     # Dấu vết để lần sau biết video này dựng từ gì — `pick` tất định nên chỉ cần id bài, mà ghi lại
     # vẫn cần khi bộ sưu tập có thêm/bớt file (tổng số file đổi là file chọn đổi theo).
-    block.update({"audio": clip.name, "audio_collection": setup["collection"],
-                  "audio_seconds": int(setup["seconds"]), "audio_from": str(image.name)})
+    block.update({"audio": clip_name, "audio_collection": setup["collection"],
+                  "audio_seconds": secs, "audio_from": str(image.name)})
     stories.update_story(ctx.root, sid, b4=block)
     over = f" · đã ghi đè video tải tay `{old.name}`" if old is not None and force else ""
-    return [f"{sid}: 🎬 đã ghép `{image.name}` + “{clip.name}” ({setup['seconds']} s, bộ "
+    return [f"{sid}: 🎬 đã ghép `{image.name}` + “{clip_name}” ({secs} s, bộ "
             f"“{setup['collection']}”) → `{block.get('file')}` · "
             f"{round(float(block.get('bytes') or 0) / 1048576, 1)} MB · ffmpeg {round(spent, 1)} s{over}"]
 
@@ -419,7 +437,8 @@ def b4_plan(root: Path, ids: list[str]) -> dict[str, str]:
 
 
 def provider_pool(ctx: Ctx, story: dict, step: str) -> list[str]:
-    """Thứ tự provider bước này CÓ THỂ dùng — rỗng nghĩa là để steps tự theo preset/default.
+    """Thứ tự provider bước này CÓ THỂ dùng — rỗng nghĩa là CHƯA CHỌN PROVIDER (P26b: bấm chạy là báo
+    lỗi, preset không tự cấp bộ nữa — preset chỉ cấp prompt).
 
     Bài chọn riêng trong modal (prov_pick) thì chỉ đúng bộ đó, không nhận thêm pool của workspace:
     anh đã chỉ định bộ cho bài này thì luồng nền không được tự nhảy sang bộ khác.
@@ -436,7 +455,8 @@ def provider_pool(ctx: Ctx, story: dict, step: str) -> list[str]:
 
 
 def provider_pref(ctx: Ctx, story: dict, step: str) -> str:
-    """Bộ ĐẦU TIÊN trong pool của bước (thứ tự anh liệt kê ở đầu Grid) — rỗng = steps tự theo preset.
+    """Bộ ĐẦU TIÊN trong pool của bước (thứ tự anh liệt kê ở đầu Grid) — rỗng = CHƯA CHỌN PROVIDER
+    cho bước này (P26b: không còn tự theo preset/default).
 
     Pool có nhiều bộ là để luồng nền CHIA VIỆC, không phải để chạy bừa: lúc chạy ngay tại chỗ
     (trang Tạo bài, ⚡ một bài) thì vẫn lấy bộ đầu, bộ sau chỉ được dùng khi bộ trước đang bận.
@@ -458,16 +478,13 @@ def free_provider(root: Path, sid: str, step: str, busy) -> tuple[str, str]:
         ctx = build_ctx(conn, root)
         story = stories.load_story(root, sid)
         pool = provider_pool(ctx, story, step)
-        if not pool:  # chưa set bộ nào cho bước -> theo preset/default, vẫn phải là bộ có thật
-            provider, _model = steps.resolve_provider_model(
-                ctx.providers, story, preset_for(ctx, story), step, preferred="")
-            pool = [str(provider["name"])] if provider else []
+        if not pool:
+            # P26b: trống là LỖI luôn — không tự lấy preset/default nữa (preset chỉ cấp prompt).
+            return "", f"bước {step.upper()} chưa chọn provider — chọn ô Provider {step.upper()} ở đầu lưới hoặc chọn riêng trong modal bài."
         taken = {str(name) for name in busy}
         for name in pool:
             if name not in taken:
                 return name, ""
-        if not pool:
-            return "", f"bước {step.upper()} chưa có provider nào (Cấu hình ▸ Providers)."
         return "", ""
     except (stories.WorkspaceError, OSError, ValueError) as exc:
         return "", f"{type(exc).__name__}: {exc}"
@@ -529,14 +546,22 @@ def display_states(root: Path, sid: str, now: float | None = None, story: dict |
 
 
 def b0_state(root: Path, sid: str, now: float | None = None, story: dict | None = None) -> str:
-    """B0 có state riêng trong story.json — không đi qua step_states vì nó không phải bước AI."""
+    """B0 có state riêng trong story.json — không đi qua step_states vì nó không phải bước AI.
+
+    P26d: màu ô B0 suy từ FILE chứ không tin chữ trong story.json — đủ caption (`input.txt`
+    không rỗng) VÀ ảnh tham chiếu (`refs/` có file) thì xanh lá; thiếu một trong hai thì vàng.
+    Nhờ vậy bài đủ cả hai mà story.json còn ghi 'pending' (import, nhập tay, state cũ) cũng lên
+    xanh, và bài mất file mới vàng ngay. 'running'/ERROR/STALE vẫn giữ nghĩa riêng.
+    """
     story = story if story is not None else stories.load_story(root, sid)
     block = story.get("b0") or {}
     state = str(block.get("state") or stories.PENDING)
     if state == stories.RUNNING and (now if now is not None else time.time()) - float(block.get("updated_at") or 0) > STALE_SECONDS:
         return STALE
-    if state == stories.DONE and not stories.input_text(root, sid).strip():
-        return stories.MISSING
+    if state in (stories.PENDING, stories.DONE, stories.MISSING):
+        has_caption = bool(stories.input_text(root, sid).strip())
+        has_refs = bool(stories.refs_of(root, sid))
+        return stories.DONE if (has_caption and has_refs) else stories.MISSING
     return state
 
 
@@ -1452,6 +1477,10 @@ def _run_step(ctx: Ctx, sid: str, step: str, preferred: str = "", chained: bool 
         return [why]
     story, preset = ready
     post = stories.post_view(ctx.root, sid)
+    # P26b: không tự lấy bộ theo preset/default nữa — `preferred` (luồng nền đã chiếm) hoặc pool đầu
+    # lưới/bài chọn riêng phải có thật, trống là lỗi báo rõ chỗ chọn thay vì âm thầm chạy bộ khác.
+    if not preferred and not provider_pref(ctx, story, step):
+        return [f"{STEP_NAMES[step]}: chưa chọn provider — chọn ô Provider {step.upper()} ở đầu lưới hoặc chọn riêng trong modal bài."]
     # `preferred` là bộ luồng nền vừa chiếm (xem free_provider) — phải thắng để đúng chỗ đã hứa
     provider, model = steps.resolve_provider_model(ctx.providers, story, preset, step,
                                                    preferred=preferred or provider_pref(ctx, story, step))
@@ -1480,6 +1509,11 @@ def _run_all(ctx: Ctx, sid: str) -> list[str]:
         return [why]
     story, preset = ready
     post = stories.post_view(ctx.root, sid)
+    # P26b: bước nào chưa có pool provider (đầu lưới/bài chọn riêng) thì báo lỗi ngay — preset không
+    # còn tự cấp bộ; còn `chained` (⚡/▶) thì nói rõ hướng chọn, để dính vào một dòng khó hiểu.
+    missing = [step for step in ALL_STEPS if not provider_pref(ctx, story, step)]
+    if missing:
+        return [f"{sid}: bước {', '.join(s.upper() for s in missing)} chưa chọn provider — chọn ô Provider ở đầu lưới hoặc chọn riêng trong modal bài."]
     providers = {step: steps.resolve_provider_model(ctx.providers, story, preset, step,
                                                     preferred=provider_pref(ctx, story, step))
                  for step in ALL_STEPS}
@@ -1965,7 +1999,14 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "b4_merge":
             # P25b: một cú bấm = ghép ĐÚNG MỘT bài (ảnh của bài đó + file tiếng bộ sưu tập của workspace).
             # `force` là cú bấm THỨ HAI khi bài đã có video tải tay — không có nó thì không đè.
-            out.lines, out.touched = merge_b4(ctx, sid, force=bool(event.get("force"))), [sid]
+            # P26c: `audio`/`seconds` là chọn riêng TỪNG BÀI trong modal B4 — tên phải có thật trong bộ.
+            try:
+                secs = int(event.get("seconds") or 0)
+            except (TypeError, ValueError):
+                secs = 0
+            out.lines, out.touched = merge_b4(ctx, sid, force=bool(event.get("force")),
+                                              audio_name=str(event.get("audio") or ""),
+                                              seconds=secs), [sid]
         elif source == "b4_link_save":
             # P18d: tab B4 trong modal chỉ NHẬP LINK — bytes video vẫn đi widget native, không qua iframe.
             url = clean_url(event.get("value"))

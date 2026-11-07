@@ -513,7 +513,7 @@ function menuItem(icon, label, fn, cls, manual) {
   return { node: b, label: text };
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0 };
+let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {} };
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
 let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
@@ -526,10 +526,11 @@ function searchFields(row) {
   return [row.id, row.topic, row.source, row.link, row.status].map(v => String(v || "").toLowerCase());
 }
 function visible() {
-  // P24b: HIỆN giảm dần — bài mới nhất trên đầu. Python gửi TĂNG dần (`list_story_ids`), đảo ngay
-  // tại đây thì mọi chỗ đọc visible() (lưới, ◂ ▸ modal, ↑ ↓, ô đếm, Export) tự theo đúng thứ tự
-  // anh nhìn thấy, không chỗ nào phải biết có chuyện đảo. `slice()` trước `reverse()` vì reverse
-  // sửa tại chỗ — MODEL.rows mà bị lộn thì lượt vẽ sau so chữ ký và các chỗ đọc rows() đổi theo.
+  // P26a: hàng đợi lên ĐẦU theo đúng thứ tự # của ▶ (queueIds), phần còn lại giảm dần theo số id
+  // (story_032 → story_001). Python gửi TĂNG dần (`list_story_ids`), sắp ngay tại đây thì mọi chỗ
+  // đọc visible() (lưới, ◂ ▸ modal, ↑ ↓, ô đếm, Export) tự theo đúng thứ tự anh nhìn thấy, không
+  // chỗ nào phải biết có chuyện sắp. `slice()` trước `sort()` vì sort sửa tại chỗ — MODEL.rows mà
+  // bị lộn thì lượt vẽ sau so chữ ký và các chỗ đọc rows() đổi theo.
   const terms = SEARCH.toLowerCase().split(/\s+/).filter(Boolean);
   const list = terms.length
     ? rows().filter(row => {
@@ -537,7 +538,16 @@ function visible() {
         return terms.every(t => fields.some(f => f.indexOf(t) >= 0));
       })
     : rows();
-  return list.slice().reverse();
+  const q = new Map(queueIds().map((id, i) => [String(id), i]));
+  return list.slice().sort((a, b) => {
+    const ai = q.get(String(a.id)), bi = q.get(String(b.id));
+    if (ai !== undefined || bi !== undefined) {
+      if (ai === undefined) return 1;
+      if (bi === undefined) return -1;
+      return ai - bi;
+    }
+    return String(b.id).localeCompare(String(a.id), "en", { numeric: true });
+  });
 }
 
 // P24a+b: VẼ tối đa SHOWN hàng, nhưng phần DỮ LIỆU vẫn là cả workspace.
@@ -872,7 +882,10 @@ function stepsCell(row) {
     // KHÔNG đặt b.title: tooltip mặc định của trình duyệt hiện trễ ~1 giây, chữ nhỏ và không
     // nói được provider/model/lúc chạy. Dữ liệu thẻ hover đi theo viên pill nên patchCells
     // đổi ô nào là thẻ đổi theo ô đó, không phải tra lại hàng.
-    const head = STEP_TITLE[step] + ": " + (STATE_LABEL[state] || state);
+    // P26d: ô B0 'missing' giờ nghĩa là THIẾU caption/ảnh (chưa từng có cũng tính) — chữ 'mất file'
+    // chỉ đúng cho B1-B3/B4, với B0 phải nói thiếu chứ không nói mất.
+    const label = step === "b0" && state === "missing" ? "thiếu caption/ảnh" : (STATE_LABEL[state] || state);
+    const head = STEP_TITLE[step] + ": " + label;
     b.setAttribute("aria-label", head + (detail ? " · " + detail : ""));
     b.dataset.tip = [head,
       flow ? "Luồng nền: " + flow : "",
@@ -1631,6 +1644,54 @@ function mergeBox(row) {
     b.disabled = true;
   }
   box.appendChild(b);
+  // P26c: MỘT nút mở ô chọn RIÊNG cho bài này — file nào + bao nhiêu giây, chọn xong bấm GHÉP ngay
+  // trong ô. Event chỉ gửi TÊN FILE + con số (server ghép đường dẫn), chưa bao giờ là đường dẫn.
+  const chooser = button("🎧 Chọn file + giây",
+    ready ? ("Chọn file tiếng KHÁC cho riêng " + row.id + " và số giây (thay vì file theo id bài) — "
+      + "chọn xong bấm GHÉP trong ô mở ra; chọn này được nhớ cho các lần ⚡/▶ sau của bài")
+      : "Không ghép được: " + label + " — xem Cấu hình ▸ Âm thanh",
+    () => {
+      const old = box.querySelector(".audpick");
+      if (old) { old.remove(); return; }
+      const panel = el("div", "audpick");
+      panel.appendChild(el("div", "muted", "Riêng " + row.id + " — không đổi cài đặt của workspace."));
+      const files = Array.isArray(MODEL.audio.files) ? MODEL.audio.files : [];
+      const sel = document.createElement("select");
+      sel.className = "prov";
+      files.forEach(name => { const o = el("option", null, name); o.value = name; sel.appendChild(o); });
+      const rec = row.b4rec || {};
+      const recName = String(rec.audio || "");
+      if (files.indexOf(recName) >= 0) sel.value = recName;
+      const rowSecs = el("div", "audrow");
+      rowSecs.appendChild(sel);
+      const secs = document.createElement("input");
+      secs.type = "number";
+      secs.min = "1";
+      secs.max = "600";
+      secs.value = String(Number(rec.seconds || MODEL.audio.seconds || 60) || 60);
+      rowSecs.appendChild(secs);
+      rowSecs.appendChild(el("span", "muted", " giây (1–600)"));
+      panel.appendChild(rowSecs);
+      const go = button("🎬 Ghép với chọn này",
+        "Ghép `image.png` của " + row.id + " + “" + sel.value + "” trong " + secs.value + " giây"
+          + (over ? " — bài này ĐANG có video bạn tải tay nên phải bấm HAI lần" : ""),
+        bb => {
+          if (over && bb.dataset.arm !== "1") {
+            bb.dataset.arm = "1";
+            bb.textContent = "⚠ Bấm lần nữa để ghi đè video bạn đã tải tay";
+            return;
+          }
+          bb.disabled = true;
+          const n = Number(secs.value);
+          send({ source: "b4_merge", id: row.id, audio: sel.value,
+                 seconds: (Number.isFinite(n) && n > 0) ? Math.round(n) : 0, force: over });
+        }, "act");
+      if (!files.length) { sel.disabled = true; go.disabled = true; }
+      panel.appendChild(go);
+      box.appendChild(panel);
+    }, "act");
+  if (!ready || flow) chooser.disabled = true;
+  box.appendChild(chooser);
   return box;
 }
 
@@ -1658,6 +1719,9 @@ function videoCard(row) {
       + "số giây thì bị CẮT, video dựng theo đúng KHỔ ảnh B2, không cắt ảnh.",
       "Bài nào cũng lấy file tiếng theo id của nó, không xoay vòng: chạy lại cùng một bài ra cùng một tiếng. "
       + "Bộ sưu tập THÊM hay BỚT file thì bài có thể đổi sang file khác.",
+      "Muốn bài này dùng file tiếng KHÁC hoặc số giây khác: bấm “🎧 Chọn file + giây” rồi chọn trong ô mở ra "
+      + "và bấm “🎬 Ghép với chọn này”. Chọn này ghi vào story.json của bài (chỉ tên file + con số, không phải "
+      + "đường dẫn) nên các lần ⚡/▶ sau của bài cũng ghép theo đúng chọn đó; bỏ chọn thì lại theo id bài.",
       "Ghép chạy bằng ffmpeg trên máy: video 60 s khổ 1024 hết ~10 giây, 30 s hết ~5 giây "
       + "(nút trên chỉ làm MỘT bài ngay tại chỗ, không chờ hàng đợi; ⚡/▶ thì xếp B4 vào đúng lượt của bài). "
       + "Bài đã có video do bạn tải tay phải bấm HAI lần để ghi đè; video do chính nút này ghép thì bấm một lần.",
@@ -1757,7 +1821,7 @@ function modalNode() {
     "← → hoặc hai nút đầu modal: sang bài trước/kế TRONG ĐÚNG danh sách đang hiện, giữ nguyên tab.",
     "Sửa chữ trong modal là ghi thẳng vào file trong folder bài — file vẫn là nguồn thật; xóa file ngoài ổ thì ô về cam “mất file”.",
     "Ô 🔗/🎬 ngay dưới đầu modal sửa link (Enter = lưu, nút copy = nguyên văn link, nút mở = mở bài).",
-    "Dropdown trong thanh dưới là provider riêng cho bước này của bài này, ghi vào story.json — để trống là theo workspace/preset.",
+    "Dropdown trong thanh dưới là provider riêng cho bước này của bài này, ghi vào story.json — trống là dùng ô Provider đầu lưới; cả hai đều trống thì bấm chạy sẽ báo lỗi, không tự lấy bộ mặc định.",
     "Ảnh B2 mở trong modal tới " + mib(MODEL.image_max, 2) + " MB; video không đi qua iframe nên B4 chỉ nhập link."]));
   head.appendChild(iconButton("cross", "Đóng (Esc)", () => closeModal(), "act"));
   modal.appendChild(head);
@@ -1794,15 +1858,16 @@ function modalNode() {
     const pick = String((row.prov || {})[ref.tab] || "");
     const sel = document.createElement("select");
     sel.className = "prov";
-    const none = el("option", null, "— theo workspace/preset —");
+    const none = el("option", null, "— theo ô Provider đầu lưới —");
     none.value = "";
     sel.appendChild(none);
     names.forEach(name => { const o = el("option", null, name); o.value = name; sel.appendChild(o); });
     sel.value = names.indexOf(pick) >= 0 ? pick : "";
     const pool = Array.isArray(MODEL.defaults[ref.tab]) ? MODEL.defaults[ref.tab] : [];
-    const def = pool.length ? pool.join(" → ") : "preset";
+    const def = pool.length ? pool.join(" → ") : "chưa chọn gì";
     sel.title = "Provider riêng cho " + STEP_TITLE[ref.tab] + " của " + row.id +
-      " — mặc định của grid đang là " + def + " (bộ đầu tiên được dùng, bài chọn riêng thì chỉ đúng bộ này), để trống là không chọn riêng";
+      " — ô đầu lưới đang là " + def + " (bộ đầu tiên được dùng, bài chọn riêng thì chỉ đúng bộ này);"
+      + " cả chỗ này lẫn ô đầu lưới đều trống thì bấm chạy sẽ báo lỗi 'chưa chọn provider'";
     sel.addEventListener("click", e => e.stopPropagation());
     sel.addEventListener("change", () => send({ source: "set_provider", id: row.id, step: ref.tab, provider: sel.value }));
     tools.appendChild(sel);
@@ -2948,7 +3013,9 @@ function statsBar() {
 function countText() {
   const full = visible();
   const drawn = windowed(full).length;
+  const queued = queueIds().length;
   return "hiện " + drawn + (drawn < full.length ? "/" + full.length : "") + " bài"
+    + (queued ? " (" + queued + " trong hàng đợi ở đầu)" : "")
     + (drawn < full.length ? " (mới nhất — ▾ xem bài cũ hơn)" : "")
     + (SEARCH.trim() ? " trong " + rows().length + " bài" : "")
     + (MODEL.workspace ? " · " + MODEL.workspace : "");

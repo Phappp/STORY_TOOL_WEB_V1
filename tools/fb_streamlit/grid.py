@@ -150,7 +150,8 @@ def workspace_bar(ctx: ga.Ctx) -> None:
                         help=("Bài chưa chọn riêng thì bước này chạy bằng những provider đặt ở đây. "
                               "Nhiều bộ = chia việc: mỗi bộ chỉ chạy MỘT lượt một lúc, bộ đang bận "
                               "thì bài nhảy sang bộ kế đang rảnh (thứ tự ưu tiên = thứ tự anh xếp). "
-                              "Bỏ trống = theo preset như trang Tạo bài. "
+                              "Bỏ trống = bước đó CHƯA CÓ provider — bấm chạy sẽ báo lỗi, không tự "
+                              "lấy bộ mặc định; chọn ở đây hoặc chọn riêng trong modal bài. "
                               f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
                               if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
 
@@ -225,6 +226,16 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
         folder = ga._folder(story, ctx.root, sid)
         detail = dict(summary["detail"])
         detail["b0"] = str((story.get("b0") or {}).get("detail") or "")
+        # P26d: ô B0 suy từ file chứ không tin chữ 'done' trong story.json — vàng thì ghi thẳng
+        # LÝ DO vào ghi chú để thẻ hover và modal không phải đoán.
+        b0st = ga.b0_state(ctx.root, sid, story=story)
+        if b0st == stories.MISSING:
+            has_cap = bool(stories.input_text(ctx.root, sid).strip())
+            has_refs = bool(stories.refs_of(ctx.root, sid))
+            why = ("thiếu caption" if not has_cap else "") if has_refs else (
+                "thiếu ảnh tham chiếu" if has_cap else "thiếu caption lẫn ảnh tham chiếu")
+            note = "B0 vàng vì " + why + " — bấm B0 trích lại hoặc nhập tay trong modal"
+            detail["b0"] = detail["b0"] + " · " + note if detail["b0"] else note
         b4 = stories.video_state(story, folder)
         if b4 == stories.MISSING:
             detail["b4"] = "story.json ghi đã có video nhưng folder không còn file `video.*`"
@@ -251,7 +262,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "detail": detail,
             "hint": {step: step_hint(story, step) for step in ("b0", "b4") + ga.ALL_STEPS},
             "states": states,
-            "b0": ga.b0_state(ctx.root, sid, story=story),  # B0 có state riêng, không nằm trong states/bucket
+            "b0": b0st,  # B0 có state riêng, không nằm trong states/bucket
             "b0meta": ga.b0_meta(story),
             "b4": b4,  # B4 cũng riêng: không có bước AI nào chạy video nên nó không vào states/bucket/hàng đợi
             "b4meta": b4meta,
@@ -260,6 +271,9 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "b4audio": aud_label,
             "b4ready": aud_ready,
             "b4over": bool(b4meta) and str((story.get("b4") or {}).get("method") or "") == ga.MANUAL_METHOD,
+            # P26c: chọn riêng của bài này (nếu đã ghép với chọn tay) — modal B4 hiện sẵn đúng chọn.
+            "b4rec": {"audio": str((story.get("b4") or {}).get("audio") or ""),
+                      "seconds": int((story.get("b4") or {}).get("audio_seconds") or 0)},
             # một dòng cho tab B2: ảnh refs của bài đi vào prompt bằng đường nào (P19a) — xem notes
             "b2ref": ga.b2_ref_hint(story, kinds),
             "bucket": "error" if corrupt else ga.bucket(states),  # bài không đọc được story.json là việc phải xử lý, không phải "chờ"
@@ -616,6 +630,7 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
         resp = st.session_state.pop("grid_copy_response", None) or {}
         io_resp = st.session_state.pop("grid_io_response", None) or {}
         vid_resp = st.session_state.pop("grid_video_response", None) or {}
+        audio_setup = ga.audio_setup(ctx.root)
         component()(rows=rows, workspace=str(ctx.root),
                     # P21h: nút nhịp đọc nằm trong lưới nên lưới phải TỰ NÓI nó đang ở chế độ nào,
                     # còn con số giây thì lấy từ Python — để JS tự viết "5" là hứa một nhịp không ai chạy.
@@ -643,6 +658,11 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                         "b0_todo": len(ga.b0_open_ids(all_rows))},
                     io_response=io_resp,
                     video_response=vid_resp,
+                    # P26c: modal B4 chọn riêng file tiếng + số giây cho TỪNG bài — danh sách file chỉ là
+                    # TÊN (server ghép đường dẫn), giây mặc định của workspace để ô hiện sẵn số thật.
+                    audio={"collection": str(audio_setup.get("collection") or ""),
+                           "seconds": int(audio_setup.get("seconds") or 0),
+                           "files": [f.name for f in audio_setup.get("files") or []]},
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
         st.session_state["grid_component_error"] = f"{type(exc).__name__}: {exc}"

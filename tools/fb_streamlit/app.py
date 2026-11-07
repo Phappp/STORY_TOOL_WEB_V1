@@ -962,7 +962,10 @@ def page_audio(c):
                "P25c cũng đã xong: ⚡ (một bài) và ▶ Chạy hàng đợi (cả loạt) ghép B4 ngay sau B3 của "
                "từng bài, chạy nền NỐI TIẾP nhau (một ffmpeg một lúc); bài đã có video tải tay thì "
                "hàng loạt BỎ QUA và ghi rõ lý do trong log. "
-               "Lưu ý: bộ sưu tập THÊM hay BỚT file có thể đổi bài nào nhận file nào vì file chọn theo id bài.")
+               "Lưu ý: bộ sưu tập THÊM hay BỚT file có thể đổi bài nào nhận file nào vì file chọn theo id bài. "
+               "P26c: trong modal B4 có thêm nút “🎧 Chọn file + giây” — chọn file tiếng KHÁC và số giây RIÊNG "
+               "cho một bài, ghi vào story.json của bài đó và các lần ⚡/▶ sau cũng ghép theo chọn này; "
+               "bỏ chọn thì lại theo id bài.")
     _audio_ffmpeg()
     _audio_collections()
     _audio_workspace()
