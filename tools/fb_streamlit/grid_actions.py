@@ -1043,6 +1043,71 @@ def io_b0_retry(ctx: Ctx) -> dict:
                      else "Không còn bài nào có link nguồn mà B0 chưa xong.")}
 
 
+def _sha1_file(path: Path) -> str:
+    try:
+        h = sha1()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 16), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ""
+
+
+def scan_ref_urls(ctx: Ctx) -> dict:
+    """Toàn workspace: ảnh `refs/ref_*` thiếu url trong ref.json -> thử khớp sha1 với ảnh ĐÃ CÓ url.
+
+    P23c: anh chép tay file vào `refs/` (hoặc B0 cũ ghi manifest không kèm url) thì luật `near`
+    ảnh ở `import_dupes` im lặng vì nó chỉ đọc `url`. Quét này đi từng file trên đĩa, tính sha1,
+    tra bảng dựng từ MỌI entry có url ở BÀI KHÁC — trùng từng byte thì ghi url vào ref.json của
+    bài này. Ảnh đã resize/re-encode thì bytes đổi, không match, và KHÔNG đoán bừa: thà báo
+    "còn N ảnh chưa có cặp" hơn gán nhầm link để rồi chống trùng chạy sai.
+    """
+    hash_to_url: dict[str, str] = {}
+    per_sid: list[tuple[str, list[Path], dict[str, str]]] = []
+    for sid in stories.list_story_ids(ctx.root):
+        files = stories.refs_of(ctx.root, sid)
+        manifest = {str(item.get("file") or ""): str(item.get("url") or "")
+                    for item in stories.ref_manifest(ctx.root, sid)}
+        per_sid.append((sid, files, manifest))
+        for rel, url in manifest.items():
+            if not url:
+                continue
+            h = _sha1_file(stories.story_dir(ctx.root, sid) / rel)
+            if h:
+                hash_to_url.setdefault(h, url)
+    matched = 0
+    unmatched = 0
+    touched: list[str] = []
+    sample: list[dict] = []
+    for sid, files, manifest in per_sid:
+        updates: dict[str, str] = {}
+        for path in files:
+            rel = f"{stories.REFS_DIR}/{path.name}"
+            if manifest.get(rel):
+                continue
+            h = _sha1_file(path)
+            url = hash_to_url.get(h) if h else None
+            if url:
+                updates[rel] = url
+                if len(sample) < 20:
+                    sample.append({"sid": sid, "file": path.name, "url": url})
+            else:
+                unmatched += 1
+        if updates:
+            changed = stories.patch_ref_urls(ctx.root, sid, updates)
+            if changed:
+                matched += changed
+                touched.append(sid)
+    line = (f"Đã gắn link cho {matched} ảnh · {unmatched} ảnh nữa chưa có cặp trùng bytes trong workspace"
+            if matched or unmatched else
+            "Không có ảnh nào thiếu link trong workspace.")
+    if unmatched:
+        line += " (đã chỉnh/resize thì hết giống từng byte — phải tự mở bài gốc, lưu link vào ô Nguồn hoặc tải lại qua B0)."
+    return {"kind": "ref_scan", "matched": matched, "unmatched": unmatched,
+            "sample": sample, "line": line, "ids": touched}
+
+
 def io_export(ctx: Ctx, kind, ids) -> dict:
     """Export phần đang hiện -> {name, text} để lưới tải về bằng Blob (không ghi file nào ra ổ).
 
@@ -1596,6 +1661,13 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             url = clean_url(event.get("value"))
             stories.update_story(ctx.root, sid, link=url)
             out.lines, out.touched = [f"{sid}: Link = {url or '(trống)'}."], [sid]
+        elif source == "source_save":
+            # P23c: bài tạo tay không có link nguồn thì thêm vào đây — `ws_dup_index` đọc `source`
+            # nên lượt import kế tiếp luật `link` sẽ bắt được. Không tự chạy B0: anh muốn trích
+            # caption/ảnh thì bấm B0 riêng, ô này chỉ ghi chữ vào story.json.
+            url = clean_url(event.get("value"))
+            stories.update_story(ctx.root, sid, source=url)
+            out.lines, out.touched = [f"{sid}: Nguồn = {url or '(trống)'}."], [sid]
         elif source == "b4_link_save":
             # P18d: tab B4 trong modal chỉ NHẬP LINK — bytes video vẫn đi widget native, không qua iframe.
             url = clean_url(event.get("value"))

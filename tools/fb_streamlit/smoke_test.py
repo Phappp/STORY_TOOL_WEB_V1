@@ -5707,6 +5707,75 @@ check("P23a chống trùng CHỈ ĐỌC: không ghi folder, không gọi provide
       "stories.save" not in _p23a_sec and "update_story" not in _p23a_sec and "httpx" not in _p23a_sec
       and "import_dupes" not in (Path(__file__).resolve().parent / "grid_runner.py").read_text(encoding="utf-8")
       and "import_dupes" not in (Path(__file__).resolve().parent / "steps.py").read_text(encoding="utf-8"))
+# --- P23c: nhập link nguồn + quét sha1 cho ảnh thiếu url ---
+_p23c_root = stories.validate_root(_p23a_box / "ws_p23c")
+_p23c_ctx = ga.build_ctx(db.connect(), _p23c_root)
+# bài A: ref_1.jpg có link nguồn (do B0 ghi)
+_p23c_a = stories.create_story(_p23c_root, topic="A")["id"]
+stories.save_ref(_p23c_root, _p23c_a, _p23a_refsrc, url=_P23A_IMG)
+# bài B: ảnh Y HỆT từng byte nhưng ref.json để url trống — dáng "chép tay vào refs/"
+_p23c_b = stories.create_story(_p23c_root, topic="B")["id"]
+(_p23c_root / _p23c_b / "refs").mkdir(parents=True, exist_ok=True)
+shutil.copyfile(_p23a_refsrc, _p23c_root / _p23c_b / "refs" / "ref_1.jpg")
+(_p23c_root / _p23c_b / "refs" / "ref.json").write_text(
+    json.dumps({"refs": [{"file": "refs/ref_1.jpg", "url": ""}]}), encoding="utf-8")
+# bài C: file ảnh KHÔNG có entry nào trong ref.json (manifest chưa từng được ghi)
+_p23c_c = stories.create_story(_p23c_root, topic="C")["id"]
+(_p23c_root / _p23c_c / "refs").mkdir(parents=True, exist_ok=True)
+shutil.copyfile(_p23a_refsrc, _p23c_root / _p23c_c / "refs" / "ref_7.jpg")
+# bài D: bytes KHÁC mọi bài khác, không có cặp -> unmatched; đồng thời giữ url đã có không bị đè
+_p23c_d = stories.create_story(_p23c_root, topic="D")["id"]
+(_p23c_root / _p23c_d / "refs").mkdir(parents=True, exist_ok=True)
+(_p23c_root / _p23c_d / "refs" / "ref_1.jpg").write_bytes(b"\x89PNG\r\n\x1a\n" + b"ZZZ" * 20)
+(_p23c_root / _p23c_d / "refs" / "ref_2.jpg").write_bytes(b"\x89PNG\r\n\x1a\n" + b"unique-bytes-not-in-any-other")
+(_p23c_root / _p23c_d / "refs" / "ref.json").write_text(
+    json.dumps({"refs": [{"file": "refs/ref_1.jpg", "url": "https://keep.me/x.jpg"},
+                          {"file": "refs/ref_2.jpg", "url": ""}]}), encoding="utf-8")
+_p23c_out = ga.scan_ref_urls(_p23c_ctx)
+check("P23c scan_ref_urls ghép sha1 từng byte: B (url trống, ảnh y hệt A) + C (ảnh trên đĩa, "
+      "chưa có entry nào) đều lấy được link của A — matched đúng 2, touched đúng hai bài đó",
+      _p23c_out["kind"] == "ref_scan" and _p23c_out["matched"] == 2
+      and set(_p23c_out["ids"]) == {_p23c_b, _p23c_c})
+_b_refs = {str(i["file"]): str(i["url"]) for i in stories.ref_manifest(_p23c_root, _p23c_b)}
+_c_refs = {str(i["file"]): str(i["url"]) for i in stories.ref_manifest(_p23c_root, _p23c_c)}
+check("P23c ghi đúng entry: file nào khớp sha1 thì url của BÀI KHÁC được copy vào — "
+      "B vẫn là refs/ref_1.jpg, C được THÊM entry refs/ref_7.jpg chứ không phải sửa file trên đĩa",
+      _b_refs.get("refs/ref_1.jpg") == _P23A_IMG and _c_refs.get("refs/ref_7.jpg") == _P23A_IMG
+      and (_p23c_root / _p23c_c / "refs" / "ref_7.jpg").is_file())
+_d_after = {str(i["file"]): str(i["url"]) for i in stories.ref_manifest(_p23c_root, _p23c_d)}
+check("P23c KHÔNG đè link đã có (ref_1 của D giữ nguyên https://keep.me/x.jpg) + ảnh "
+      "không giống byte nào với bài khác thì để TRỐNG, đếm vào `unmatched`",
+      _d_after.get("refs/ref_1.jpg") == "https://keep.me/x.jpg"
+      and _d_after.get("refs/ref_2.jpg") == "" and _p23c_out["unmatched"] >= 1)
+# nhập link nguồn cho bài tạo tay, rồi luật link lượt import kế tiếp phải bắt được
+_p23c_e = stories.create_story(_p23c_root, topic="E")["id"]  # chưa có source
+ga.apply_event(_p23c_ctx, {"source": "source_save", "id": _p23c_e, "value": _P23A_OLD})
+check("P23c `source_save` ghi thẳng story.source (clean_url đã chạy) — bài tạo tay từ đây "
+      "có link nguồn để luật `link` đối chiếu",
+      str(stories.load_story(_p23c_root, _p23c_e).get("source") or "") == _P23A_OLD)
+_p23c_items, _ = ga.import_dupes(_p23c_ctx, [{"url": _P23A_OLD, "caption": "", "images": []}])
+check("P23c sau khi nhập nguồn, import một dòng cùng link -> bị cờ `link` (trước đó không có gì để báo)",
+      _p23c_items and _p23c_items[0]["rules"] == ["link"]
+      and any(h["id"] == _p23c_e for h in _p23c_items[0]["hits"]))
+_p23c_a_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p23c_g_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+_p23c_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+check("P23c dispatcher: grid dẫn ref_url_scan vào scan_ref_urls, IO_SOURCES nhận diện, "
+      "id trả về được truyền qua `out.touched` để lưới chỉ vẽ lại đúng bài vừa gắn link",
+      "ga.scan_ref_urls(ctx)" in _p23c_g_src
+      and '"ref_url_scan"' in _p23c_g_src.split("IO_SOURCES")[1].split("VIDEO_SOURCES")[0]
+      and "out.touched = list(out.touched or []) + scan_ids" in _p23c_g_src)
+check("P23c grid_actions có handler `source_save` đối xứng `link_save`, chỉ đổi field chứ "
+      "KHÔNG tự chạy B0",
+      'elif source == "source_save":' in _p23c_a_src
+      and 'stories.update_story(ctx.root, sid, source=url)' in _p23c_a_src
+      and 'f"{sid}: Nguồn = {url' in _p23c_a_src)
+check("P23c modal Import/Export thêm thẻ '🧹 Ảnh thiếu link' + LINK_BARS có ô 🧭 Nguồn "
+      "(tabs:[link]) gửi source_save; IO_SCAN + ingest ref_scan + ioSig giữ trạng thái qua repaint",
+      'source: "ref_url_scan"' in _p23c_fe and "ioScanCard" in _p23c_fe
+      and 'source: "source_save"' in _p23c_fe and 'IO_SCAN' in _p23c_fe
+      and 'kind === "ref_scan"' in _p23c_fe
+      and "(IO_SCAN || {}).matched" in _p23c_fe.split("function ioSig")[1].split("function syncIo")[0])
 shutil.rmtree(_p23a_box, ignore_errors=True)
 # --- hết P23a ---
 

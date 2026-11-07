@@ -1154,6 +1154,9 @@ const LINK_BARS = {
   link: { label: "🔗 Link đã đăng", source: "link_save", stored: "story.json · link",
           tabs: ["b1", "b2", "b3", "link"],
           help: "Link bài của bạn đã đăng — Enter để lưu, lưới và cột Link đổi theo" },
+  source: { label: "🧭 Nguồn (link FB gốc)", source: "source_save", stored: "story.json · source",
+          tabs: ["link"],
+          help: "Link FB gốc B0 sẽ đọc — bài tạo tay chưa có thì gõ vào đây để chống trùng link chạy được (Enter = lưu, KHÔNG tự chạy B0)" },
   b4link: { label: "🎬 Link video", source: "b4_link_save", stored: "story.json · b4.link",
           tabs: ["b4"],
           help: "Chỉ lưu CHỮ, không tải file — muốn có video trong folder thì tải ở thẻ 🎬 Video trong folder ngay dưới" },
@@ -1602,9 +1605,11 @@ function linkCards(row) {
       ["Link bài của bạn đã đăng — storage: story.json · link",
        "Sửa tại chỗ: gõ ở ô 🔗 ngay dưới đầu modal, Enter là lưu, lưới và cột Link đổi theo.",
        "nút copy = nguyên văn link, nút mở = mở đúng bài."]),
-    linkCard("🧭 Nguồn (B0)", row.source, "(chưa có — bài chưa import link)", true,
-      ["Link nguồn mà B0 đọc để lấy caption + ảnh refs/ — do B0 ghi, không sửa tay ở đây.",
-       "Đổi nguồn: import lại link ở đầu lưới."]),
+    linkCard("🧭 Nguồn (B0)", row.source, "(chưa có — gõ link FB gốc ở ô 🧭 phía trên rồi Enter)", true,
+      ["Link nguồn mà B0 đọc để lấy caption + ảnh refs/.",
+       "Bài import qua lưới: B0 tự ghi. Bài tạo tay: gõ thẳng vào ô 🧭 ngay dưới đầu modal — Enter là lưu, "
+        + "chống trùng P23a lượt import kế tiếp sẽ bắt được link này.",
+       "nút copy = nguyên văn link, nút mở = mở đúng bài."]),
     linkCard("🎬 Link video (B4)", row.b4link, "(chưa có — mở tab B4 rồi gõ ở ô 🎬)", true,
       ["Chỉ là CHỮ trong story.json · b4.link — video nằm nơi khác (YouTube, Drive…) thì ghi link ở đây.",
        "Không đổi màu ô B4. Muốn xem FILE `video.*` thật trong folder thì mở tab B4 — thẻ 🎬 phát được "
@@ -2004,6 +2009,7 @@ let IO_FILE = null;     // {name, data} — file vừa chọn ở lần vẽ nà
 let IO_STATE = {};      // payload import gần nhất: reading | preview | commit (kèm lý do lỗi)
 let IO_EXPORT = {};     // payload export gần nhất: {format, name, text, count, note}
 let IO_B0 = {};         // payload "trích B0 còn thiếu" gần nhất
+let IO_SCAN = {};       // P23c: payload "quét sha1 ảnh thiếu url" gần nhất {matched, unmatched, sample, line}
 let IO_SEQ = 0;         // đếm response đã nạp — chữ ký khỏi phải stringify cả file export vài MB
 let IO_BUSY = false;    // đã gửi một file, chờ lưới trả lời: ô chọn file PHẢI khóa tới lúc đó, vì
                         // repaint() dựng lại input nên `pick.disabled = true` chỉ sống tới lượt vẽ kế.
@@ -2541,6 +2547,40 @@ function ioB0Card() {
       "Tiến trình hiện ở ô B0 từng hàng và ở dòng log dưới lưới."] });
 }
 
+// P23c: quét sha1 cho ảnh thiếu url — chống trùng ảnh (`near`) chỉ chạy được khi ref.json có link.
+// Nút đặt ở đây vì đây là việc của TOÀN WORKSPACE, không phải của một bài.
+function ioScanCard() {
+  const st = IO_SCAN || {};
+  const told = st.matched != null || !!st.error;
+  const matched = Number(st.matched || 0);
+  const unmatched = Number(st.unmatched || 0);
+  const body = [];
+  if (st.error) body.push(ioNote("⚠ " + st.error, "bad"));
+  else if (told) body.push(ioNote((matched ? "✓ " : "· ") + String(st.line || ""), matched ? "ok" : ""));
+  else body.push(ioNote("Chưa quét lần nào — bấm nút dưới để lưới thử ghép mỗi ảnh `refs/ref_*` "
+    + "KHÔNG có link trong `ref.json` với MỘT ảnh y hệt từng byte ở bài khác."));
+  const b = button("🧹 Quét link cho ảnh thiếu",
+    "Duyệt từng bài trong workspace: ảnh nào `ref.json` để trống url thì tính sha1, đối chiếu "
+      + "sha1 các ảnh ĐÃ CÓ url ở bài khác — trùng thì ghi link vào `ref.json` của bài đó. "
+      + "KHÔNG sửa file ảnh, KHÔNG tải lại từ FB, KHÔNG đổi mục nào đã có url.",
+    bb => { bb.disabled = true; send({ source: "ref_url_scan" }); });
+  body.push(b);
+  if (st.sample && st.sample.length) {
+    body.push(ioNote("Gắn được: " + st.sample.slice(0, 6).map(x => x.sid + "/" + x.file).join(" · ")
+      + (st.sample.length > 6 ? " …" : "")));
+  }
+  return card({ title: "🧹 Ảnh thiếu link", state: st.error ? "error" : told ? (matched ? "done" : "pending") : "pending",
+    body: body,
+    help: ["Luật `near` ở chống trùng (P23a) chỉ chạy khi ảnh có `url` gốc trong `refs/ref.json`.",
+      "Anh chép tay file ảnh vào `refs/` hoặc B0 cũ để trống url → bài đó nằm ngoài vùng so sánh, "
+        + "nên khi import KHÔNG báo trùng ảnh dù cùng một tấm.",
+      "Nút này quét TOÀN workspace, một lượt — không phụ bộ lọc đang bật.",
+      "Match theo sha1 của bytes: phải là ảnh y hệt từng byte. Ảnh resize/re-encode sẽ KHÔNG khớp, "
+        + "đó là có ý — ghép nhầm link còn tai hại hơn bỏ sót.",
+      "Chỉ entry đang trống mới được ghi; entry đã có url giữ nguyên. Xóa bài khác không có url thì "
+        + "lượt sau vẫn còn cơ hội."]));
+}
+
 function ioNode() {
   if (!IO_OPEN) return null;
   const overlay = el("div", "overlay io");
@@ -2550,7 +2590,7 @@ function ioNode() {
   head.appendChild(el("span", "muted", String(MODEL.workspace || "").split(/[\\/]/).pop() || "(workspace?)"));
   head.appendChild(el("span", "mpos", visible().length + "/" + rows().length + " bài đang hiện"));
   head.appendChild(helpChip(["Bảng Import/Export — làm cả hai chiều mà không rời khỏi lưới.",
-    "Bố cục: TRÁI là những ô thao tác (trên Import, giữa Export, dưới B0), PHẢI là ô Xem trước nội dung thật — bên trái bấm gì thì bên phải hiện chữ đó trước khi tạo file/folder.",
+    "Bố cục: TRÁI là những ô thao tác (trên Import, giữa Export, dưới B0, cuối Quét ảnh), PHẢI là ô Xem trước nội dung thật — bên trái bấm gì thì bên phải hiện chữ đó trước khi tạo file/folder.",
     "Import: chọn file HOẶC dán chữ → lưới đọc và ĐẾM (chưa tạo gì) → bấm “➕ Tạo N bài mới” mới sinh folder + hẹn B0.",
     "Export: bấm một dạng → lưới dựng nội dung từ đúng phần đang hiện → bấm “⬇ Lưu …” trình duyệt mới tải file về.",
     "Mọi số liệu lấy từ folder story tại thời điểm bấm, không có bản nháp nào được giữ hộ giữa hai lần mở bảng.",
@@ -2564,6 +2604,7 @@ function ioNode() {
   left.appendChild(ioImportCard());
   left.appendChild(ioExportCard());
   left.appendChild(ioB0Card());
+  left.appendChild(ioScanCard());
   body.appendChild(left);
   body.appendChild(ioPreviewCard());
   modal.appendChild(body);
@@ -2599,11 +2640,13 @@ function ingestIo() {
     const why = String(r.line || "Có lỗi xảy ra.");
     if (String(r.source || "") === "export_request") IO_EXPORT = { error: why };
     else if (String(r.source || "") === "b0_retry") IO_B0 = { error: why };
+    else if (String(r.source || "") === "ref_url_scan") IO_SCAN = { error: why };
     else IO_STATE = { kind: "preview", error: why };
     return;
   }
   if (kind === "export") IO_EXPORT = r;
   else if (kind === "b0_retry") IO_B0 = r;
+  else if (kind === "ref_scan") IO_SCAN = r;
   else if (kind === "detail") IO_DETAIL = r;
   else if (kind === "preview" || kind === "commit") { IO_STATE = r; if (kind === "commit") IO_B0 = {};
     // thẻ chi tiết gắn theo SỔ THỨ TỰ dòng — đổi file là sổ đổi theo, để nó treo lại là chỉ bài sai
@@ -2614,7 +2657,9 @@ function ioSig() {
   if (!IO_OPEN) return "";
   return JSON.stringify([(IO_FILE || {}).name || "", IO_SEQ, IO_BUSY, visible().length, rows().length,
     Number(ioModel().b0_todo || 0), ioCap(), Array.from(IO_CAPS).sort().join("|"),
-    IO_ALL, (IO_DETAIL || {}).index === undefined ? "" : IO_DETAIL.index]);
+    IO_ALL, (IO_DETAIL || {}).index === undefined ? "" : IO_DETAIL.index,
+    // P23c: kết quả quét hiện trong thẻ "🧹 Ảnh thiếu link" — hai con số đổi thì vẽ lại, không đổi thì bỏ
+    (IO_SCAN || {}).matched, (IO_SCAN || {}).unmatched, (IO_SCAN || {}).error ? 1 : 0]);
 }
 
 function syncIo() {

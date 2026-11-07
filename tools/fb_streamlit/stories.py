@@ -499,6 +499,58 @@ def save_ref(root: Path, sid: str, src, url: str = "") -> dict:
     return save_story(root, sid, story)
 
 
+def patch_ref_urls(root: Path, sid: str, updates: dict[str, str]) -> int:
+    """Ghi `url` vào refs/ref.json cho từng file tương đối (`refs/ref_N.jpg`) đang thiếu.
+
+    `updates` map `file -> url`; entry chưa có trong manifest thì THÊM mới (anh chép tay file vào
+    refs/ mà chưa từng chạy B0 thì ref.json không có dòng nào, vẫn ghi được). Entry đã có url
+    không rỗng thì GIỮ NGUYÊN — đây là đường chữa, không phải đường đè. Trả số entry đã đổi/thêm.
+    """
+    if not updates:
+        return 0
+    refs_dir = story_dir(root, sid) / REFS_DIR
+    if not refs_dir.is_dir():
+        return 0
+    file = refs_dir / "ref.json"
+    try:
+        data = json.loads(file.read_text(encoding="utf-8")) if file.exists() else {}
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    items = data.get("refs") if isinstance(data.get("refs"), list) else []
+    ordered: list[dict] = []
+    by_file: dict[str, dict] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rel = str(item.get("file") or "")
+        if not rel:
+            continue
+        if rel not in by_file:
+            by_file[rel] = item
+            ordered.append(item)
+    changed = 0
+    for rel, url in updates.items():
+        rel = str(rel or "")
+        url = str(url or "").strip()
+        if not rel or not url:
+            continue
+        existing = by_file.get(rel)
+        if existing is None:
+            entry = {"file": rel, "url": url}
+            by_file[rel] = entry
+            ordered.append(entry)
+            changed += 1
+        elif not str(existing.get("url") or "").strip():
+            existing["url"] = url
+            changed += 1
+    if not changed:
+        return 0
+    _write_json(file, {"refs": ordered, "updated_at": time.time()})
+    return changed
+
+
 def refs_of(root: Path, sid: str) -> list[Path]:
     folder = story_dir(root, sid)
     refs_dir = folder / REFS_DIR
