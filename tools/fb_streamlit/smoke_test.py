@@ -4415,8 +4415,8 @@ check("P21f icon dùng ĐÚNG luật của legacy FX97 (status_grid_frontend:211
       and "stroke-linecap:round; stroke-linejoin:round; }" in _p21f_css
       and "font-awesome" not in _p21f_css and "cdn." not in _p21f_css)
 check("P21f hai glyph chép NGUYÊN VĂN đường dẫn legacy (copy của FX11049_ICONS · layout của FX1126_ICONS); "
-      "bốn glyph còn lại (check · cross · external · pencil · plus · trash) legacy chưa vẽ thì vẽ thêm "
-      "cùng kiểu — registry là hằng số, không có URL icon nào",
+      "các glyph còn lại (check · cross · external · pencil · plus · trash, P21g thêm expand · collapse) "
+      "legacy chưa vẽ thì vẽ thêm cùng kiểu — registry là hằng số, không có URL icon nào",
       '<rect x="8" y="8" width="12" height="12" rx="2"/>' in _p21f_reg
       and '<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M12 4v16"/>' in _p21f_reg
       and all(k + ":" in _p21f_reg for k in ("check", "cross", "external", "pencil", "plus", "trash"))
@@ -4458,10 +4458,11 @@ check("P21f ô bấm không teo theo icon: nút icon flex-center + nút .act t�
       and "button.b.act { min-width:26px; }" in _p21f_css
       and "button.ln { width:22px;" in _p21f_css and "button.b.ico { width:26px;" in _p21f_css
       and "button.q { min-width:28px;" in _p21f_css)
-check("P21f KHÔNG lan sang nút CÓ CHỮ (⚡ · ▶ · ⚠ · 💾 · 🔤 · ⋮ · 📥): những chỗ đó chữ là nội dung, "
-      "thu gọn nhãn là việc P21g — hai việc tách nhau để mỗi lần đổi một thứ",
+check("P21f KHÔNG lan sang nút CÓ CHỮ (⚡ · ⋮ · 💾 · 🔤 · 📥): những chỗ đó chữ là nội dung, "
+      "thu gọn nhãn là việc P21g — hai việc tách nhau để mỗi lần đổi một thứ "
+      "(▶/⚠ từ P21g mang số kiểu 'Bắt đầu: N', vẫn là nút chữ chứ không thành icon)",
       'button("⚡", "Chạy đủ pipeline' in _p21f_act and 'button("⋮"' in _p21f_act
-      and 'button("▶ Bắt đầu"' in _p21f_fe and 'button("⚠ Xếp lỗi vào hàng đợi"' in _p21f_fe
+      and 'button("▶ Bắt đầu: 0"' in _p21f_fe and 'button("⚠ Xếp lỗi: 0"' in _p21f_fe
       and 'button("💾 Lưu"' in _p21f_fe and 'button("🔤"' in _p21f_fe
       and 'button("📥 Import · Export"' in _p21f_fe)
 check("P21f chữ hướng dẫn không còn gọi một glyph không còn trên nút: tip cột Link · header cột # · "
@@ -4480,6 +4481,66 @@ check("P21f giới hạn có chủ đích: rule .ok/.bad nằm TRƯỚC các rul
       _p21f_css.index("button.b.ok {") < _p21f_css.index("button.sq.done {")
       and _p21f_css.index("button.b.bad {") < _p21f_css.index("button.sq.error {"))
 # --- hết P21f ---
+
+# --- P21g: nhãn ngắn trên thanh nút + nút mở rộng thành icon ---
+_p21g_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p21g_reg = _p21g_fe.split("const ICON_PATHS = {")[1].split("\n};")[0]
+_p21g_q = _p21g_fe.split("function queueButton(")[1].split("\n}")[0]
+_p21g_err = _p21g_fe.split("function errorsButton(")[1].split("\n}")[0]
+_p21g_update = _p21g_fe.split("function updateBar(")[1].split("\n}")[0]
+_p21g_exp = _p21g_fe.split("function expandButton(")[1].split("\n}")[0]
+_esc_i = _p21g_fe.index('document.addEventListener("keydown", e => {')
+_p21g_esc = _p21g_fe[_esc_i:_p21g_fe.index("\n});", _esc_i)]
+
+check("P21g '▶ Bắt đầu N bài' -> '▶ Bắt đầu: N' — chữ 'bài' không thêm thông tin nào; đo thật trong harness "
+      "file:// cùng payload 2 bài: nút 104 px -> 85 px. Nhãn CHẾT (lúc dựng) và nhãn SỐNG (updateBar) phải "
+      "cùng một khuôn, nếu không hai kiểu đọc xen kẽ nhau trên cùng một nút",
+      'button("▶ Bắt đầu: 0"' in _p21g_q
+      and 'q.textContent = "▶ Bắt đầu: " + ids.length;' in _p21g_update
+      and '"▶ Bắt đầu " + ids.length + " bài"' not in _p21g_fe)
+check("P21g '⚠ Xếp N bài lỗi vào hàng đợi' -> '⚠ Xếp lỗi: N' — nút dài nhất thanh, đo thật 178 px -> 81 px; "
+      "tooltip vẫn nói đủ việc (đo được: title khi N=2 là 'Đánh dấu 2 bài đang lỗi (kể cả treo, mất file) …')",
+      'button("⚠ Xếp lỗi: 0"' in _p21g_err
+      and 'e.textContent = "⚠ Xếp lỗi: " + n;' in _p21g_update
+      and '"⚠ Xếp " + n + " bài lỗi vào hàng đợi"' not in _p21g_fe
+      and 'Đánh dấu " + n + " bài đang lỗi' in _p21g_update)
+check("P21g rút nhãn KHÔNG rút mất trạng thái thật: số vẫn lấy từ hàng đợi/lỗi của server và nút vẫn "
+      "disabled khi 0 (label 'Xếp lỗi: 0' mà bấm được là hứa một việc không có)",
+      "const ids = queueIds();" in _p21g_update and "const n = errorCount();" in _p21g_update
+      and "q.disabled = ids.length === 0;" in _p21g_update and "e.disabled = n === 0;" in _p21g_update
+      and 'e.title = n ? "Đánh dấu' in _p21g_update and '"Chưa có bài nào đang lỗi"' in _p21g_update)
+check("P21g updateBar phải chạy ở CẢ HAI nhánh vẽ — nhánh vá tại chỗ (P8i) lẫn nhánh dựng lại. Thiếu ở nhánh "
+      "dựng lại thì 'Bắt đầu: 0' sẽ nằm im tới tận tick sau dù hàng đợi đã có bài (đo harness: payload 2 bài, "
+      "label lần vẽ đầu = '▶ Bắt đầu: 2')",
+      _p21g_fe.count("updateBar();") == 2
+      and _p21g_fe[_p21g_fe.index("function render(args, force) {"):].count("updateBar();") == 2)
+check("P21g nút mở rộng thành icon một mình: iconButton('expand'/'collapse') + hai đường vẽ KHÁC NHAU trong "
+      "registry (ngoéo ở góc khung = chống ra, ngoéo co vào trong = thu lại) — đo thật: 80 px/68 px chữ -> "
+      "26 px icon, aria-label 'Mở rộng: grid chiếm…' vs 'Đang mở rộng kín cửa sổ — bấm để thu lại'",
+      'iconButton(on ? "collapse" : "expand"' in _p21g_exp
+      and "expand:" in _p21g_reg and "collapse:" in _p21g_reg
+      and _p21g_reg.split("expand: ")[1].split(",")[0] != _p21g_reg.split("collapse: ")[1].split(",")[0]
+      and 'button("⛢' not in _p21g_fe and 'button("🗗' not in _p21g_fe)
+check("P21g icon đổi được là NHỜ nhánh vá nhận ra đổi trạng thái: guard 'expandedMode() === LAST_EXPANDED' "
+      "phải còn, vì nút giờ không còn chữ để patchCells đụng tới. Đo thật trong harness: mất guard là bar cũ "
+      "đứng nguyên (sameBar=false sau click chứng tỏ nó đã được dựng lại) — ghim trạng thái bằng chữ ký "
+      "toàn cây, không phải bằng cách đoán từng ô",
+      "expandedMode() === LAST_EXPANDED" in _p21g_fe and "LAST_EXPANDED = expandedMode();" in _p21g_fe)
+check("P21g tooltip hứa 'Esc cũng thu được' thì Esc phải thu thật: nhánh Escape vẫn gọi "
+      "lsSet(EXPANDED_KEY, \"0\") + repaint, và vẫn đúng thứ tự ưu tiên menu > ô tìm > bảng import > modal > "
+      "lưới. Đo harness: bấm mở rộng -> Esc -> expandedMode() false, icon về 'M4 10V4h6M', 0 event gửi đi",
+      'if (expandedMode()) { lsSet(EXPANDED_KEY, "0"); repaint(); }' in _p21g_esc
+      and _p21g_esc.index("if (MENU)") < _p21g_esc.index("if (IO_OPEN)") < _p21g_esc.index("if (modalRef())"))
+check("P21g chữ hướng dẫn không gọi glyph đã mất: dòng hint cuối grid nói 'nút ngoéo ở thanh trên', không còn "
+      "⛢/🗗 ở đâu trong file",
+      "nút ngoéo ở thanh trên mở rộng kín cửa sổ" in _p21g_fe
+      and "⛢" not in _p21g_fe and "🗗" not in _p21g_fe)
+check("P21g dừng đúng chỗ: chỉ ba nhãn trên thanh nút + một nút icon. ⚡ theo dòng · ⋮ menu · 💾 Lưu · 🔤 · "
+      "📥 Import · Export · số thứ tự ở cột # vẫn là CHỮ thật (P10a: nhãn phải nói đúng việc đang làm)",
+      'button("⚡", "Chạy đủ pipeline' in _p21g_fe and 'button("⋮"' in _p21g_fe
+      and 'button("💾 Lưu"' in _p21g_fe and 'button("📥 Import · Export"' in _p21g_fe
+      and 'button(String(row.queue_pos || "·")' in _p21g_fe)
+# --- hết P21g ---
 
 # cleanup test rows
 c = db.connect()

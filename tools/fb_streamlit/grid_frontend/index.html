@@ -417,7 +417,7 @@ function button(label, title, fn, cls) {
 // Luật icon lấy nguyên từ legacy FX97 (status_grid_frontend/index.html:211: "outline SVG, no emoji and
 // no external icon fonts"): viewBox 24, fill:none, stroke:currentColor, nét ~1.9, đầu nối tròn.
 // copy + layout là đường dẫn COPY LẠI của legacy (FX11049_ICONS.copy · FX1126_ICONS.layout);
-// check · cross · external · pencil · plus · trash legacy chưa vẽ nên vẽ thêm ĐÚNG CÙNG kiểu.
+// check · cross · external · pencil · plus · trash · expand · collapse legacy chưa vẽ nên vẽ thêm ĐÚNG CÙNG kiểu.
 // Không dùng emoji: glyph màu không đổi màu theo .ok/.bad, rộng theo phông máy, và ô 22px thì lệch tâm.
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ICON_PATHS = {
@@ -429,6 +429,11 @@ const ICON_PATHS = {
   pencil: '<path d="M4 20h4l10-10a2.5 2.5 0 0 0-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6.5 7 7.5 20h9l1-13"/><path d="M10 11v6M14 11v6"/>',
+  // P21g: hai hướng ngược nhau, cùng khuôn "bốn ngoéo" — mở rộng = ngoéo nằm ở góc khung (chống ra),
+  // thu lại = ngoéo nằm chếch trong (co về). Khác nhau ở CHỖ GÓC khuỷu, không phải ở hình tổng thể,
+  // nên người nhìn phân biệt được mà không cần chữ.
+  expand: '<path d="M4 10V4h6M20 10V4h-6M4 14v6h6M20 14v6h-6"/>',
+  collapse: '<path d="M10 4v6H4M14 4v6h6M10 20v-6H4M14 20v-6h6"/>',
 };
 // Dựng MỘT lần lúc tải trang từ hằng số tự viết (không chứa chữ của hàng lưới/URL nào), sau đó nhân bản.
 const ICON_NODE = {};
@@ -2481,7 +2486,9 @@ function queueIds() {
 function errorCount() { return (MODEL.error_ids || []).length; }
 
 function queueButton() {
-  const b = button("▶ Bắt đầu", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #", () => {
+  // P21g: nhãn ngắn "Bắt đầu: N" — chữ "N bài" không thêm thông tin nào mà chiều ngang thanh nút thì
+  // có (P21f đã đổi các nút icon, bước này chỉ siết chữ). Con số vẫn là phần tử quan trọng nhất.
+  const b = button("▶ Bắt đầu: 0", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #", () => {
     const ids = queueIds();
     if (ids.length) send({ source: "batch_run", ids });
   });
@@ -2491,7 +2498,7 @@ function queueButton() {
 }
 
 function errorsButton() {
-  const b = button("⚠ Xếp lỗi vào hàng đợi", "Đánh dấu mọi bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt",
+  const b = button("⚠ Xếp lỗi: 0", "Đánh dấu mọi bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt",
     () => send({ source: "queue_add_errors" }));
   b.id = "queueerr";
   b.disabled = true;
@@ -2552,12 +2559,18 @@ function pinFrame() {
 }
 
 function expandButton() {
-  return button(expandedMode() ? "🗗 Thu lại" : "⛢ Mở rộng",
-    expandedMode() ? "Trả grid về khung thường, sidebar + tiêu đề trang hiện lại (Esc cũng thu được)"
-      : "Grid chiếm kín cửa sổ, sidebar + tiêu đề trang bị ẩn để không gì đè lên lưới — muốn đổi trang thì Esc hoặc bấm 🗗 Thu lại ở thanh trên", () => {
-        lsSet(EXPANDED_KEY, expandedMode() ? "0" : "1");
-        repaint();
-      });
+  // P21g: thành icon một mình (ngoéo ra = mở rộng, ngoéo co = thu lại) — chữ "Mở rộng/Thu lại" dài
+  // mà không nói thêm gì so với hình; trạng thái thật vẫn đọc được vì Icon ĐỔI theo expandedMode(),
+  // và vì aria-label/title nói rõ "đang ở chế độ nào".
+  const on = expandedMode();
+  return iconButton(on ? "collapse" : "expand",
+    on ? "Đang mở rộng kín cửa sổ — bấm để thu lại, sidebar + tiêu đề trang hiện lại (Esc cũng thu được)"
+      : "Mở rộng: grid chiếm kín cửa sổ, sidebar + tiêu đề trang bị ẩn để không gì đè lên lưới — "
+        + "muốn đổi trang thì Esc hoặc bấm nút thu lại ở thanh trên",
+    () => {
+      lsSet(EXPANDED_KEY, expandedMode() ? "0" : "1");
+      repaint();
+    }, "act");
 }
 
 function statsBar() {
@@ -2618,7 +2631,7 @@ function updateBar() {
   if (q) {
     const ids = queueIds();
     q.disabled = ids.length === 0;
-    q.textContent = "▶ Bắt đầu " + ids.length + " bài";
+    q.textContent = "▶ Bắt đầu: " + ids.length;
     q.title = "Chạy cả " + ids.length + " bài trong hàng đợi theo thứ tự # — từng B một, "
       + "nhiều bài cùng lúc nếu có nhiều bộ rảnh. "
       + "B nào đã xanh lá (xong) được BỎ QUA, không ghi đè.";
@@ -2627,7 +2640,7 @@ function updateBar() {
   if (e) {
     const n = errorCount();
     e.disabled = n === 0;
-    e.textContent = "⚠ Xếp " + n + " bài lỗi vào hàng đợi";
+    e.textContent = "⚠ Xếp lỗi: " + n;
     e.title = n ? "Đánh dấu " + n + " bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt" : "Chưa có bài nào đang lỗi";
   }
 }
@@ -2775,7 +2788,7 @@ function render(args, force) {
     wrap.appendChild(scroll);
   }
   wrap.appendChild(el("div", "hint",
-    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, còn thêm bài hàng loạt thì làm ở nút “📥 Import · Export” cạnh ô tìm · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · nút bảng mở modal · ⋮ thêm thao tác (mở ở trang Tạo bài · đánh dấu đã đăng · hàng đợi · dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · nút copy ở cột Link để copy nguyên link đã đăng (khỏi mở modal), nút bút để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · ← → trong modal đổi bài · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · ⛢ mở rộng kín cửa sổ"));
+    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, còn thêm bài hàng loạt thì làm ở nút “📥 Import · Export” cạnh ô tìm · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · nút bảng mở modal · ⋮ thêm thao tác (mở ở trang Tạo bài · đánh dấu đã đăng · hàng đợi · dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · nút copy ở cột Link để copy nguyên link đã đăng (khỏi mở modal), nút bút để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · ← → trong modal đổi bài · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · nút ngoéo ở thanh trên mở rộng kín cửa sổ"));
   root.appendChild(wrap);
   unmarkSent();
   const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này
