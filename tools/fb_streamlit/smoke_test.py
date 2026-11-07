@@ -3,6 +3,7 @@ import inspect
 import json
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -4926,12 +4927,12 @@ try:
           "2 tài khoản CLI thật, đọc từ máy cho 3 bộ codex_cli" in _t18g
           and "3 tên bộ chỉ là 2 tài khoản: thêm provider codex_cli KHÔNG tăng dung lượng" in _t18g)
     check("P18g mỗi khối kể được nhà nào (tên bộ + nhãn tài khoản), home nào, khai báo ở biến nào, và "
-          "nhà nào tool CHƯA chạy bằng — đường dẫn không tới từ browser nên phải chỉ chỗ sửa trong .env. "
-          "Hai home giả của P18g KHÔNG có auth.json nên nhãn phải rơi về id, không được bịa email",
+          "nhà ấy nằm trong đường chạy ra sao — đường dẫn không tới từ browser nên phải chỉ chỗ sửa trong "
+          ".env. Hai home giả của P18g KHÔNG có auth.json nên nhãn phải rơi về id, không được bịa email",
           "▸ [1] G1 · G3 — id acct-1" in _t18g and "(không khai báo home riêng)" in _t18g
-          and "home của CLI mà tool ĐANG chạy bằng ⚡/▶" in _t18g
+          and "⚡/▶ của các bộ này chạy ở đây (home mặc định của máy)" in _t18g
           and "▸ [2] G2 — id acct-2" in _t18g and "(khai báo ở biến G2_CODEX_HOME)" in _t18g
-          and "chưa nối nhà này vào đường chạy" in _t18g
+          and "nhà riêng đã nối vào đường chạy, P18h" in _t18g
           and "@" not in _t18g)
     check("P18g có nhà còn trần mà nhà khác chưa hết thì nói to cơ hội: bao nhiêu/bao nhiêu tài khoản "
           "còn chạy được — nhưng vẫn là chữ để anh quyết, tool không tự đổi provider",
@@ -4999,13 +5000,6 @@ check("P18g không có ngả nào để browser đưa home vào: grid / grid_act
           for f in ("grid.py", "grid_actions.py", "steps.py"))
       and "codex_home" not in (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
       and "prov.codex_usage_all(db.list_providers(c))" in _p18f_app_src)
-_run18g = _p18f_src[_p18f_src.index("def _codex_chat("):_p18f_src.index("def codex_login_status(")]
-check("P18g THẬT như những gì nó nói: đường CHẠY CLI (_codex_chat / imagegen) vẫn chưa nhận home riêng, "
-      "nên màn hình hạn mức phải cảnh báo 'chưa nối nhà này vào đường chạy' chứ không được làm bộ mặt "
-      "như đã chạy đa tài khoản — nối home vào run là phần tiếp theo, cần anh duyệt",
-      "CODEX_HOME" not in _run18g and "env=_codex_child_env" not in _run18g
-      and "chưa nối nhà này vào đường chạy" in _p18f_sec
-      and "⚠ đường chạy ⚡/▶ vẫn dùng home mặc định" in _p18f_app_src)
 check("P18g hai nút đăng nhập cũng đi theo home của bộ đang chọn (trước đây máy nào cũng chỉ login được "
       "một tài khoản): env của CLI con do _codex_child_env quyết định, không truyền home thì y như cũ",
       "def _codex_child_env(home=None)" in _p18f_src[:_p18f_src.index("# ---------- P18f")]
@@ -5292,9 +5286,10 @@ try:
           and "CHƯA ĐĂNG NHẬP" in _err_text_18j and str(_P18J_H2) in _err_text_18j
           and "JJ_CODEX_HOME" in _err_text_18j and "🔑 Đăng nhập Codex" in _err_text_18j
           and "không đọc được auth.json ở home này" in _err_text_18j)
-    check("P18j lỗi nói thật cả giới hạn chưa sửa: nhà riêng thì phải kèm 'chưa nối nhà này vào đường "
-          "chạy' — đừng để anh tưởng bộ JJ đã chạy bằng chính nhà JJ (P18h chưa làm)",
-          _err_text_18j is not None and "chưa nối nhà này vào đường chạy" in _err_text_18j)
+    check("P18j lỗi nhà riêng nói đúng quyền lợi thật của nó từ P18h: đăng nhập ở nhà nào thì ⚡/▶ của bộ "
+          "đó chạy bằng nhà đó — không còn là cảnh báo 'chưa nối' như trước",
+          _err_text_18j is not None and "ĐÃ nối vào đường chạy" in _err_text_18j
+          and "chưa nối nhà này vào đường chạy" not in _err_text_18j)
 
     _ok18j = prov.test_connection({"name": "GJ", "kind": "codex_cli", "base_url": "", "key_env": ""})
     check("P18j bộ dùng home mặc định (đã login) thì OK và OK ấy CÓ bằng chứng: version + home + 'không "
@@ -5374,6 +5369,114 @@ finally:
     for _d18j in (_P18J_H1, _P18J_H2, _P18J_H3):
         shutil.rmtree(_d18j, ignore_errors=True)
 # --- hết P18j ---
+
+# --- P18h: nhà RIÊNG của bộ Codex phải đi vào ĐƯỜNG CHẠY, không chỉ màn hạn mức + hai nút đăng nhập ---
+# P18g mới nối home vào cái ĐỌC: ⚡/▶ và imagegen vẫn ăn home mặc định của máy, nên thêm bộ thứ hai vẫn
+# chạy trùng đúng MỘT tài khoản. P18h để `chat`/`generate_image` tra `codex_home_for(tên bộ)` và truyền
+# xuống CLI, vì đăng nhập — và dung lượng — là chuyện của home.
+_P18H_ENV_OLD = {v: os.environ.get(v) for v in ("CODEX_HOME", "HB_CODEX_HOME")}
+_P18H_HA = Path(tempfile.mkdtemp(prefix="fbcodex_run_a_"))   # home mặc định của máy trong test này
+_P18H_HB = Path(tempfile.mkdtemp(prefix="fbcodex_run_b_"))   # nhà riêng của bộ HB
+os.environ["CODEX_HOME"] = str(_P18H_HA)
+os.environ["HB_CODEX_HOME"] = str(_P18H_HB)
+_P18H_CALLS = []
+_REAL_SUB_P18H = prov.subprocess
+_REAL_BIN_P18H = prov._codex_bin
+
+
+class _P18HFakeSub:
+    """Thay đúng ngả spawn CLI: ghi lại lệnh + env con, còn 'ảnh' thì CLI giả tự đặt vào `<home>/generated_images`."""
+
+    TimeoutExpired = subprocess.TimeoutExpired
+    CREATE_NO_WINDOW = 0
+
+    def run(self, cmd, **kw):
+        env = kw.get("env") or {}
+        home = env.get("CODEX_HOME", "")
+        inp = str(kw.get("input") or "")
+        _P18H_CALLS.append({"cmd": list(cmd), "home": home, "cwd": str(kw.get("cwd") or ""),
+                            "timeout": kw.get("timeout"),
+                            "image": "Generate an image based on this description" in inp,
+                            "fail": "BAILOUT" in inp})
+        if _P18H_CALLS[-1]["image"] and home and not _P18H_CALLS[-1]["fail"]:
+            d = Path(home) / "generated_images" / "run"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "a.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+        rc, out, err = (1, "", "Not logged in: run `codex login`") if _P18H_CALLS[-1]["fail"] else (0, "ok", "")
+        return subprocess.CompletedProcess(cmd, rc, out, err)
+
+
+try:
+    prov.subprocess = _P18HFakeSub()
+    prov._codex_bin = lambda: "codex-test"
+
+    _P18H_CALLS.clear()
+    _txt18h = prov.chat({"name": "HB", "kind": "codex_cli", "base_url": "", "key_env": ""}, "m", "viet caption")
+    check("P18h lượt chat B1/B3 của bộ CÓ nhà riêng spawn CLI với CODEX_HOME = nhà của chính bộ đó "
+          "(trước P18h nó kế thừa môi trường tiến trình, luôn ra home mặc định của máy)",
+          len(_P18H_CALLS) == 1 and _P18H_CALLS[0]["home"] == str(_P18H_HB)
+          and "exec" in _P18H_CALLS[0]["cmd"] and _txt18h == "ok")
+
+    _P18H_CALLS.clear()
+    prov.chat({"name": "HC", "kind": "codex_cli", "base_url": "", "key_env": ""}, "m", "viet caption")
+    check("P18h bộ KHÔNG khai báo home riêng (HC) vẫn chạy bằng home mặc định của máy — CODEX1..4 hành "
+          "vi y như trước, không đổi âm thầm tài khoản đang chạy",
+          len(_P18H_CALLS) == 1 and _P18H_CALLS[0]["home"] == str(_P18H_HA))
+
+    _P18H_CALLS.clear()
+    _img18h = prov.generate_image({"name": "HB", "kind": "codex_cli", "base_url": "", "key_env": ""},
+                                  "", "anh cho ba", ref_files=(), timeout=30)
+    check("P18h imagegen đọc ảnh từ CHÍNH nhà của bộ: file giả nằm trong <nhà HB>/generated_images phải "
+          "được tìm thấy (đường cũ hardcode ~/.codex nên nhà riêng luôn báo 'CLI không để lại file ảnh')",
+          _P18H_CALLS[0]["home"] == str(_P18H_HB) and _P18H_CALLS[0]["image"]
+          and Path(_img18h).is_file() and str(_P18H_HB) in str(_img18h)
+          and str(_img18h).casefold().startswith(str(_P18H_HB / "generated_images").casefold()))
+
+    _P18H_CALLS.clear()
+    _img18h2 = prov.generate_image({"name": "HC", "kind": "codex_cli", "base_url": "", "key_env": ""},
+                                   "", "anh cho ba", ref_files=(), timeout=30)
+    check("P18h bộ mặc định thì ảnh nằm trong home mặc định của máy — không phải `Path.home()/.codex` "
+          "cứng, vì máy đặt CODEX_HOME ở nơi khác là đường cũ quét nhầm chỗ",
+          str(_P18H_CALLS[0]["home"]) == str(_P18H_HA)
+          and str(_img18h2).casefold().startswith(str(_P18H_HA / "generated_images").casefold()))
+
+    _P18H_CALLS.clear()
+    _err18h = None
+    try:
+        prov.chat({"name": "HB", "kind": "codex_cli", "base_url": "", "key_env": ""}, "m", "BAILOUT")
+    except prov.ProviderError as exc:
+        _err18h = str(exc)
+    check("P18h lỗi chạy phải kể nhà nào đã chạy: nhà riêng chưa login thì câu lỗi phải tự chỉ ra home, "
+          "không để anh đoán xem CLI vừa nói chuyện với tài khoản nào",
+          _err18h is not None and "exit 1" in _err18h and str(_P18H_HB) in _err18h)
+
+    _run18h = _p18f_src[_p18f_src.index("def _codex_chat("):_p18f_src.index("def codex_login_status(")]
+    check("P18h THAY thật cái nó hứa: cả HAI lời gọi subprocess trong đường chạy (chat + imagegen) đều "
+          "nhận env từ _codex_child_env(home) — không còn ngả spawn CLI nào bỏ sót home",
+          _run18h.count("subprocess.run(") == 2 and _run18h.count("env=_codex_child_env(home)") == 2
+          and "Path.home() / \".codex\" / \"generated_images\"" not in _p18f_src)
+    check("P18h home chỉ đến từ TÊN BỘ trong DB, không phải từ browser: đúng hai chỗ tra "
+          "codex_home_for(_field(provider, \"name\")) — chat và generate_image — còn grid/steps vẫn "
+          "không biết gì về codex_home",
+          _p18f_src.count('codex_home_for(_field(provider, "name"))') == 2
+          and all("codex_home" not in (Path(__file__).resolve().parent / f).read_text(encoding="utf-8")
+                  for f in ("grid.py", "grid_actions.py", "steps.py")))
+    check("P18h chữ cũ phải biến mất khỏi MỌI màn: không còn 'chưa nối nhà này vào đường chạy' trong "
+          "providers.py lẫn cảnh báo ⚠ trong app.py — nếu còn là hai màn đang nói hai sự thật khác nhau",
+          "chưa nối nhà này vào đường chạy" not in _p18f_src
+          and "⚠ đường chạy ⚡/▶ vẫn dùng home mặc định" not in _p18f_app_src
+          and "P18h đã nối vào đường chạy" in _p18f_app_src)
+finally:
+    prov.subprocess = _REAL_SUB_P18H
+    prov._codex_bin = _REAL_BIN_P18H
+    for _k18h, _v18h in _P18H_ENV_OLD.items():
+        if _v18h is None:
+            os.environ.pop(_k18h, None)
+        else:
+            os.environ[_k18h] = _v18h
+    for _d18h in (_P18H_HA, _P18H_HB):
+        shutil.rmtree(_d18h, ignore_errors=True)
+# --- hết P18h ---
 
 
 # cleanup test rows

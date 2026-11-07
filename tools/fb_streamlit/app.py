@@ -704,7 +704,7 @@ def page_providers(c):
             st.caption(
                 f"Nhà CLI của **{r['name']}**: `{home}`"
                 + ("" if home == prov.codex_home()
-                   else " · ⚠ đường chạy ⚡/▶ vẫn dùng home mặc định của máy, chưa nối nhà này vào.")
+                   else " · ⚡/▶ của bộ này chạy bằng chính nhà đó (P18h đã nối vào đường chạy).")
                 + f" Muốn thêm tài khoản Codex thật: tạo bộ `codex_cli` mới rồi thêm dòng "
                   f"`{var}=<đường dẫn home>` vào `{paths.env_path()}` (tool tự đọc, không nhập đường dẫn ở đâu khác). "
                   f" Hai bộ cùng một home là MỘT tài khoản — không cộng dung lượng."

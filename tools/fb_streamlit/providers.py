@@ -152,7 +152,9 @@ def chat(provider, model: str, prompt: str, system: str = "", temperature: float
         if images:
             raise ProviderError("Codex CLI chưa nhận ảnh ở lượt chat — ảnh refs của nó đi thẳng "
                                 "vào imagegen (`-i`), còn muốn mô tả ảnh bằng Vision thì dùng provider OpenAI-like.")
-        return _codex_chat(prompt, system)
+        # P18h: bộ nào chạy bằng nhà nấy — `<TÊN>_CODEX_HOME` trong .env cũng là nhà mà ⚡/▶ dùng,
+        # không riêng gì màn hạn mức và hai nút đăng nhập.
+        return _codex_chat(prompt, system, home=codex_home_for(_field(provider, "name")))
     if provider["kind"] == "openai":
         return _openai_chat(provider, model, prompt, system, temperature, images)
     raise ProviderError(f"Provider kind không hợp lệ: {provider['kind']}")
@@ -263,7 +265,9 @@ def generate_image(provider, model: str, prompt: str, ref_files=(), timeout: int
         raise ProviderError("B2 chưa có provider nào (Cấu hình ▸ Providers).")
     kind = str(provider["kind"])
     if kind == "codex_cli":
-        return codex_generate_image(prompt, ref_files, timeout=timeout)
+        # P18h: ảnh cũng chạy bằng nhà của CHÍNH bộ B2 — CLI tự lưu vào `<home>/generated_images`.
+        return codex_generate_image(prompt, ref_files, timeout=timeout,
+                                     home=codex_home_for(_field(provider, "name")))
     if kind == "openai":
         return openai_generate_image(provider, model, prompt, timeout=min(timeout, 240))
     raise ImageCapabilityError(f"Provider '{provider['name']}' kind '{kind}' không có đường tạo ảnh nào.")
@@ -280,8 +284,9 @@ def _codex_bin() -> str:
 def _codex_child_env(home=None) -> dict:
     """Môi trường cho MỘT lượt chạy CLI: trỏ thẳng vào home của nhà cần nói chuyện, còn lại giữ nguyên.
 
-    Đây là chỗ duy nhất home của một provider đi vào CLI. Đường chạy ⚡/▶ không truyền home nên vẫn
-    dùng home mặc định của máy — hành vi cũ không đổi.
+    Đây là chỗ duy nhất home đi vào CLI, nên MỌI lời gọi `codex` đều theo nhà được chỉ định: hai nút
+    đăng nhập (P18g), màn hạn mức (P18f/P18g) và cả đường CHẠY ⚡/▶ (P18h — `chat`/`generate_image`).
+    Không truyền home thì vẫn là home mặc định của máy, hành vi cũ.
     """
     env = os.environ.copy()
     env["CODEX_HOME"] = str(Path(home) if home else codex_home())
@@ -321,7 +326,7 @@ def _codex_login_state(home=None) -> tuple:
     return _login_verdict(proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip())
 
 
-def _codex_chat(prompt: str, system: str) -> str:
+def _codex_chat(prompt: str, system: str, home=None) -> str:
     full_prompt = prompt if not system else f"{system}\n\n{prompt}"
     binary = _codex_bin()
     workdir = Path(tempfile.mkdtemp(prefix="codex_exec_"))
@@ -329,18 +334,21 @@ def _codex_chat(prompt: str, system: str) -> str:
     # prompt qua stdin: shim .CMD của npm trên Windows làm hỏng prompt đa dòng khi truyền tham số vị trí
     cmd = [binary, "exec", "--skip-git-repo-check", "--output-last-message", str(out_file), "-"]
     try:
-        proc = subprocess.run(cmd, input=full_prompt, capture_output=True, text=True, timeout=900, cwd=str(workdir), encoding="utf-8", errors="replace")
+        proc = subprocess.run(cmd, input=full_prompt, capture_output=True, text=True, timeout=900,
+                              cwd=str(workdir), encoding="utf-8", errors="replace",
+                              env=_codex_child_env(home))
     except subprocess.TimeoutExpired as exc:
         raise ProviderError("Codex CLI chạy quá 15 phút.") from exc
     if out_file.exists():
         return out_file.read_text(encoding="utf-8", errors="replace").strip()
     if proc.returncode != 0:
-        raise ProviderError(f"Codex CLI exit {proc.returncode}: {(proc.stderr or proc.stdout)[-400:]}")
+        raise ProviderError(f"Codex CLI exit {proc.returncode} (nhà {Path(home) if home else codex_home()}): "
+                            f"{(proc.stderr or proc.stdout)[-400:]}")
     return (proc.stdout or "").strip()
 
 
-def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> Path:
-    """Codex CLI imagegen: ảnh được CLI tự lưu vào ~/.codex/generated_images, tool đọc file mới nhất sau lúc gọi.
+def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900, home=None) -> Path:
+    """Codex CLI imagegen: ảnh được CLI tự lưu vào `<home>/generated_images`, tool đọc file mới nhất sau lúc gọi.
 
     Hai điều học từ lúc Codex không có imagegen mà tool vẫn nói chung chung:
     - phải GIỮ lời cuối của CLI (`--output-last-message`) — model trả "tôi không có công cụ tạo ảnh"
@@ -349,7 +357,7 @@ def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> 
       bị proxy bỏ rơi. Lệnh đã chết từ đầu thì chạy lại y nguyên chỉ tốn thêm đúng ngần đó phút.
     """
     exe = _codex_bin()
-    gen_root = Path.home() / ".codex" / "generated_images"
+    gen_root = (Path(home) if home else codex_home()) / "generated_images"
     start = time.time()
     full = (
         "Generate an image based on this description using your image generation capability. "
@@ -365,7 +373,9 @@ def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> 
             cmd += ["-i", str(rf)]
         cmd.append("-")  # prompt qua stdin (shim .CMD hỏng prompt đa dòng ở tham số vị trí)
         try:
-            proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=timeout, cwd=str(workdir), encoding="utf-8", errors="replace")
+            proc = subprocess.run(cmd, input=full, capture_output=True, text=True, timeout=timeout,
+                                  cwd=str(workdir), encoding="utf-8", errors="replace",
+                                  env=_codex_child_env(home))
         except subprocess.TimeoutExpired as exc:
             raise ProviderError(f"Codex imagegen chạy quá {timeout} giây — đây là lỗi thời gian, "
                                 f"đáng được thử lại, không phải provider hết cửa tạo ảnh.") from exc
@@ -439,10 +449,11 @@ class CodexUsageError(RuntimeError):
 
 
 def codex_home() -> Path:
-    """Home của CLI mà tool đang CHẠY bằng nó — biến CODEX_HOME toàn máy, chưa đặt thì ~/.codex.
+    """Home MẶC ĐỊNH của máy — biến CODEX_HOME toàn máy, chưa đặt thì ~/.codex.
 
-    Đây cũng chính là home mà ⚡/▶ thật sự dùng: đường chạy CLI không tự đặt CODEX_HOME, nó kế thừa
-    môi trường của tiến trình python đang chạy streamlit (app.py nạp .env vào đó).
+    Từ P18h đây là nhà mà ⚡/▶ dùng cho bộ CHƯA khai báo `<TÊN>_CODEX_HOME`; bộ nào khai báo thì chạy
+    bằng nhà riêng của nó (`codex_home_for`). Đường CLI luôn nhận CODEX_HOME qua `_codex_child_env`,
+    không còn kế thừa bừa môi trường của tiến trình python.
     """
     raw = os.getenv("CODEX_HOME", "").strip()
     return Path(raw) if raw else Path.home() / ".codex"
@@ -484,7 +495,8 @@ def codex_accounts(providers) -> list[dict]:
 
     Provider loại codex_cli chỉ là cái tên trỏ vào CLI trên máy, nên nhiều tên có thể cùng một home —
     thêm bộ không tạo thêm dung lượng. Mỗi nhà trả kèm providers (mọi tên dùng chung home), var (biến
-    .env khai báo home riêng của nó) và runs_here (nhà này có phải nhà ⚡/▶ đang chạy hay không).
+    .env khai báo home riêng của nó) và runs_here (nhà này có phải home mặc định của máy hay không —
+    từ P18h ⚡/▶ chạy bằng ĐÚNG nhà của bộ được chọn, nên trường này chỉ còn để phân biệt nhà mặc định).
     """
     default_key = str(codex_home()).casefold()
     out, by_home = [], {}
@@ -983,8 +995,8 @@ def codex_usage_all_text(result: dict) -> str:
                          "— session log của nhà này cũng không có số còn tin được.")
             continue
         lines.append(f"· {_usage_head(rec)}")
-        home_note = "home của CLI mà tool ĐANG chạy bằng ⚡/▶" if rec.get("runs_here") else \
-            "nhà riêng — ⚡/▶ vẫn chạy bằng home mặc định, chưa nối nhà này vào đường chạy"
+        home_note = ("⚡/▶ của các bộ này chạy ở đây (home mặc định của máy)") if rec.get("runs_here") else \
+            ("⚡/▶ của các bộ này chạy ở đây (nhà riêng đã nối vào đường chạy, P18h)")
         declared = f"khai báo ở biến {rec['var']}" if rec.get("declared") else "không khai báo home riêng"
         lines.append(f"· home: {rec['home']} ({declared}) — {home_note}")
         if len(rec.get("homes") or []) > 1:
@@ -1027,8 +1039,8 @@ def test_connection(provider) -> str:
         else:
             who = "không đọc được auth.json ở home này"
         where = f"home {home} ({declared})"
-        run_note = "" if runs_here else (" — ⚠ nhà riêng: ⚡/▶ vẫn chạy bằng home mặc định, "
-                                         "chưa nối nhà này vào đường chạy")
+        run_note = "" if runs_here else (f" — nhà riêng này ĐÃ nối vào đường chạy: ⚡/▶ của bộ '{name}' "
+                                         "chạy bằng chính nhà đó (P18h)")
         logged, text = _codex_login_state(home)
         if not logged:
             raise ProviderError(
