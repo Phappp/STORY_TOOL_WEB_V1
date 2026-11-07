@@ -699,7 +699,7 @@ def page_providers(c):
         if r["kind"] == "openai" and not (r["key_env"] or "").strip():
             st.caption("Lưu ý: provider không có key env thì request sẽ gửi không Authorization header (chỉ dùng được với endpoint công khai).")
         if r["kind"] == "codex_cli":
-            l1, l2 = st.columns(2)
+            l1, l2, l3 = st.columns(3)
             if l1.button("🔑 Đăng nhập Codex (mở browser)"):
                 try:
                     st.info(prov.codex_login())
@@ -710,6 +710,17 @@ def page_providers(c):
                     st.success(prov.codex_login_status())
                 except prov.ProviderError as exc:
                     st.error(str(exc))
+            if l3.button("📊 Hạn mức Codex (chỉ đọc)",
+                         help="Hỏi chính Codex CLI trên máy — không gửi prompt, không đổi tài khoản, "
+                              "không có API tính phí nào được gọi. Số cũ sẽ ghi rõ là cũ."):
+                usage = prov.codex_usage()
+                text = prov.codex_usage_text(usage)
+                if usage["source"] == "UNKNOWN":
+                    st.error(text)
+                elif usage["source"] == "CACHED":
+                    st.warning(text)
+                else:
+                    st.success(text)
 
 
 # ---------- page: Workspace ----------

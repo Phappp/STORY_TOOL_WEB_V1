@@ -4642,6 +4642,202 @@ check("P21h cao lưới khi mở rộng không còn trừ một hằng số px �
       and ".wrap.expanded .scroll { flex:1 1 auto; min-height:0; max-height:none; }" in _p21h_css)
 # --- hết P21h ---
 
+# --- P18f: hạn mức Codex — LIVE từ app-server, CACHED từ session log, UNKNOWN nói rõ lý do ---
+# Hai hình dạng payload DƯỚI ĐÂY LÀ SỐ THẬT đo trên máy anh ngày 2026-11-07: LIVE trả camelCase kèm
+# cả `rateLimits` lẫn `rateLimitsByLimitId`, còn session log trả snake_case nằm NGAY ở
+# payload.rate_limits (legacy giả định payload.info.rate_limits nên với bản CLI này không đọc ra gì).
+_P18F_BLOCK_LIVE = {
+    "limitId": "codex", "limitName": None,
+    "primary": {"usedPercent": 0, "windowDurationMins": 300, "resetsAt": 1794033241},
+    "secondary": {"usedPercent": 100, "windowDurationMins": 10080, "resetsAt": 1794369307},
+    "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+    "individualLimit": None, "spendControlReached": False,
+    "planType": "plus", "rateLimitReachedType": "rate_limit_reached",
+}
+_P18F_LIVE = {"ordinaryUsageAllowed": False, "rateLimits": _P18F_BLOCK_LIVE,
+              "rateLimitsByLimitId": {"codex": _P18F_BLOCK_LIVE}, "accountId": "acct-1"}
+_P18F_BLOCK_LOG = {
+    "limit_id": "codex", "limit_name": None,
+    "primary": {"used_percent": 21.0, "window_minutes": 300, "resets_at": 1793016427},
+    "secondary": {"used_percent": 3.0, "window_minutes": 10080, "resets_at": 1793603227},
+    "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+    "individual_limit": None, "spend_control_reached": None,
+    "plan_type": "plus", "rate_limit_reached_type": None,
+}
+_u18f = prov._usage_result(_P18F_LIVE, "LIVE")
+check("P18f LIVE đọc đúng hình thật của CLI (camelCase, block đứng một mình + nhóm theo limitId) "
+      "mà KHÔNG đếm cửa sổ hai lần — thiếu gộp là một màn hình toàn số trùng lặp",
+      _u18f["source"] == "LIVE" and len(_u18f["windows"]) == 2
+      and [w["used"] for w in _u18f["windows"]] == [0.0, 100.0]
+      and {w["minutes"] for w in _u18f["windows"]} == {300, 10080}
+      and _u18f["plan"] == "plus" and _u18f["reached"] == "rate_limit_reached"
+      and _u18f["ordinary_allowed"] is False)
+_c18f = prov._usage_result(_P18F_BLOCK_LOG, "CACHED", "05/11 20:03")
+check("P18f session log snake_case cũng ra CÙNG cấu trúc (kể cả khi block là cả payload, không có "
+      "vỏ rateLimits) — hai nguồn phải so sánh được với nhau chứ không phải hai bộ mã khác nhau",
+      len(_c18f["windows"]) == 2 and _c18f["windows"][0]["used"] == 21.0
+      and _c18f["windows"][1]["minutes"] == 10080 and _c18f["plan"] == "plus"
+      and _c18f["reached"] is None)
+check("P18f nhãn cửa sổ TÍNH từ số phút CLI đưa chứ không hard-code '5 giờ'/'tuần' như legacy: "
+      "mất số thì nói 'cửa sổ' trơn, không bịa độ dài",
+      prov._window_label(300) == "5 giờ" and prov._window_label(10080) == "7 ngày"
+      and prov._window_label(45) == "45 phút" and prov._window_label(43200) == "30 ngày"
+      and prov._window_label(None) == "cửa sổ" and prov._window_label(0) == "cửa sổ")
+_t18f = prov.codex_usage_text(_u18f)
+check("P18f chữ LIVE nói thẳng nguồn là CLI trên máy + chỉ đọc, và nói CÒN lại bao nhiêu chứ không "
+      "chịu mỗi số đã dùng (đọc trần mà phải đọc được còn bao nhiêu lâu nữa)",
+      "đọc trực tiếp từ Codex CLI" in _t18f and "không gửi prompt" in _t18f
+      and "cửa sổ 5 giờ: đã dùng 0%" in _t18f and "cửa sổ 7 ngày: đã dùng 100%, còn 0%" in _t18f
+      and "reset lúc" in _t18f and "gói theo CLI báo: plus" in _t18f)
+check("P18f chạm trần thì nói to nhưng KHÔNG tự phanh: dòng kết luận có 'ĐÃ CHẠM TRẦN' và nói rõ "
+      "hàng đợi không tự dừng — P18f là chỗ xem, không phải cái phanh mới",
+      "ĐÃ CHẠM TRẦN" in _t18f and "hàng đợi không tự dừng" in _t18f)
+_ct18f = prov.codex_usage_text(prov._usage_result(_P18F_BLOCK_LOG, "CACHED", "05/11 20:03", "hạn mức: hết chờ"))
+check("P18f bản CACHED không được đội lốt LIVE: phải kèm MỐC GIỜ của bản ghi + lý do LIVE hỏng + "
+      "cảnh báo số có thể đã đổi",
+      "bản CUỐI CLI ghi lúc 05/11 20:03" in _ct18f and "hạn mức: hết chờ" in _ct18f
+      and "số có thể đã đổi" in _ct18f and "đọc trực tiếp từ Codex CLI" not in _ct18f)
+_ut18f = prov.codex_usage_text(prov._usage_result({}, "UNKNOWN", "", "app-server: CLI không tồn tại"))
+check("P18f UNKNOWN không bịa con số: không có %, không có cửa sổ ảo, chỉ dẫn đúng chỗ còn lại để xem "
+      "(trạng thái đăng nhập) và kể được lý do thật",
+      "%" not in _ut18f and "cửa sổ" not in _ut18f
+      and "app-server: CLI không tồn tại" in _ut18f and "codex login status" in _ut18f)
+
+# Ba mức tin được, đo bằng CODEX_HOME giả — không spawn CLI, không đụng session log của máy anh.
+def _p18f_iso(offset_s):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() + offset_s)) + "Z"
+
+
+_p18f_home = Path(tempfile.mkdtemp(prefix="fbcodex_"))
+(_p18f_home / "sessions" / "2026-11-07").mkdir(parents=True)
+_p18f_decoys = "\n".join([
+    # chữ "rate_limits" dán trong prompt của người dùng KHÔNG phải số hạn mức
+    json.dumps({"timestamp": _p18f_iso(0), "type": "response_item",
+                "payload": {"type": "message", "content": [{"text": "rate_limits primary usedPercent 99"}]}}),
+    # event token_count quá 30 ngày -> hết tuổi, bỏ
+    json.dumps({"timestamp": _p18f_iso(-41 * 86400), "type": "event_msg",
+                "payload": {"type": "token_count", "info": None,
+                            "rate_limits": {"limit_id": "codex",
+                                            "primary": {"used_percent": 88.0, "window_minutes": 300}}}}),
+    # token_count THẬT nhưng mọi cửa sổ null (hình dạng 'premium' đo được 2026-11-06) -> chưa có số
+    json.dumps({"timestamp": _p18f_iso(0), "type": "event_msg",
+                "payload": {"type": "token_count", "info": None,
+                            "rate_limits": {"limit_id": "premium", "primary": None, "secondary": None}}}),
+])
+_p18f_good = json.dumps({"timestamp": _p18f_iso(-60), "type": "event_msg", "payload": {
+    "type": "token_count", "info": None,
+    "rate_limits": {"limit_id": "codex", "primary": {"used_percent": 44.0, "window_minutes": 300,
+                                                     "resets_at": int(time.time()) + 3600},
+                    "secondary": None, "plan_type": "plus"}}})
+_p18f_f_new = _p18f_home / "sessions" / "2026-11-07" / "rollout-decoys.jsonl"
+_p18f_f_old = _p18f_home / "sessions" / "2026-11-07" / "rollout-good.jsonl"
+_p18f_f_new.write_text(_p18f_decoys, encoding="utf-8")
+_p18f_f_old.write_text(_p18f_good, encoding="utf-8")
+os.utime(_p18f_f_new, (time.time(), time.time()))            # file MỚI NHƯNG không có số nào tin được
+os.utime(_p18f_f_old, (time.time() - 3600, time.time() - 3600))  # số thật nằm ở file kế tiếp
+_p18f_env_old = os.environ.get("CODEX_HOME")
+os.environ["CODEX_HOME"] = str(_p18f_home)
+_p18f_block, _p18f_stamp = prov._codex_rate_limits_cached()
+check("P18f đường CACHED chỉ lấy block CÓ SỐ và còn hạn dùng: bỏ qua chữ dán nhái, bỏ qua bản 41 ngày "
+      "tuổi, bỏ qua token_count toàn null — rồi tiếp tục tìm file kế thay vì trả trắng",
+      _p18f_block is not None and _p18f_block["primary"]["used_percent"] == 44.0
+      and _p18f_block["limit_id"] == "codex" and _p18f_stamp.endswith("Z"))
+check("P18f một tài khoản một home: home đọc từ CODEX_HOME, chưa đặt thì ~/.codex — không có pool "
+      "`.codex_accounts/homes/<id>` như legacy (máy này không dùng)",
+      str(prov.codex_home()) == str(_p18f_home)
+      and 'os.getenv("CODEX_HOME", "")' in (Path(__file__).resolve().parent / "providers.py").read_text(encoding="utf-8"))
+_REAL_LIVE_P18F = prov._codex_rate_limits_live
+prov._codex_rate_limits_live = lambda timeout: (_ for _ in ()).throw(
+    prov.CodexUsageError("hạn mức", "hết chờ"))
+_u18f_cached = prov.codex_usage()
+check("P18f LIVE hỏng -> CACHED thật, và lý do LIVE hỏng đi kèm chứ bị nuốt: source/used/reason/stamp "
+      "đủ cả bốn (đây là nhánh anh sẽ thấy khi CLI không chịu trả lời)",
+      _u18f_cached["source"] == "CACHED" and _u18f_cached["windows"][0]["used"] == 44.0
+      and _u18f_cached["reason"] == "hạn mức: hết chờ" and _u18f_cached["stamp"]
+      and _u18f_cached["plan"] == "plus")
+prov._codex_rate_limits_live = lambda timeout: _P18F_LIVE
+_u18f_live = prov.codex_usage()
+check("P18f LIVE trả lời là KHÔNG thèm đọc session log: source LIVE, reason trống",
+      _u18f_live["source"] == "LIVE" and _u18f_live["reason"] == ""
+      and [w["used"] for w in _u18f_live["windows"]] == [0.0, 100.0])
+os.environ["CODEX_HOME"] = str(Path(tempfile.mkdtemp(prefix="fbcodex_empty_")))
+prov._codex_rate_limits_live = lambda timeout: (_ for _ in ()).throw(
+    prov.CodexUsageError("app-server", "CLI đóng pipe trước khi trả lời"))
+_u18f_unknown = prov.codex_usage()
+check("P18f cả hai đường cùng hỏng -> UNKNOWN kèm lý do, windows rỗng — không có trường hợp 'nguồn lạ "
+      "mà số đẹp'",
+      _u18f_unknown["source"] == "UNKNOWN" and _u18f_unknown["windows"] == []
+      and _u18f_unknown["reason"] == "app-server: CLI đóng pipe trước khi trả lời")
+prov._codex_rate_limits_live = _REAL_LIVE_P18F
+if _p18f_env_old is None:
+    os.environ.pop("CODEX_HOME", None)
+else:
+    os.environ["CODEX_HOME"] = _p18f_env_old
+
+_p18f_src = (Path(__file__).resolve().parent / "providers.py").read_text(encoding="utf-8")
+_p18f_sec = _p18f_src[_p18f_src.index("# ---------- P18f: hạn mức Codex ----------"):
+                      _p18f_src.index("def test_connection(provider)")]
+check("P18f chỉ gọi đúng ba method của app-server (initialize / initialized / account/rateLimits/read): "
+      "không có method nào tạo turn, đổi tài khoản hay đăng nhập — một lượt XEM không đốt hạn mức",
+      '"account/rateLimits/read"' in _p18f_sec and '"method": "initialize"' in _p18f_sec
+      and '"method": "initialized"' in _p18f_sec and "turn/" not in _p18f_sec
+      and "account/login" not in _p18f_sec)
+check("P18f giữ kỷ luật an toàn của đường đọc: stderr đổ thẳng ra DEVNULL (stderr CLI hay kèm thông tin "
+      "đăng nhập), ba biến key bị gỡ khỏi env trước khi spawn, con luôn bị terminate/kill trong finally, "
+      "và lượt hỏi có trần giây để không treo trang",
+      "stderr=subprocess.DEVNULL" in _p18f_sec
+      and all(k in _p18f_sec for k in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"))
+      and 'env["CODEX_HOME"] = str(codex_home())' in _p18f_sec
+      and "proc.terminate()" in _p18f_sec and "proc.kill()" in _p18f_sec
+      and "max(3, min(timeout, 45))" in _p18f_sec)
+check("P18f KHÔNG gọi HTTP nào để hỏi hạn mức — Codex không có API usage/plan/để mà gọi; ai thêm "
+      "httpx vào section này là đang bịa nguồn",
+      "httpx" not in _p18f_sec)
+_p18f_app_src = (Path(__file__).resolve().parent / "app.py").read_text(encoding="utf-8")
+check("P18f nút nằm ĐÚNG chỗ hai nút đăng nhập (Cấu hình ▸ Providers, hàng 3 cột) và màu nói đúng mức "
+      "tin: LIVE xanh, CACHED vàng, UNKNOWN đỏ",
+      'l1, l2, l3 = st.columns(3)' in _p18f_app_src
+      and 'l3.button("📊 Hạn mức Codex (chỉ đọc)"' in _p18f_app_src
+      and 'if usage["source"] == "UNKNOWN":' in _p18f_app_src
+      and "st.error(text)" in _p18f_app_src and "st.warning(text)" in _p18f_app_src
+      and "st.success(text)" in _p18f_app_src)
+_p18f_grid_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+_p18f_steps_src = (Path(__file__).resolve().parent / "steps.py").read_text(encoding="utf-8")
+_p18f_ga = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+check("P18f là chỗ XEM chứ không phải cái phanh: grid / grid_actions / steps không tham khảo hạn mức "
+      "khi chạy, nên ⚡ và ▶ hành xử y như trước (đúng luật 'bỏ check chứ không thay check')",
+      "codex_usage" not in _p18f_grid_src and "codex_usage" not in _p18f_ga
+      and "codex_usage" not in _p18f_steps_src)
+
+# Nút thật trong trang Providers: stub codex_usage để KHÔNG spawn CLI, chỉ đo đường chữ ra màn hình.
+db.add_provider(conn, "P18fCodex", "codex_cli", "", "", "")
+_p18f_pid = next(x["id"] for x in db.list_providers(conn) if x["name"] == "P18fCodex")
+_p18f_real_usage = prov.codex_usage
+prov.codex_usage = lambda timeout=0: _u18f
+try:
+    at_p18f = AppTest.from_file(str(Path(__file__).resolve().parent / "app.py"), default_timeout=30)
+    at_p18f.run()
+    at_p18f.sidebar.radio[0].set_value("Cấu hình").run()
+    next(w for w in at_p18f.selectbox if w.key == "provider_manage").set_value(_p18f_pid).run()
+    _p18f_btn = next((b for b in at_p18f.button if b.label.startswith("📊 Hạn mức Codex")), None)
+    check("P18f nút hạn mức tồn tại ngay dưới hai nút đăng nhập của provider loại codex_cli "
+          "(và KHÔNG hiện với provider openai)", _p18f_btn is not None and not at_p18f.exception)
+    if _p18f_btn is not None:
+        _p18f_btn.click().run()
+        _p18f_shown = " ".join((c.value or "") for c in
+                               list(at_p18f.success) + list(at_p18f.warning) + list(at_p18f.error))
+        check("P18f một cú bấm hiện đủ ba thứ anh cần: nguồn là CLI, hai cửa sổ kèm giờ reset, và "
+              "kết luận chạm trần — không exception, không dòng 'đang đọc' kẹt lại",
+              not at_p18f.exception and "đọc trực tiếp từ Codex CLI" in _p18f_shown
+              and "cửa sổ 7 ngày: đã dùng 100%, còn 0%" in _p18f_shown
+              and "ĐÃ CHẠM TRẦN" in _p18f_shown and "reset lúc" in _p18f_shown)
+        check("P18f LIVE thì không được tô vàng/đỏ như số cũ: bản LIVE phải vào st.success",
+              any("đọc trực tiếp từ Codex CLI" in (c.value or "") for c in at_p18f.success))
+finally:
+    prov.codex_usage = _p18f_real_usage
+    db.delete_provider(conn, _p18f_pid)
+# --- hết P18f ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")

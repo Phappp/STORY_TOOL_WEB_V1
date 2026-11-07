@@ -1,11 +1,15 @@
 import base64
+import json
 import os
+import queue
 import re
 import shutil
 import ssl
 import subprocess
 import tempfile
+import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import certifi
@@ -368,6 +372,370 @@ def codex_login() -> str:
     binary = _codex_bin()
     subprocess.Popen([binary, "login"])
     return "Đã chạy `codex login` — browser sẽ mở ra để bạn đăng nhập. Xong rồi bấm 'Kiểm tra trạng thái'."
+
+
+# ---------- P18f: hạn mức Codex ----------
+# Codex KHÔNG có API plan/billing nào để gọi (khác hẳn top-tools-ai). Nguồn duy nhất là chính CLI
+# trên máy: `app-server` trả số đang dùng (LIVE), còn session log nó tự ghi là bản cuối (CACHED).
+# Cả hai đường đều CHỈ ĐỌC: không gửi prompt, không đổi tài khoản, không sửa session.
+
+USAGE_TIMEOUT = 20           # giây cho một lượt hỏi app-server — hết giờ là rơi xuống CACHED, không treo UI
+USAGE_CACHED_MAX_FILES = 60  # chỉ quét newest-first và dừng ở file đầu có số -> không cần đọc hết
+USAGE_CACHED_MAX_BYTES = 12_000_000
+USAGE_CACHED_MAX_AGE_DAYS = 30
+
+
+class CodexUsageError(RuntimeError):
+    """Lỗi đọc hạn mức ĐÃ LỌC: chỉ pha + loại lỗi + mã RPC.
+
+    stderr của CLI có thể chứa token/đường dẫn tài khoản, nên nó được đổ thẳng vào DEVNULL và lý do
+    đưa lên UI do tự tay mình viết ra — không có đường nào để chữ của CLI chui vào dòng hiển thị.
+    """
+
+    def __init__(self, phase: str, reason: str, code=None):
+        self.phase = phase
+        self.reason = reason
+        super().__init__(f"{phase}: {reason}" + (f" (mã {code})" if code is not None else ""))
+
+
+def codex_home() -> Path:
+    """Home của CLI đang dùng — bản này một tài khoản nên không có pool CODEX_HOME riêng."""
+    raw = os.getenv("CODEX_HOME", "").strip()
+    return Path(raw) if raw else Path.home() / ".codex"
+
+
+def _num(value):
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if 0 <= f <= 100 else None
+
+
+def _usage_blocks(obj) -> list:
+    """Mọi block hạn mức trong một payload, camelCase (app-server) lẫn snake_case (session log).
+
+    Block `rateLimits` đứng một mình được liệt kê TRƯỚC nhóm `rateLimitsByLimitId` vì nó là số của
+    bộ đang dùng; nhóm theo limitId chỉ thêm bucket khác (máy này từng ghi cả 'codex' lẫn 'premium').
+    """
+    if not isinstance(obj, dict):
+        return []
+    out = []
+    single = obj.get("rateLimits") or obj.get("rate_limits")
+    if isinstance(single, dict):
+        out.append((str(single.get("limitId") or single.get("limit_id") or ""), single))
+    elif isinstance(obj.get("primary"), dict) or isinstance(obj.get("secondary"), dict):
+        out.append((str(obj.get("limitId") or obj.get("limit_id") or ""), obj))
+    group = obj.get("rateLimitsByLimitId") or obj.get("rate_limits_by_limit_id")
+    if isinstance(group, dict):
+        for name, val in group.items():
+            if isinstance(val, dict):
+                out.append((str(name), val))
+    return out
+
+
+def _usage_windows(obj) -> list:
+    """Các cửa sổ dùng hạn mức, đã gộp trùng: mỗi (limitId, primary|secondary) chỉ hiện một lần."""
+    out, seen = [], set()
+    for limit_id, block in _usage_blocks(obj):
+        for kind in ("primary", "secondary"):
+            v = block.get(kind)
+            if not isinstance(v, dict):
+                continue
+            used = _num(v.get("usedPercent", v.get("used_percent")))
+            if used is None or (limit_id, kind) in seen:
+                continue
+            seen.add((limit_id, kind))
+            out.append({
+                "limit": limit_id,
+                "kind": kind,
+                "used": used,
+                "minutes": v.get("windowDurationMins", v.get("window_minutes")),
+                "resets_at": v.get("resetsAt", v.get("resets_at")),
+            })
+    return out
+
+
+def _usage_plan(obj) -> str:
+    for _, block in _usage_blocks(obj):
+        plan = block.get("planType") or block.get("plan_type")
+        if plan:
+            return str(plan)
+    return ""
+
+
+def _usage_reached(obj):
+    """(loại trần đã chạm, còn được dùng bình thường không) — hoặc (None, None) khi payload không nói gì.
+
+    `ordinaryUsageAllowed` đứng ở ĐỈNH payload, chung cho mọi bucket (đo LIVE mà chỉ nhìn block thì cờ
+    này luôn None), còn `rateLimitReachedType` đứng trong từng block — phải đọc cả hai chỗ.
+    """
+    allowed = None
+    if isinstance(obj, dict):
+        allowed = obj.get("ordinaryUsageAllowed", obj.get("ordinary_usage_allowed"))
+    for _, block in _usage_blocks(obj):
+        reached = block.get("rateLimitReachedType") or block.get("rate_limit_reached_type")
+        if reached:
+            return str(reached), allowed
+    return None, allowed
+
+
+def _window_label(minutes) -> str:
+    try:
+        m = int(round(float(minutes)))
+    except (TypeError, ValueError):
+        return "cửa sổ"
+    if m <= 0:
+        return "cửa sổ"
+    if m < 60:
+        return f"{m} phút"
+    if m < 60 * 24:
+        h = m // 60
+        return f"{h} giờ" if m % 60 == 0 else f"{h} giờ {m % 60} phút"
+    d = m // (60 * 24)
+    return f"{d} ngày" if m % (60 * 24) == 0 else f"{d} ngày {m % (60 * 24) // 60} giờ"
+
+
+def _stamp_utc(raw) -> str:
+    """Thời điểm của bản ghi CACHED, đổi thành giờ địa phương để anh so được với đồng hồ đang chạy."""
+    if not isinstance(raw, str):
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return dt.astimezone().strftime("%d/%m %H:%M")
+
+
+def _epoch_local(raw) -> str:
+    try:
+        return datetime.fromtimestamp(float(raw)).strftime("%d/%m %H:%M")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+
+
+def _usage_result(obj, source: str, stamp: str = "", reason: str = "") -> dict:
+    reached, allowed = _usage_reached(obj)
+    credits = {}
+    for _, block in _usage_blocks(obj):
+        c = block.get("credits")
+        if isinstance(c, dict):
+            credits = c
+            break
+    return {"source": source, "stamp": stamp, "reason": reason, "plan": _usage_plan(obj),
+            "windows": _usage_windows(obj), "reached": reached, "ordinary_allowed": allowed,
+            "credits": {"has": bool(credits.get("hasCredits", credits.get("has_credits", False))),
+                        "unlimited": bool(credits.get("unlimited", False)),
+                        "balance": str(credits.get("balance", "") or "")}}
+
+
+def _codex_rate_limits_live(timeout: int):
+    """Hỏi `codex app-server` bằng JSON-RPC: initialize -> initialized -> account/rateLimits/read.
+
+    Ba kỷ luật lấy nguyên từ đường đã chạy ổn bên legacy: stderr đổ ra DEVNULL (stderr của CLI hay
+    kèm thông tin đăng nhập), mọi lỗi tự gắn nhãn pha để đọc được mà không lộ nội dung, và tiến
+    trình con luôn bị terminate/kill trong finally — một lượt xem hạn mức không được để sót process.
+    """
+    exe = _codex_bin()
+    env = os.environ.copy()
+    for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"):
+        env.pop(key, None)  # đọc hạn mức thì không cần key; đưa vào con là rủi ro lộ không cần thiết
+    env["CODEX_HOME"] = str(codex_home())
+    flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+    try:
+        proc = subprocess.Popen([exe, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=env, bufsize=0, **flags)
+    except OSError as exc:
+        raise CodexUsageError("app-server", type(exc).__name__) from exc
+    box: queue.Queue = queue.Queue()
+
+    def reader():
+        try:
+            for raw in iter(proc.stdout.readline, b""):
+                try:
+                    obj = json.loads(raw.decode("utf-8", "replace"))
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(obj, dict):
+                    box.put(obj)
+        except (OSError, ValueError):
+            pass
+        finally:
+            box.put(None)
+
+    threading.Thread(target=reader, daemon=True).start()
+    deadline = time.monotonic() + max(3, min(timeout, 45))
+    phase = ["khởi động"]
+
+    def send(obj):
+        try:
+            proc.stdin.write((json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8"))
+            proc.stdin.flush()
+        except (OSError, ValueError):
+            raise CodexUsageError(phase[0], "CLI đóng pipe trước khi trả lời") from None
+
+    def expect(rid):
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise CodexUsageError(phase[0], "hết chờ")
+            try:
+                obj = box.get(timeout=left)
+            except queue.Empty:
+                raise CodexUsageError(phase[0], "hết chờ") from None
+            if obj is None:
+                raise CodexUsageError(phase[0], "app-server tự thoát", proc.poll())
+            if obj.get("id") != rid:
+                continue
+            err = obj.get("error")
+            if err:
+                code = err.get("code") if isinstance(err, dict) else None
+                raise CodexUsageError(phase[0], "CLI từ chối", code)
+            return obj.get("result")
+
+    try:
+        send({"id": 1, "method": "initialize", "params": {"clientInfo": {
+            "name": "story_tool_quota_check", "title": "Story Tool Quota Checker", "version": "1.0.0"}}})
+        expect(1)
+        phase[0] = "hạn mức"
+        send({"method": "initialized", "params": {}})
+        send({"id": 2, "method": "account/rateLimits/read"})
+        result = expect(2)
+    finally:
+        try:
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1.5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=1.5)
+    if not isinstance(result, dict):
+        raise CodexUsageError("hạn mức", "không có payload")
+    return result
+
+
+def _codex_rate_limits_cached():
+    """Số CUỐI CÙNG CLI tự ghi vào session log — (block hạn mức, timestamp) hoặc (None, "").
+
+    Quét newest-first và DỪNG ở file đầu có số: 198 file session trên máy này mà đọc hết là mất
+    giây, mà file mới nhất luôn là file mang số đang dùng. Chỉ tin đúng event `token_count`:
+    chữ "rate_limits" dán trong prompt của người dùng không phải là số hạn mức.
+    """
+    session_dir = codex_home() / "sessions"
+    if not session_dir.is_dir():
+        return None, ""
+    try:
+        files = sorted((p for p in session_dir.rglob("*.jsonl") if p.is_file()),
+                       key=lambda p: p.stat().st_mtime, reverse=True)[:USAGE_CACHED_MAX_FILES]
+    except OSError:
+        return None, ""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=USAGE_CACHED_MAX_AGE_DAYS)
+    for path in files:
+        try:
+            st = path.stat()
+            if st.st_size > USAGE_CACHED_MAX_BYTES:
+                continue
+            if datetime.fromtimestamp(st.st_mtime, timezone.utc) < cutoff:
+                continue
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if "rate_limit" not in line and "rateLimits" not in line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(event, dict) or event.get("type") != "event_msg":
+                        continue
+                    payload = event.get("payload")
+                    if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                        continue
+                    block = payload.get("rate_limits") or payload.get("rateLimits")
+                    if not isinstance(block, dict):
+                        # bản CLI cũ nhét block vào payload.info — đọc cả hai để không trắng số
+                        info = payload.get("info")
+                        block = info.get("rate_limits") if isinstance(info, dict) else None
+                    if not isinstance(block, dict):
+                        continue
+                    if not _usage_windows(block):
+                        continue
+                    stamp = event.get("timestamp")
+                    try:
+                        when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                    except ValueError:
+                        continue
+                    if when.astimezone(timezone.utc) < cutoff or when > datetime.now(timezone.utc) + timedelta(minutes=5):
+                        continue
+                    return block, stamp
+        except (OSError, UnicodeError):
+            continue
+    return None, ""
+
+
+def codex_usage(timeout: int = USAGE_TIMEOUT) -> dict:
+    """Hạn mức Codex theo đúng ba mức tin được: LIVE (CLI đang trả lời) -> CACHED (số cuối CLI ghi) -> UNKNOWN.
+
+    Không bao giờ che một lượt LIVE hỏng thành kết quả đẹp: CACHED luôn kèm thời điểm của bản ghi và
+    lý do LIVE thất bại, để anh biết con số đang nhìn là cũ cỡ nào.
+    """
+    try:
+        return _usage_result(_codex_rate_limits_live(timeout), "LIVE")
+    except Exception as exc:
+        reason = str(exc) if isinstance(exc, CodexUsageError) else type(exc).__name__
+        block, stamp = _codex_rate_limits_cached()
+        if block is not None:
+            return _usage_result(block, "CACHED", _stamp_utc(stamp), reason)
+        return _usage_result({}, "UNKNOWN", "", reason)
+
+
+def codex_usage_text(usage: dict) -> str:
+    """Chữ hiển thị hạn mức — nhãn nói NGUỒN trước con số, và không hứa bất kỳ API gói/billing nào.
+
+    `planType` ở đây là thứ CLI báo về tài khoản của nó, không phải bằng chứng về hợp đồng nào, nên
+    câu chữ là 'gói theo CLI báo'. Dòng cuối nói thật tình trạng trần: chỉ để anh quyết định, tool
+    không tự dừng hàng đợi vì số này.
+    """
+    source = str(usage.get("source") or "UNKNOWN")
+    if source == "UNKNOWN":
+        return ("Không đọc được hạn mức Codex"
+                + (f": {usage.get('reason')}" if usage.get("reason") else "")
+                + " — Codex CLI không trả lời và session log của nó cũng không có số nào còn tin được "
+                  "(kiểm tra `codex login status` ở hai nút bên cạnh).")
+    head = ("Hạn mức Codex — đọc trực tiếp từ Codex CLI trên máy (chỉ đọc: không gửi prompt, không đổi tài khoản):"
+            if source == "LIVE" else
+            f"Hạn mức Codex — bản CUỐI CLI ghi lúc {usage.get('stamp') or '?'} (CLI không trả lời ngay"
+            f"{': ' + str(usage.get('reason')) if usage.get('reason') else ''}) — số có thể đã đổi:")
+    lines = [head]
+    windows = usage.get("windows") or []
+    for w in windows:
+        used = float(w["used"])
+        bit = f"· {w.get('limit') and '[' + str(w['limit']) + '] ' or ''}cửa sổ {_window_label(w.get('minutes'))}: đã dùng {used:g}%"
+        left = max(0.0, 100.0 - used)
+        if left < 100:
+            bit += f", còn {left:g}%"
+        resets = _epoch_local(w.get("resets_at"))
+        if resets:
+            bit += f" — reset lúc {resets}"
+        lines.append(bit)
+    if not windows:
+        lines.append("· CLI không trả cửa sổ hạn mức nào — chưa có số để hiển thị.")
+    if usage.get("plan"):
+        lines.append(f"· gói theo CLI báo: {usage['plan']}")
+    credits = usage.get("credits") or {}
+    if credits.get("has") or credits.get("unlimited"):
+        lines.append("· tín dụng: " + ("không giới hạn" if credits.get("unlimited")
+                                       else f"còn {credits.get('balance') or '0'}"))
+    reached, allowed = usage.get("reached"), usage.get("ordinary_allowed")
+    if reached or allowed is False:
+        lines.append(f"→ ĐÃ CHẠM TRẦN ({reached or 'rate_limit_reached'}) — bước chạy bằng Codex sẽ chờ "
+                     "tới lúc cửa sổ reset; hàng đợi không tự dừng, anh quyết định có bấm ▶ không.")
+    elif windows and max(float(w["used"]) for w in windows) >= 80:
+        lines.append("→ Còn chạy được nhưng đã dùng ≥80% — batch dài dễ chạm trần giữa chừng.")
+    return "\n".join(lines)
 
 
 def test_connection(provider) -> str:
