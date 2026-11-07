@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 from hashlib import sha1
 from pathlib import Path
+from urllib.parse import urlparse
 
 import db
 import fb_import
@@ -522,14 +523,32 @@ def parse_import(raw: bytes, name: str) -> tuple[list[dict], list[str]]:
 
 
 def pick_links(values) -> tuple[list[str], list[str]]:
-    """Cột A -> link FB (chuẩn hóa + bỏ trùng); phần bị bỏ trả kèm lý do để báo đúng, không âm thầm."""
+    """Cột A toàn link -> link FB hợp lệ, BỎ link trùng khóa (dòng sau) kèm lý do để báo đúng.
+
+    Đây là đường legacy một cột link (dán danh sách vào trang Tạo bài), nơi hai dòng y hệt nhau
+    trong cùng một lần dán không mang thêm bài nào. Modal Import của lưới đi ngả khác: ở đó dòng
+    trùng ĐƯỢC GIỮ và `import_dupes` đánh cờ để anh tự quyết (P23a).
+    """
     rows, skipped = pick_entries([{"url": v} for v in values])
-    return [str(r["url"]) for r in rows], skipped
+    out, seen = [], set()
+    for r in rows:
+        key = dup_key(r["url"])
+        if key and key in seen:
+            skipped.append(f"bỏ link trùng: {str(r['url'])[:60]}")
+            continue
+        seen.add(key)
+        out.append(str(r["url"]))
+    return out, skipped
 
 
 def pick_entries(entries) -> tuple[list[dict], list[str]]:
-    """Dòng import -> bài hợp lệ, GIỮ NGUYÊN caption + ảnh đi kèm dòng đó (link vẫn là chuẩn)."""
-    rows, skipped, seen = [], [], set()
+    """Dòng import -> bài hợp lệ, GIỮ NGUYÊN caption + ảnh đi kèm dòng đó (link vẫn là chuẩn).
+
+    Chỉ bỏ dòng KHÔNG PHẢI là bài (dòng tiêu đề, dòng không có link FB) — P23a bỏ luật tự xóa
+    "link trùng trong file" ở đây: hai dòng cùng một link là việc anh phải TỰ quyết, nên chúng
+    đi cả hai vào `rows` rồi được `import_dupes` đánh cờ, chứ không âm thầm mất một dòng.
+    """
+    rows, skipped = [], []
     for item in entries if isinstance(entries, (list, tuple)) else []:
         entry = item if isinstance(item, dict) else {"url": item}
         head = str(entry.get("url") or "").strip()
@@ -542,10 +561,6 @@ def pick_entries(entries) -> tuple[list[dict], list[str]]:
         if not fb_import.is_fb_url(value):
             skipped.append(f"bỏ dòng không phải link FB: {value[:60]}")
             continue
-        if value in seen:
-            skipped.append(f"bỏ link trùng: {value[:60]}")
-            continue
-        seen.add(value)
         rows.append({**{k: v for k, v in entry.items() if k != "url"}, "url": value})
     return rows, skipped
 
@@ -696,6 +711,184 @@ def preview_caption(caption) -> tuple[str, bool]:
     return text[:PREVIEW_CAP_CHARS], len(text) > PREVIEW_CAP_CHARS
 
 
+# ---------- P23a: chống trùng khi import (CÁO BÁO, không tự chặn) ----------
+
+DUP_RULE_LABELS = {
+    "file": "trùng link ngay trong file này",
+    "link": "link đã có bài trong workspace",
+    "caption": "caption giống hệt bài đã có",
+    "near": "nghi trùng (caption gần giống / ảnh trùng)",
+}
+DUP_MIN_CAP = 24      # caption ngắn hơn mức này không đem so chữ: "ăn cơm ngon" đụng nhau vô nghĩa
+DUP_NEAR_CHARS = 120  # độ dài đoạn đầu để còn gọi là "gần giống" khi hai link khác nhau
+DUP_HITS = 3          # mỗi dòng liệt kê tối đa bấy nhiêu bài va chạm, phần dư chỉ đếm
+_FB_ID_RES = (
+    re.compile(r"/posts/(?:\d+[/@])?(\d{5,})"),
+    re.compile(r"/(?:videos|reels|reel)/(?:[^/]+[/@])?(\d{5,})"),
+    re.compile(r"/photos/[^/]+/(\d{5,})"),
+    re.compile(r"/photos/(\d{5,})"),
+    re.compile(r"/p/(\d{5,})"),
+    re.compile(r"[?&](?:story_fbid|media_id|fb_action_ids)=(\d{5,}|pfbid[0-9A-Za-z_-]{5,})"),
+    re.compile(r"fb\.watch/([A-Za-z0-9_-]{4,})", re.IGNORECASE),
+)
+
+
+def dup_key(url) -> str:
+    """KHÓA SO TRÙNG của một link FB: id bài nếu trích được, ngược lại link đã chuẩn hóa.
+
+    Query CHỈ bị bỏ khi path không chứa id: ở `photo.php?id=…` chính query mới là id bài, bỏ nó thì
+    hai bài khác nhau thành một. id theo đúng mẫu link FB thật (posts/videos/reels/photos/fb.watch),
+    không đoán bừa — khóa sai còn tệ hơn khóa chặt vì nó báo trùng cho bài không liên quan.
+    """
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", value, re.IGNORECASE):
+        value = "https://" + value.lstrip("/")
+    low = value.lower()
+    for rx in _FB_ID_RES:
+        m = rx.search(value)
+        if m:
+            return f"watch:{m.group(1).lower()}" if "fb.watch" in low else f"id:{m.group(1)}"
+    parts = urlparse(low)
+    host = re.sub(r"^(www|m|web)\.", "", parts.netloc.split(":")[0])
+    host = "facebook.com" if host in ("fb.com", "fb.me") else host
+    tail = f"?{parts.query}" if parts.query else ""
+    return f"url:{host}{parts.path.rstrip('/') or '/'}{tail}"
+
+
+def norm_caption(text) -> str:
+    """Caption đem so trùng: gom mọi khoảng trắng về một dấu cách + bỏ phân biệt hoa/thường.
+
+    File scrape xuống dòng từng câu, bài đăng lại có thêm dấu cách đầu dòng — hai bản chỉ khác
+    khoảng trắng vẫn là MỘT bài nên phải so được với nhau; không đụng dấu câu, không chữ số.
+    """
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _dup_hit(rule: str, rec: dict, what: str) -> dict:
+    return {"rule": rule, "id": rec["id"], "topic": rec["topic"] or "(không tên)",
+            "status": rec["status"] or "?", "b0": rec["b0"], "what": what}
+
+
+def _dup_self(rule: str, what: str) -> dict:
+    """Va chạm nằm trong chính file (không có bài cũ để gọi tên) -> hit không id, chỉ có chữ."""
+    return {"rule": rule, "id": "", "topic": "", "status": "", "b0": "", "what": what}
+
+
+def ws_dup_index(ctx: Ctx, need_caps: bool = False, need_imgs: bool = False) -> dict:
+    """Một lượt quét workspace -> bảng so trùng: khóa link -> bài, caption -> bài, link ảnh -> bài.
+
+    `input.txt` và `refs/ref.json` chỉ đọc khi file import THẬT SỰ có chữ / có ảnh, vì import một
+    cột link (CSV/Excel) mà đọc kèm ~300 file nữa thì chậm hơn chính lượt bấm. Hai bài cũ cùng một
+    khóa thì bài gặp trước thắng: đây là chỗ để GỌI TÊN bài va chạm, không phải chỗ phân xử bài nào
+    "đúng" — cảnh báo luôn nói id + topic để anh tự nhìn mà quyết.
+    """
+    idx = {"links": {}, "caps": {}, "cap_list": [], "near": {}, "imgs": {}}
+    for sid in stories.list_story_ids(ctx.root):
+        story = stories.load_story(ctx.root, sid)
+        rec = {"id": sid, "topic": str(story.get("topic") or ""), "status": str(story.get("status") or ""),
+               "b0": str(b0_state(ctx.root, sid, story=story))}
+        key = dup_key(story.get("source") or (story.get("b0") or {}).get("url"))
+        if key:
+            idx["links"].setdefault(key, rec)
+        if need_caps:
+            cap = norm_caption(stories.input_text(ctx.root, sid))
+            if len(cap) >= DUP_MIN_CAP:
+                idx["caps"].setdefault(cap, rec)
+                idx["cap_list"].append((cap, rec))
+        if need_imgs:
+            seen_urls = set()
+            for item in stories.ref_manifest(ctx.root, sid):
+                k = dup_key(item.get("url"))
+                if k and k not in seen_urls:
+                    seen_urls.add(k)
+                    idx["imgs"].setdefault(k, []).append(rec)
+    return idx
+
+
+def near_caption(cap: str, cap_list: list[tuple[str, dict]]) -> dict | None:
+    """Bài cũ có caption là PHẦN ĐẦU của caption mới (hoặc ngược lại), phần chung ≥ DUP_NEAR_CHARS.
+
+    Đây đúng là dáng của "người ta đăng lại bài cũ rồi nối thêm mấy câu": hai caption không bằng
+    nhau nên luật giống-hệt không bắt được, mà cắt đầu đoạn cố định cũng không xong vì độ dài hai
+    bản khác nhau. Đổi lại phải so tay từng cặp — chỉ chạy khi luật giống hệt đã trượt, và bản cũ
+    thường vài trăm bài nên vẫn rẻ so với một lượt bấm.
+    """
+    for other, rec in cap_list:
+        short, long_ = (cap, other) if len(cap) <= len(other) else (other, cap)
+        if len(short) >= DUP_NEAR_CHARS and long_.startswith(short):
+            return rec
+    return None
+
+
+def dup_summary_line(counts: dict, flagged: int, total: int) -> str:
+    """Một dòng tổng kết chống trùng — nói đủ từng luật, kể cả khi chẳng trùng gì."""
+    if not total:
+        return "Không có dòng nào hợp lệ để kiểm trùng."
+    if not flagged:
+        return f"Không phát hiện trùng cho {total} dòng (đã kiểm {len(DUP_RULE_LABELS)} điều kiện)."
+    parts = [f"{counts[k]} dòng {DUP_RULE_LABELS[k]}" for k in DUP_RULE_LABELS if counts.get(k)]
+    return f"{flagged}/{total} dòng nghi trùng · " + " · ".join(parts)
+
+
+def import_dupes(ctx: Ctx, rows: list[dict], ws: dict | None = None) -> tuple[list[dict], dict]:
+    """Bốn điều kiện trùng cho từng dòng import -> (cờ theo dòng, bản tổng kết). KHÔNG bỏ dòng nào.
+
+    `i` là số thứ tự dòng trong chính `rows` (0-based) để modal gắn đúng cờ vào đúng thẻ. Dòng sạch
+    không xuất hiện trong `items`, nên `dupes.rows == 0` là lưới nói thẳng "không trùng gì" thay vì
+    im lặng — cái im lặng mới là thứ khiến anh không biết đã kiểm tra chưa.
+    """
+    rows = list(rows or [])
+    need_caps = any(norm_caption(r.get("caption")) for r in rows)
+    need_imgs = any(dup_key(u) for r in rows for u in (r.get("images") or []))
+    if ws is None:
+        ws = ws_dup_index(ctx, need_caps, need_imgs) if rows else {
+            "links": {}, "caps": {}, "cap_list": [], "imgs": {}}
+    first_by_key: dict[str, int] = {}
+    items, counts = [], dict.fromkeys(DUP_RULE_LABELS, 0)
+    for i, row in enumerate(rows):
+        rules, hits = [], []
+        key = dup_key(row.get("url"))
+        if key:
+            j = first_by_key.get(key)
+            if j is None:
+                first_by_key[key] = i
+            else:
+                rules.append("file")
+                hits.append(_dup_self("file", f"trùng với dòng {j + 1} của chính file này"))
+            rec = ws["links"].get(key)
+            if rec is not None:
+                rules.append("link")
+                hits.append(_dup_hit("link", rec, "link này đã có bài trong workspace"))
+        cap = norm_caption(row.get("caption"))
+        if len(cap) >= DUP_MIN_CAP:
+            rec = ws["caps"].get(cap)
+            if rec is not None:
+                rules.append("caption")
+                hits.append(_dup_hit("caption", rec, "caption giống hệt từng chữ"))
+            else:
+                rec = near_caption(cap, ws.get("cap_list") or [])
+                if rec is not None:
+                    rules.append("near")
+                    hits.append(_dup_hit("near", rec, "caption của bài cũ nằm trọn trong đầu bài này (hoặc ngược lại)"))
+        for u in (row.get("images") or []):
+            recs = ws.get("imgs", {}).get(dup_key(u)) or []
+            if recs:
+                rules.append("near")
+                hits.append(_dup_hit("near", recs[0], "một ảnh trong file trùng ảnh đã tải của bài này"))
+                break
+        if not rules:
+            continue
+        uniq = list(dict.fromkeys(rules))
+        for rule in uniq:
+            counts[rule] += 1
+        items.append({"i": i, "url": str(row.get("url") or ""), "rules": uniq,
+                      "hits": hits[:DUP_HITS], "hits_more": max(0, len(hits) - DUP_HITS)})
+    return items, {"rows": len(items), "total": len(rows), "by_rule": counts,
+                   "line": dup_summary_line(counts, len(items), len(rows))}
+
+
 def decode_upload(data) -> tuple[bytes, str]:
     """File modal gửi lên (data URL/base64 trong event) -> (bytes, dấu vân tay).
 
@@ -711,11 +904,13 @@ def decode_upload(data) -> tuple[bytes, str]:
     return raw, sha1(raw).hexdigest()
 
 
-def io_preview(name, data, done: str = "") -> dict:
-    """Đọc file + đếm, CHƯA đụng folder nào — modal hiện trước khi anh bấm Tạo bài.
+def io_preview(name, data, done: str = "", ctx: Ctx | None = None) -> dict:
+    """Đọc file + đếm + CÁO BÁO trùng, CHƯA đụng folder nào — modal hiện trước khi anh bấm Tạo bài.
 
     Trả `again` khi dấu vân tay trùng file vừa import lần trước để lưới chặn được cú bấm đôi
     (folder tạo gấp đôi là thứ mất cả buổi dọn, không phải chuyện để người dùng tự nhớ).
+    Có `ctx` (lưới luôn truyền) thì kiểm thêm bốn điều kiện trùng P23a trên TOÀN BỘ dòng hợp lệ,
+    kể cả dòng thứ 7 trở đi mà ô Xem trước chưa liệt kê; `dup_items[].i` là số thứ tự dòng.
     """
     out = {"kind": "preview", "name": str(name or "(không tên)")[:120]}
     try:
@@ -734,6 +929,12 @@ def io_preview(name, data, done: str = "") -> dict:
         imgs = [str(u or "") for u in (r.get("images") or []) if str(u or "").strip()]
         items.append({"url": str(r.get("url") or ""), "caption": cap, "clipped": clipped,
                       "imgs": len(imgs), "thumbs": imgs[:PREVIEW_IMGS]})
+    dupes = {"checked": False, "rows": 0, "total": len(kept),
+             "by_rule": dict.fromkeys(DUP_RULE_LABELS, 0), "line": ""}
+    dup_items: list[dict] = []
+    if ctx is not None:
+        dup_items, dupes = import_dupes(ctx, kept)
+        dupes["checked"] = True
     out.update({
         "digest": digest,
         "again": bool(done) and digest == done,
@@ -744,27 +945,45 @@ def io_preview(name, data, done: str = "") -> dict:
         "skipped": shown,
         "skipped_more": max(0, len(skipped) - len(shown)),
         "items": items,
+        "dupes": dupes,
+        "dup_items": dup_items,
         "line": (f"Nhận {len(kept)} bài · bỏ {len(skipped)} dòng"
                  + (f" · {with_caption} bài có caption sẵn trong file (B0 chỉ tải ảnh)" if with_caption else "")
-                 + (f" · {capped} dòng cuối vượt trần {MAX_IMPORT}/lần, chưa import" if capped else "")),
+                 + (f" · {capped} dòng cuối vượt trần {MAX_IMPORT}/lần, chưa import" if capped else "")
+                 + (f" · {dupes['line']}" if dupes.get("checked") else "")),
     })
     return out
 
 
-def io_commit(ctx: Ctx, name, data, done: str = "") -> tuple[dict, list[str]]:
+def io_commit(ctx: Ctx, name, data, done: str = "", skip_dupes: bool = False) -> tuple[dict, list[str]]:
     """File đã xem trước -> tạo folder + hẹn B0; trả (payload cho modal, ids để grid giao luồng nền).
 
     Parse lại từ bytes chứ không tin bản nháp nào: event tới tay server là một lần đọc file
-    mới, và modal có thể đã mở từ trước khi workspace đổi.
+    mới, và modal có thể đã mở từ trước khi workspace đổi. `skip_dupes` là lựa chọn RÕ RÀNG của anh
+    ở nút "bỏ dòng nghi trùng" — mặc định vẫn tạo hết như ô Xem trước đã hứa, không âm thầm loại ai.
     """
     raw, digest = decode_upload(data)
     if done and digest == done:
         return ({"kind": "commit", "name": str(name or "")[:120], "again": True, "made": 0,
                  "line": "File này vừa import xong — không tạo thêm bài nào."}, [])
     rows, _skipped = parse_import(raw, str(name or "")[:120])
+    rows = list(rows[:MAX_IMPORT])
+    dropped = 0
+    if skip_dupes and rows:
+        flagged, _summary = import_dupes(ctx, rows)
+        bad = {int(it["i"]) for it in flagged}
+        dropped = len(bad)
+        rows = [r for i, r in enumerate(rows) if i not in bad]
+    if dropped and not rows:
+        return ({"kind": "commit", "name": str(name or "")[:120], "digest": digest, "again": False,
+                 "made": 0, "b0": False, "skip_dupes": True, "dupes_skipped": dropped,
+                 "line": f"Toàn bộ {dropped} dòng bị loại vì nghi trùng — không tạo bài nào."}, [])
     ids, lines = import_entries(ctx, rows)
+    if dropped:
+        lines.append(f"Đã bỏ {dropped} dòng nghi trùng theo lựa chọn của anh — bấm nút kia thì vẫn tạo đủ.")
     return ({"kind": "commit", "name": str(name or "")[:120], "digest": digest, "again": False,
-             "made": len(ids), "b0": bool(ids), "line": " ".join(lines)}, ids)
+             "made": len(ids), "b0": bool(ids), "skip_dupes": bool(skip_dupes),
+             "dupes_skipped": dropped, "line": " ".join(lines)}, ids)
 
 
 def io_b0_retry(ctx: Ctx) -> dict:

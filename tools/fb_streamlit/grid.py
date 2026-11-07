@@ -486,9 +486,10 @@ def _io(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     done = str(st.session_state.get(CSV_DONE_KEY) or "")
     try:
         if src == "import_read":
-            out.io = ga.io_preview(event.get("name"), event.get("data"), done)
+            out.io = ga.io_preview(event.get("name"), event.get("data"), done, ctx)
         elif src == "import_commit":
-            out.io, ids = ga.io_commit(ctx, event.get("name"), event.get("data"), done)
+            out.io, ids = ga.io_commit(ctx, event.get("name"), event.get("data"), done,
+                                       bool(event.get("skip_dupes")))
             if out.io.get("digest"):  # chỉ đổi sau khi tạo thật — file lỗi thì lần bấm kế vẫn được thử lại
                 st.session_state[CSV_DONE_KEY] = out.io["digest"]
             out.b0_ids = ids

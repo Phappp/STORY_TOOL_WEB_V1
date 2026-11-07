@@ -3954,9 +3954,10 @@ _p22_single = fb_import.entries_from_json(
 check("P22a chấp nhận cả file chỉ có MỘT bài (dict chứ không phải list) — export tay từ tool khác hay gặp",
       len(_p22_single) == 1 and _p22_single[0]["caption"].startswith("một mục"))
 _p22_rows, _p22_skip = ga.parse_import(_p22_src_json, "posts.json")
-check("P22a parse_import(.json) gộp MỘT chỗ với CSV: link vẫn là chuẩn, bỏ link lạ + trùng y hệt cột A",
-      len(_p22_rows) == 2 and any("không phải link FB" in s for s in _p22_skip)
-      and any("link trùng" in s for s in _p22_skip))
+check("P22a parse_import(.json) gộp MỘT chỗ với CSV: link vẫn là chuẩn, bỏ link lạ — P23a KHÔNG bỏ "
+      "link trùng trong file nữa mà để import_dupes đánh cờ",
+      len(_p22_rows) == 3 and any("không phải link FB" in s for s in _p22_skip)
+      and not any("link trùng" in s for s in _p22_skip))
 check("P22a mục JSON có chữ mà không có link bị bỏ KÈM LÝ DO — grid cần link để mở bài gốc, không đoán bừa",
       any("không có link" in s and "1 mục" in s for s in _p22_skip))
 _p22_rows_csv, _p22_skip_csv = ga.parse_import("link\nhttps://www.facebook.com/a\n".encode(), "links.csv")
@@ -4069,8 +4070,9 @@ check("P22c ô Xem trước cắt file export dài thay vì nhét cả MB vào D
 # P22d: dán chữ PHẢI đi đúng hàng đợi của file — không có event/đường đọc thứ hai.
 _p22_before = sorted(p.name for p in _p22_root.iterdir())
 _p22_paste = ga.io_preview("chữ-dán.json", base64.b64encode(_p22_src_json).decode("ascii"))
-check("P22d JSON DÁN vào (không có file) đọc y hệt file chọn: 2 bài hợp lệ, cả 2 đã có caption nên B0 chỉ tải ảnh",
-      _p22_paste["rows"] == 2 and _p22_paste["with_caption"] == 2
+check("P22d/P23a JSON DÁN vào (không có file) đọc y hệt file chọn: 3 bài hợp lệ (2 link thật + "
+      "1 dòng trùng link để import_dupes đánh cờ), cả 3 đã có caption nên B0 chỉ tải ảnh",
+      _p22_paste["rows"] == 3 and _p22_paste["with_caption"] == 3
       and _p22_paste["name"] == "chữ-dán.json" and not _p22_paste.get("error")
       and _p22_paste["items"][0]["imgs"] == 1
       and "JOSH ALLEN" in _p22_paste["items"][0]["caption"])
@@ -5477,6 +5479,174 @@ finally:
     for _d18h in (_P18H_HA, _P18H_HB):
         shutil.rmtree(_d18h, ignore_errors=True)
 # --- hết P18h ---
+
+
+# --- P23a: chống trùng khi import — bốn điều kiện, CÁO BÁO chứ không tự chặn ---
+_p23a_box = Path(tempfile.mkdtemp(prefix="fbp23a_"))
+_P23A_CAP = ("Bún chả Hà Nội ăn ở quán ngõ nhỏ, thịt nướng thơm, nước chấm vừa, rau nhiều. "
+             "Ai chưa thử thì phí lắm luôn đó, mình đi ba lần rồi.")
+_P23A_IMG = "https://scontent.fhkg1-1.example/x1.jpg"
+_P23A_OLD = "https://www.facebook.com/posts/1234567890"
+_p23a_refsrc = _p23a_box / "x1.jpg"
+_p23a_refsrc.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 48)
+
+
+def _p23a_seed(ws_name):
+    """Workspace mới tinh CÓ MỘT bài cũ (link + caption + ảnh) để dòng import đụng vào."""
+    root = stories.validate_root(_p23a_box / ws_name)
+    ctx = ga.build_ctx(db.connect(), root)
+    oid = stories.create_story(root, topic="")["id"]
+    stories.save_input(root, oid, _P23A_CAP)
+    stories.update_story(root, oid, source=_P23A_OLD, b0={"state": stories.DONE, "url": _P23A_OLD})
+    stories.save_ref(root, oid, _p23a_refsrc, url=_P23A_IMG)
+    stories.create_story(root, topic="")  # bài trắng: không link, không chữ, không ảnh
+    return ctx, root, oid
+
+
+_p23a_ctx, _p23a_root, _p23a_oid = _p23a_seed("ws")
+
+check("P23a dup_key: liên kết CÙNG BÀI ra MỘT khóa dù đổi host (www/m), đổi dạng link (posts/ vs "
+      "story.php?story_fbid=), thêm query hay dấu / cuối — fb.watch giữ khóa riêng",
+      ga.dup_key(_P23A_OLD) == ga.dup_key("facebook.com/posts/1234567890/")
+      == ga.dup_key("https://m.facebook.com/story.php?story_fbid=1234567890&id=6155&subsrc=share")
+      == ga.dup_key("https://m.facebook.com/posts/1234567890")
+      and ga.dup_key("fb.watch/abcd12") == "watch:abcd12"
+      and ga.dup_key(_P23A_OLD) != ga.dup_key("https://www.facebook.com/posts/9876543210"))
+check("P23a dup_key nhận cả pfbid… trong story_fbid — hai host cùng một bài pfbid ra MỘT khóa, "
+      "vì tool legacy hay permalink.php?pfbid là đường người dùng thật hay dán",
+      ga.dup_key("https://www.facebook.com/permalink.php?story_fbid=pfbid0AAAA&id=6155")
+      == ga.dup_key("https://m.facebook.com/permalink.php?story_fbid=pfbid0AAAA")
+      == "id:pfbid0AAAA"
+      and ga.dup_key("https://www.facebook.com/permalink.php?story_fbid=pfbid0BBBB") != "id:pfbid0AAAA")
+check("P23a dup_key GIỮ query khi path không có id — ở trang chỉ khác nhau ở query thì chưa đủ can "
+      "ở nói hai bài là MỘT; link rỗng không có khóa",
+      ga.dup_key("https://www.facebook.com/photo.php?fbid=111111111")
+      != ga.dup_key("https://www.facebook.com/photo.php?fbid=222222222")
+      and ga.dup_key("") == "")
+check("P23a norm_caption: khác khoảng trắng/xuống dòng/hoa-thường vẫn ra MỘT bản để so (không đụng dấu câu)",
+      ga.norm_caption("  Bún  chả\nHà\tNỘI ") == ga.norm_caption("bún chả hà nội ") == "bún chả hà nội")
+
+# Mỗi dòng chỉ đụng ĐÚNG một luật để cờ nào ra cờ nấy.
+_p23a_entries = [
+    {"url": _P23A_OLD, "caption": "", "images": []},                                       # 0: link (trùng workspace)
+    {"url": "https://facebook.com/reel/9876543210", "images": [_P23A_IMG],
+     "caption": "Chuyện hoàn toàn khác về xe đạp điện và giá pin lithium năm nay, chẳng liên quan gì."},  # 1: near (ảnh)
+    {"url": "https://www.facebook.com/posts/7777777777", "caption": "Ngắn.", "images": []},   # 2: sạch
+    {"url": "https://www.facebook.com/posts/5555555555", "images": [],
+     "caption": _P23A_CAP + " và hôm qua mình ăn thêm bát nữa."},                        # 3: near (caption)
+    {"url": "https://www.facebook.com/posts/4444444444", "images": [],
+     "caption": "  ".join(_P23A_CAP.upper().split())},                                  # 4: caption (link khác, chữ y hệt)
+    {"url": "https://www.facebook.com/posts/7777777777", "caption": "Ngắn.", "images": []},   # 5: file (trùng dòng 3 của file)
+]
+_p23a_rows, _p23a_skipped = ga.pick_entries(_p23a_entries)
+check("P23a pick_entries KHÔNG còn tự xóa dòng trùng link: sáu dòng hợp lệ vào cả sáu, "
+      "lý do 'bỏ link trùng' biến mất khỏi đường modal",
+      len(_p23a_rows) == 6 and not any("link trùng" in s for s in _p23a_skipped))
+_p23a_items, _p23a_summ = ga.import_dupes(_p23a_ctx, _p23a_rows)
+_p23a_rules = {int(it["i"]): list(it["rules"]) for it in _p23a_items}
+check("P23a luật 'link': liên kết đã có bài trong workspace bị gọi ĐÚNG TÊN bài (id + topic + state B0), "
+      "và dòng ĐẦU của link đó không bị vạ lây",
+      _p23a_rules.get(0) == ["link"]
+      and any(h["id"] == _p23a_oid and h["b0"] == stories.DONE and h["what"].startswith("link này đã có bài")
+              for it in _p23a_items if it["i"] == 0 for h in it["hits"]))
+check("P23a luật 'file': chỉ dòng SAU bị đánh cờ và nó nói được trùng dòng nào của chính file này "
+      "(index 2 -> 'dòng 3')",
+      _p23a_rules.get(5) == ["file"] and "file" not in _p23a_rules.get(0, [])
+      and any(h["what"] == "trùng với dòng 3 của chính file này" and h["id"] == ""
+              for it in _p23a_items if it["i"] == 5 for h in it["hits"]))
+check("P23a luật 'caption': chữ giống hệt sau khi gom khoảng trắng + bỏ hoa thường -> báo cả khi "
+      "link KHÁC HOÀN TOÀN (dòng 4 không có cờ link)",
+      _p23a_rules.get(4) == ["caption"]
+      and any(h["id"] == _p23a_oid and "giống hệt từng chữ" in h["what"]
+              for it in _p23a_items if it["i"] == 4 for h in it["hits"]))
+check("P23a luật 'near' bắt được dáng đăng-lại-nối-thêm: caption bài cũ nằm trọn trong đầu bản mới, "
+      "hai bản KHÔNG bằng nhau nên luật giống-hệt không báo",
+      _p23a_rules.get(3) == ["near"]
+      and any("nằm trọn trong đầu" in h["what"] for it in _p23a_items if it["i"] == 3 for h in it["hits"]))
+check("P23a luật 'near' còn chạy khi link khác hẳn: một ảnh trong file trùng ảnh đã tải của bài cũ",
+      _p23a_rules.get(1) == ["near"]
+      and any("ảnh" in h["what"] and h["id"] == _p23a_oid
+              for it in _p23a_items if it["i"] == 1 for h in it["hits"]))
+check("P23a caption ngắn dưới trần DUP_MIN_CAP không đem so chữ (khỏi báo oan), và bài trắng trong "
+      "workspace không biến mọi dòng ngắn thành 'trùng'",
+      2 not in _p23a_rules and len(_P23A_CAP) >= ga.DUP_MIN_CAP
+      and ga.DUP_MIN_CAP > len("Ngắn."))
+check("P23a import_dupes KHÔNG bỏ dòng nào: sáu dòng vào nguyên vẹn, items chỉ là tập con có cờ",
+      len(_p23a_rows) == 6 and all(0 <= int(it["i"]) < 6 for it in _p23a_items)
+      and {int(it["i"]) for it in _p23a_items} < set(range(6)))
+check("P23a bản tổng kết đếm đủ TỪNG luật, khớp số cờ trên dòng, và header nói 'N/M dòng nghi trùng'",
+      _p23a_summ["total"] == 6 and _p23a_summ["rows"] == 5
+      and _p23a_summ["by_rule"] == {"file": 1, "link": 1, "caption": 1, "near": 2}
+      and sum(_p23a_summ["by_rule"].values()) == sum(len(r) for r in _p23a_rules.values())
+      and _p23a_summ["line"].startswith("5/6 dòng nghi trùng"))
+_p23a_ci, _p23a_clean = ga.import_dupes(_p23a_ctx, [{"url": "https://fb.watch/zzzz9/", "caption": ""}])
+check("P23a không trùng gì thì phải NÓI chứ không im lặng: items rỗng + line 'Không phát hiện trùng'",
+      not _p23a_ci and "Không phát hiện trùng cho 1 dòng" in _p23a_clean["line"])
+
+# io_preview/io_commit đi qua parse_import → entries_from_json, phải đưa đúng dạng file export
+# (`text` + `media[].photo_image.uri`) chứ không phải dict nội bộ pick_entries trả về.
+_p23a_wire = [{"url": e["url"], "text": e.get("caption") or "",
+               "media": [{"photo_image": {"uri": u}} for u in (e.get("images") or [])]}
+              for e in _p23a_entries]
+_p23a_b64 = base64.b64encode(json.dumps(_p23a_wire, ensure_ascii=False).encode("utf-8")).decode("ascii")
+_p23a_pv = ga.io_preview("p.json", _p23a_b64, "", _p23a_ctx)
+_p23a_pv0 = ga.io_preview("p.json", _p23a_b64)
+check("P23a io_preview có ctx -> kiểm trùng MỌI dòng hợp lệ (kể cả dòng thứ 7 trở đi mà thẻ "
+      "Xem trước không liệt kê) và trả cờ theo số thứ tự dòng",
+      _p23a_pv["dupes"]["checked"] is True and _p23a_pv["rows"] == 6
+      and {int(it["i"]) for it in _p23a_pv["dup_items"]} == {int(it["i"]) for it in _p23a_items}
+      and "5/6 dòng nghi trùng" in _p23a_pv["line"])
+check("P23a io_preview KHÔNG có ctx thì tự nhận chưa kiểm (checked=False, line không có chữ "
+      "'nghi trùng') — lưới không được giả vờ đã chống trùng",
+      _p23a_pv0["dupes"]["checked"] is False and _p23a_pv0["dup_items"] == []
+      and "nghi trùng" not in _p23a_pv0["line"])
+
+_p23a_k_ctx, _p23a_k_root, _ = _p23a_seed("ws_keep")
+_p23a_keep, _p23a_keep_ids = ga.io_commit(_p23a_k_ctx, "p.json", _p23a_b64, "")
+check("P23a mặc định là KHÔNG chặn: bấm ➕ Tạo bài thường thì cả sáu dòng vào folder, kể năm dòng đã báo trùng",
+      _p23a_keep["made"] == 6 and _p23a_keep["dupes_skipped"] == 0 and _p23a_keep["skip_dupes"] is False
+      and len(_p23a_keep_ids) == 6 and "nghi trùng" not in _p23a_keep["line"])
+_p23a_c_ctx, _p23a_c_root, _ = _p23a_seed("ws_cut")
+_p23a_cut, _p23a_cut_ids = ga.io_commit(_p23a_c_ctx, "p.json", _p23a_b64, "", True)
+check("P23a chọn 'bỏ dòng nghi trùng' thì đúng năm dòng có cờ bị rút, dòng sạch còn lại vào đủ + "
+      "lưới nói rõ đó là lựa chọn của anh",
+      _p23a_cut["made"] == 1 and _p23a_cut["dupes_skipped"] == 5
+      and len(_p23a_cut_ids) == 1
+      and len(stories.list_story_ids(_p23a_c_root)) == 3
+      and "Đã bỏ 5 dòng nghi trùng theo lựa chọn của anh" in _p23a_cut["line"])
+_p23a_a_ctx, _p23a_a_root, _ = _p23a_seed("ws_all")
+_p23a_all, _ = ga.io_commit(_p23a_a_ctx, "p.json",
+                            base64.b64encode(json.dumps([_p23a_wire[0], _p23a_wire[1]],
+                                                         ensure_ascii=False).encode("utf-8")).decode("ascii"),
+                            "", True)
+check("P23a khi MỌI dòng đều nghi trùng thì không tạo gì và bảo thẳng lý do, không để câu "
+      "'Không có link Facebook hợp lệ nào' lừa người đọc",
+      _p23a_all["made"] == 0 and len(stories.list_story_ids(_p23a_a_root)) == 2
+      and "Toàn bộ" in _p23a_all["line"] and "nghi trùng" in _p23a_all["line"])
+
+_p23a_old_links, _p23a_old_skips = ga.pick_links([_P23A_OLD, "fb.watch/abcd12",
+                                                  "https://m.facebook.com/posts/1234567890"])
+check("P23a đường legacy một cột link (pick_links) vẫn bỏ trùng như cũ — đổi luật chỉ ở modal Import "
+      "của lưới, không phải đổi khắp nơi",
+      _p23a_old_links == [_P23A_OLD, "https://fb.watch/abcd12"]
+      and any("link trùng" in s for s in _p23a_old_skips))
+_p23a_a_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p23a_g_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+_p23a_sec = _p23a_a_src.split("P23a: chống trùng")[1].split("def decode_upload")[0]
+check("P23a MỘT chỗ quyết định trùng là gì: luật `seen` đã rút khỏi pick_entries, 'bỏ link trùng' "
+      "chỉ còn ở pick_links, grid truyền ctx + skip_dupes chứ không tự chế logic riêng",
+      "if value in seen:" not in _p23a_a_src
+      and _p23a_a_src.count("bỏ link trùng") == 1
+      and "ga.io_preview(event.get(\"name\"), event.get(\"data\"), done, ctx)" in _p23a_g_src
+      and 'bool(event.get("skip_dupes"))' in _p23a_g_src
+      and "def import_dupes" in _p23a_a_src)
+check("P23a chống trùng CHỈ ĐỌC: không ghi folder, không gọi provider, không httpx, không đụng hàng "
+      " đợi — grid_runner/steps không biết nó tồn tại",
+      "stories.save" not in _p23a_sec and "update_story" not in _p23a_sec and "httpx" not in _p23a_sec
+      and "import_dupes" not in (Path(__file__).resolve().parent / "grid_runner.py").read_text(encoding="utf-8")
+      and "import_dupes" not in (Path(__file__).resolve().parent / "steps.py").read_text(encoding="utf-8"))
+shutil.rmtree(_p23a_box, ignore_errors=True)
+# --- hết P23a ---
 
 
 # cleanup test rows
