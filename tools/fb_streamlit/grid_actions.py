@@ -355,11 +355,12 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False, audio_name: str = "", seco
     story = stories.load_story(ctx.root, sid)
     prev = dict(story.get("b4") or {})
     if audio_name:
-        # P26c: chọn tay ngay trong modal B4 — tên không còn trong bộ là nói thẳng, không đoán bừa.
+        # P26c: chọn tay ngay trong modal B4 — tên phải có thật trong bộ; giây anh nhập đi theo chọn này
+        # (0 = để server áp prefs workspace).
         if audio_name not in names:
             return [f"{sid}: chưa ghép được — file “{audio_name}” không còn trong bộ “{setup['collection']}” "
                     "(đổi tên hay xóa ở ngoài tool thì chọn lại)."]
-        clip_name, secs = audio_name, int(setup["seconds"])
+        clip_name, secs = audio_name, 0
     elif str(prev.get("audio") or "") in names:
         # Lần ghép trước đã chọn riêng cho bài này — ⚡/▶ nền không mang theo chọn nên phải tự nhớ:
         # chỉ dùng khi file vẫn còn trong bộ, mất rồi thì về chọn tất định như chưa từng chọn.
@@ -367,7 +368,9 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False, audio_name: str = "", seco
     else:
         clip_name, secs = audio.pick(setup["collection"], sid, setup["files"]).name, int(setup["seconds"])
     if seconds:
-        secs = min(AUDIO_SECONDS_MAX, max(AUDIO_SECONDS_MIN, int(seconds)))
+        secs = int(seconds)
+    elif not secs:
+        secs = int(setup["seconds"])
     secs = min(AUDIO_SECONDS_MAX, max(AUDIO_SECONDS_MIN, secs))
     image = stories.image_of(ctx.root, sid)
     if image is None:
