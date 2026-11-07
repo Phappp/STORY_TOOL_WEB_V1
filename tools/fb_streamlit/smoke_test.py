@@ -5776,6 +5776,20 @@ check("P23c modal Import/Export thêm thẻ '🧹 Ảnh thiếu link' + LINK_BAR
       and 'source: "source_save"' in _p23c_fe and 'IO_SCAN' in _p23c_fe
       and 'kind === "ref_scan"' in _p23c_fe
       and "(IO_SCAN || {}).matched" in _p23c_fe.split("function ioSig")[1].split("function syncIo")[0])
+# P23c FIX: một `help: [...]}` đóng sai (`]));`) làm CẢ LƯỚI không render mà suite chữ vẫn PASS —
+# check cấu trúc không thấy gì. Đây là chỗ node --check có giá trị: máy không có node thì bỏ qua.
+_p23c_node = shutil.which("node")
+if _p23c_node:
+    _p23c_js = re.search(r"<script>(.*)</script>", _p23c_fe, re.S).group(1)
+    _p23c_tmp = Path(tempfile.mkdtemp(prefix="fbjs_")) / "grid.js"
+    _p23c_tmp.write_text(_p23c_js, encoding="utf-8")
+    _p23c_proc = subprocess.run([_p23c_node, "--check", str(_p23c_tmp)], capture_output=True)
+    check("P23c <script> của lưới phải qua `node --check` — một dấu ngoặc sai trong thẻ mới là "
+          "cả component chết, không phải chỉ thẻ đó (lỗi P23c thật: help:[...] đóng bằng `]));`)",
+          _p23c_proc.returncode == 0)
+    shutil.rmtree(_p23c_tmp.parent, ignore_errors=True)
+else:
+    print("(bỏ qua check node --check: không có node trong PATH)")
 shutil.rmtree(_p23a_box, ignore_errors=True)
 # --- hết P23a ---
 
