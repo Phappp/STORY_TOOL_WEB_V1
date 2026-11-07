@@ -957,8 +957,11 @@ def page_audio(c):
         "thành `video.mp4` — vẫn một video mỗi bài, ghi đè đúng luật video cũ. "
         f"Xóa gì ở đây cũng chỉ dời vào `{audio.TRASH_DIR}` của thư mục tiếng, không mất file."
     )
-    st.warning("P25a mới tới việc quản lý tiếng. Nút GHÉP thật sự sẽ nằm trong modal B4 của lưới ở P25b — "
-               "lúc đó hai giá trị dưới đây mới thật sự được dùng.")
+    st.warning("Nút GHÉP đã chạy thật: modal B4 của lưới, mỗi bài MỘT cú bấm (bài đang có video bạn tải "
+               "tay thì hai cú để xác nhận ghi đè). Hai giá trị dưới đây được dùng thật từ đó. "
+               "Còn P25c: ghép HÀNG LOẠT qua hàng đợi / ⚡ — chưa làm, hiện mỗi lần ghép là ffmpeg chạy "
+               "ngay tại chỗ (60 s cỡ 10 giây trên máy này). "
+               "Lưu ý: bộ sưu tập THÊM hay BỚT file có thể đổi bài nào nhận file nào vì file chọn theo id bài.")
     _audio_ffmpeg()
     _audio_collections()
     _audio_workspace()

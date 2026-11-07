@@ -6301,14 +6301,17 @@ try:
           and _p25a_col_w.options[0] in (None, "— không ghép tiếng —")
           and _p25a_col_w.value == "Nhac ket"
           and float(_p25a_secs_w.value) == 25)
-    check("P25a tab có ô ffmpeg + 3 nút ffmpeg + ô tạo bộ + bảng file thật, và nói thẳng P25a chưa ghép "
-          "được (cảnh báo trên đầu tab) — nhãn phải đọc được trạng thái thật, không hứa việc chưa làm",
+    check("P25a tab có ô ffmpeg + 3 nút ffmpeg + ô tạo bộ + bảng file thật; dòng đầu tab phải nói ĐÚNG "
+          "trạng thái HÔM NAY: ghép đã chạy thật trong modal B4, chỉ hàng loạt (P25c) là chưa — nhãn mà "
+          "còn 'sẽ nằm ở P25b' là nói chưa làm cái đã làm, và anh không dám bấm (cả hai chiều đều sai)",
           any(w.key == "aud_ff_path" for w in at_a.text_input)
           and {"aud_ff_save", "aud_ff_test", "aud_ff_clear"} <= {b.key for b in at_a.button}
           and any(b.key == "aud_del_col" for b in at_a.button)
           and any(w.key == "aud_new_name" for w in at_a.text_input)
           and len(at_a.file_uploader) >= 1
-          and any("P25b" in (w.value or "") for w in at_a.warning))
+          and any("P25c" in (w.value or "") and "đã chạy thật" in (w.value or "")
+                  and "sẽ nằm" not in (w.value or "") for w in at_a.warning)
+          and any("THÊM hay BỚT file" in (w.value or "") for w in at_a.warning))
     if _p25a_secs_w is not None:
         _p25a_secs_w.set_value(30).run()
     check("P25a kéo ô số rồi BỎ ĐÓ thì file prefs chưa đổi (còn 25) — một nút một việc: chỉ 💾 Lưu mới "
