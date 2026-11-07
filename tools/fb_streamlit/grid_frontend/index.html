@@ -36,8 +36,12 @@
   .stats { display:inline-flex; gap:4px; }
   .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
-  .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; }
-  .wrap.expanded .scroll { max-height:calc(100vh - 118px); }
+  .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }
+  /* P21h: bảng cao theo PHẦN CÒN LẠI của cửa sổ thay vì "100vh - 118px". Con số đó đo hồi lưới còn
+     dòng hint dưới đáy, mà dòng hint đã bỏ + thanh nút tự quấn theo bề rộng (flex-wrap) nên mọi
+     hằng số px đều sai — hai rule dưới chỉ việc chia lại ô. */
+  .wrap.expanded > .bar { flex:0 0 auto; }
+  .wrap.expanded .scroll { flex:1 1 auto; min-height:0; max-height:none; }
   table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; }
   thead th { position:sticky; top:0; z-index:3; background:var(--header); text-align:left;
     font-weight:600; padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap; user-select:none; }
@@ -251,7 +255,12 @@
   button.b[data-sent="1"] { opacity:.45; pointer-events:none; }
   button.play { padding:2px 5px; height:22px; margin-left:4px; }
   button.act { margin-right:2px; }
-  .hint { padding:7px 10px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); background:var(--panel); }
+  /* P21h: nút bật/tắt trong thanh — trạng thái là MÀU NỀN, không phải chữ (chữ đã bỏ theo anh).
+     Có .tog riêng thay vì chỉ .on vì `button.q.on` (ô hàng đợi, tím) cùng specificity mà đứng TRƯỚC:
+     dùng chung .on là bài đã xếp hàng đổi sang xanh dương. Rule cũng đứng sau :hover nên nút đang
+     BẬT không bị màu hover đè, hover vẫn trả lời bằng filter. */
+  button.b.tog.on { background:var(--accent); color:#0b1620; border-color:var(--accent); }
+  button.b.tog.on:hover { filter:brightness(1.1); }
   .empty { padding:20px; color:var(--muted); }
   .muted { color:var(--muted); }
   /* ô tìm kiếm ngay trên grid — lọc client-side, không gửi event mỗi lần gõ */
@@ -279,7 +288,8 @@ const SET_FRAME_HEIGHT = "streamlit:setFrameHeight";
 const STATE_LABEL = { pending: "chưa chạy", queued: "đợi", done: "xong", running: "đang chạy", error: "lỗi", missing: "mất file", stale: "treo" };
 const STEP_TITLE = { b0: "B0 trích từ link", b1: "B1 caption", b2: "B2 ảnh", b3: "B3 SEO", b4: "B4 video" };
 const GRID_STEPS = ["b0", "b1", "b2", "b3", "b4"];
-const LEGEND = "tím ◇ đợi (đã vào hàng đợi) · xám chưa chạy · xanh dương đang chạy · xanh lá xong · đỏ lỗi · đỏ nét đứt treo >15 phút · cam mất file";
+// P21h: bỏ const LEGEND cùng dòng hint — ý nghĩa từng ô giờ nằm ở thẻ hover của chính ô đó (P13b),
+// còn bảng chẩn đoán native vẫn ghi chú giải bằng chữ của nó (LEGEND trong grid.py).
 // Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
 const COLS = [
   { key: "q", label: "#", w: 40, min: 34, align: "c", tip: "# = thứ tự hàng đợi: bài bấm dấu cộng trước làm trước, bài mới xếp cuối. Bấm số đó để bỏ khỏi hàng đợi." },
@@ -434,6 +444,9 @@ const ICON_PATHS = {
   // nên người nhìn phân biệt được mà không cần chữ.
   expand: '<path d="M4 10V4h6M20 10V4h-6M4 14v6h6M20 14v6h-6"/>',
   collapse: '<path d="M10 4v6H4M14 4v6h6M10 20v-6H4M14 20v-6h6"/>',
+  // P21h: glyph MỚI vẽ theo cùng khuôn (không phải đường dẫn copy từ legacy) — vòng cung hở một góc
+  // kèm mũi tên: đọc là "quay lại vòng dữ liệu", không cần chữ "5s" đi cạnh.
+  refresh: '<path d="M20 12a8 8 0 1 1-8-8c2.3 0 4.5.9 6 2.5l2 1.5"/><path d="M20 4v4h-4"/>',
 };
 // Dựng MỘT lần lúc tải trang từ hằng số tự viết (không chứa chữ của hàng lưới/URL nào), sau đó nhân bản.
 const ICON_NODE = {};
@@ -479,7 +492,7 @@ function menuItem(icon, label, fn, cls, manual) {
   return { node: b, label: text };
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {} };
+let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0 };
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
 let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
@@ -1728,6 +1741,7 @@ function repaint() {
   // nguyên nên phải ép render, nếu không chữ ký ở trên sẽ bỏ qua.
   render({ rows: MODEL.rows, workspace: MODEL.workspace, image_max: MODEL.image_max,
            video_max: MODEL.video_max,
+           auto_refresh: refreshOn(), refresh_seconds: MODEL.refresh_seconds,  // P21h: repaint giữ nguyên trạng thái thật của nút
            copy_response: MODEL.copy_response, summary: MODEL.summary, queue_ids: MODEL.queue_ids,
            error_ids: MODEL.error_ids, providers: MODEL.providers, defaults: MODEL.defaults, cols: MODEL.cols,
            io: MODEL.io, io_response: {}, video_response: {},  // response đã nạp rồi: vẽ lại cục bộ không được nạp lại lần hai
@@ -2479,6 +2493,51 @@ function searchBox() {
   return box;
 }
 
+// ---- P21h: nhịp đọc folder là TRẠNG THÁI của lưới nên cái nút đứng trong lưới, cạnh ô tìm ----
+// Trước đây nó là `st.toggle` native đứng ngoài + dòng chữ "Tự làm mới grid (5s)". Bỏ widget thì
+// bỏ luôn chữ, nên trạng thái phải đọc bằng CHÍNH NÓ: nền xanh khi BẬT, và title/aria-label nói đủ
+// hai chiều (đang gì · nếu tắt thì lưới cập nhật bằng cách nào) vì không còn chỗ nào ghi nữa.
+const REFRESH_BTN_ID = "refreshbtn";
+let REFRESH_PENDING = null;  // giá trị vừa bấm, chờ server xác nhận (P10a: đổi ngay, khỏi đợi một tick)
+
+function refreshSeconds() { return Number(MODEL.refresh_seconds || 0); }
+
+function refreshOn() {
+  const server = MODEL.auto_refresh === true;
+  if (REFRESH_PENDING === null || REFRESH_PENDING === server) {
+    REFRESH_PENDING = null;  // server đã trả đúng cú bấm này -> hết quyền đoán
+    return server;
+  }
+  return REFRESH_PENDING;
+}
+
+function refreshTitle(on) {
+  const secs = refreshSeconds();
+  const every = secs ? "mỗi " + secs + " giây" : "theo định kỳ";  // số giây lấy từ Python, JS không tự bịa
+  return on ? "Tự làm mới: BẬT — lưới đọc lại folder story " + every + ". Bấm để tắt."
+    : "Tự làm mới: TẮT — lưới đứng yên, chỉ cập nhật khi anh bấm gì đó hoặc khi luồng nền đang chạy"
+      + ". Bấm để đọc lại folder story " + every + ".";
+}
+
+function paintRefresh(b) {
+  const on = refreshOn();
+  b.classList.toggle("on", on);
+  b.title = refreshTitle(on);
+  b.setAttribute("aria-label", b.title);
+}
+
+function refreshButton() {
+  const b = iconButton("refresh", refreshTitle(refreshOn()), () => {
+    const next = !refreshOn();
+    REFRESH_PENDING = next;
+    paintRefresh(b);  // đổi ngay lúc bấm, không chờ một lượt vẽ
+    send({ source: "auto_refresh", on: next });
+  }, "act tog");
+  b.id = REFRESH_BTN_ID;
+  paintRefresh(b);
+  return b;
+}
+
 function queueIds() {
   return (MODEL.queue_ids || []).map(String);
 }
@@ -2643,6 +2702,10 @@ function updateBar() {
     e.textContent = "⚠ Xếp lỗi: " + n;
     e.title = n ? "Đánh dấu " + n + " bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt" : "Chưa có bài nào đang lỗi";
   }
+  // P21h: nút nhịp đọc cũng phải đổi ở CẢ HAI nhánh vẽ — thiếu chỗ này thì bấm xong nó vẫn tối thui
+  // tới lần dựng lại cả lưới kế tiếp, tức là nói dối về chính cái vừa bật.
+  const r = document.getElementById(REFRESH_BTN_ID);
+  if (r) paintRefresh(r);
 }
 
 let drag = null;
@@ -2687,9 +2750,12 @@ function render(args, force) {
   if (sig === LAST_ARGS && !force) return;  // tick làm mới không đổi gì -> giữ nguyên màn hình đang xem
   LAST_ARGS = sig;
   const view = keepView();
+  const wasWorkspace = MODEL.workspace;
   MODEL = {
     rows: Array.isArray(args.rows) ? args.rows : [],
     workspace: String(args.workspace || ""),
+    auto_refresh: args.auto_refresh === true,
+    refresh_seconds: Number(args.refresh_seconds || 0),
     image_max: Number(args.image_max || 0),
     video_max: Number(args.video_max || 0),
     copy_response: args.copy_response && typeof args.copy_response === "object" ? args.copy_response : {},
@@ -2707,6 +2773,7 @@ function render(args, force) {
     video_types: Array.isArray(args.video_types) ? args.video_types : [],
     video_response: args.video_response && typeof args.video_response === "object" ? args.video_response : {},
   };
+  if (MODEL.workspace !== wasWorkspace) REFRESH_PENDING = null;  // đổi workspace: không có cú bấm nào đang chờ nữa
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
   ingestIo();        // tương tự cho bảng Import/Export — preview phải hiện ngay lượt vẽ này
   ingestVideo();     // và cho mẩu video vừa được server xác nhận (P21c)
@@ -2746,6 +2813,7 @@ function render(args, force) {
 
   const bar = el("div", "bar");
   bar.appendChild(searchBox());
+  bar.appendChild(refreshButton());  // P21h: nút nhịp đọc folder — trước đây là st.toggle đứng NGOÀI lưới
   bar.appendChild(ioButton());  // P22b: import/export nằm cạnh ô tìm — không còn mục native nào nữa
   bar.appendChild(queueButton());
   bar.appendChild(errorsButton());
@@ -2787,8 +2855,8 @@ function render(args, force) {
     scroll.appendChild(table);
     wrap.appendChild(scroll);
   }
-  wrap.appendChild(el("div", "hint",
-    "màu ô B0 B1 B2 B3: " + LEGEND + " — bấm 1 lần vào B1/B3 để copy, bấm đúp (hoặc bấm ô B0/B2) để mở modal xem kết quả (chạy bước ở trong modal) · B0 = caption + ảnh trích từ link ở cột Nguồn, còn thêm bài hàng loạt thì làm ở nút “📥 Import · Export” cạnh ô tìm · # thêm/bỏ hàng đợi · ⚡ chạy đủ pipeline · nút bảng mở modal · ⋮ thêm thao tác (mở ở trang Tạo bài · đánh dấu đã đăng · hàng đợi · dời vào .trash, kéo folder ngược ra ngoài là khôi phục) · nút copy ở cột Link để copy nguyên link đã đăng (khỏi mở modal), nút bút để sửa · 🔍 ô tìm lọc ngay tại màn hình, không gọi Python · ↑ ↓ chọn hàng · Enter mở modal · ← → trong modal đổi bài · Q vào/ra hàng đợi · kéo mép tiêu đề để đổi độ rộng cột (lưu theo workspace) · nút ngoéo ở thanh trên mở rộng kín cửa sổ"));
+  // P21h: dòng hướng dẫn dưới đáy đã bỏ theo anh — mọi giải thích giờ nằm ở chỗ nó giải thích
+  // (title của từng nút, tip của từng cột, dấu "?" trong modal), không còn block chữ dài nào nữa.
   root.appendChild(wrap);
   unmarkSent();
   const modal = modalNode();  // vẽ sau grid: modal có thể xin nội dung/ảnh ngay trong lần render này

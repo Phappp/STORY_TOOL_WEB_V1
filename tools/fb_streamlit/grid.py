@@ -25,7 +25,7 @@ LOG_KEEP = 60  # số dòng giữ trong lịch sử session (bảng chẩn đoá
 MODE_COMPONENT = "Grid (component)"
 MODE_NATIVE = "Bảng chẩn đoán (native)"
 REFRESH_KEY = "grid_refresh"
-REFRESH_SECONDS = 5   # nhịp ĐỌC FOLDER khi bật tự làm mới — đúng với chữ "(5s)" trên toggle
+REFRESH_SECONDS = 5   # nhịp ĐỌC FOLDER khi bật tự làm mới — gửi cho lưới để chữ trên nút nói đúng số này
 POLL_SECONDS = 2.0    # nhịp fragment: chỉ đọc lại folder khi có việc, tick rẻ thì dùng bản cache
 PAYLOAD_KEY = "grid_payload"       # bản đọc folder gần nhất — 150 bài là 150 lần đọc file
 APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt mới thì phải đọc lại folder
@@ -34,6 +34,9 @@ READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"
                 # bảng Import/Export: đọc file anh chọn rồi trả lời, export chỉ dựng chuỗi trong RAM —
                 # không folder story nào đổi nên nhịp tick sau khỏi quét lại 150 bài
                 "import_read", "export_request",
+                # P21h: cú bấm đổi NHỊP ĐỌC không đổi nội dung folder — đọc lại 150 bài ngay lúc đó
+                # là trả giá cho một việc chưa bắt đầu; prefs đã ghi, tick sau vẫn đúng.
+                "auto_refresh",
                 # P21c: MỖI MẨU video là một event, mà một mẩu chỉ nằm trong RAM — đọc lại 150 folder
                 # sau từng mẩu (656–932 ms/lần, đo P8iii) còn chậm hơn chính cú tải. Lượt cuối tự xin
                 # quét lại qua `grid_video_scan`.
@@ -77,22 +80,16 @@ def component():
     return _component
 
 
-def refresh_toggle(root: Path) -> bool:
-    """Nút Bật/Tắt tự làm mới — đọc từ file prefs của workspace, ghi lại khi khác."""
+def refresh_state(root: Path) -> bool:
+    """Chế độ tự làm mới của phiên này — MỘT sự thật trong session_state, không còn widget native.
+
+    P21h: nút nằm trong thanh của lưới nên Python không vẽ gì cả; nó chỉ nạp prefs của workspace
+    đang mở khi đổi workspace (luật P9b: seed từ file), còn mọi cú bấm do `_after` ghi thẳng.
+    """
     if st.session_state.get("grid_prefs_root") != str(root):  # đổi workspace -> lấy prefs của workspace mới
         st.session_state["grid_prefs_root"] = str(root)
-        st.session_state[REFRESH_KEY] = bool(ga.load_prefs(root).get("auto_refresh"))
-    on = st.toggle(f"Tự làm mới grid ({REFRESH_SECONDS}s)", key=REFRESH_KEY,
-                   help=f"Bật: đọc lại folder story mỗi {REFRESH_SECONDS} giây. "
-                        f"Tắt: lưới đứng yên, không tự đọc folder — chỉ tự cập nhật khi luồng nền đang "
-                        f"chạy ({POLL_SECONDS:g} giây một lần) hoặc khi anh bấm gì đó.")
-    prefs = ga.load_prefs(root)
-    if bool(prefs.get("auto_refresh")) is not bool(on):
-        prefs["auto_refresh"] = bool(on)
-        note = ga.save_prefs(root, prefs)
-        if note:
-            st.caption(note)
-    return bool(on)
+        st.session_state[REFRESH_KEY] = ga.pref_auto_refresh(root)
+    return bool(st.session_state.get(REFRESH_KEY))
 
 
 def save_provider_pref(ctx: ga.Ctx, step: str) -> None:
@@ -384,6 +381,8 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     if src in gr.HEAVY_SOURCES:  # việc dài -> thread nền, grid còn vẽ được
         return hand_off(ctx, event)
     victims = _cancel_targets(event)
+    if src == "auto_refresh":  # P21h: sự thật của nhịp đọc nằm ở session_state — `scan_needed` cần nó ngay lượt này
+        st.session_state[REFRESH_KEY] = bool(event.get("on"))
     out = ga.apply_event(ctx, event)
     if victims:
         out.lines += RUNNER.cancel(victims)
@@ -588,6 +587,9 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
         io_resp = st.session_state.pop("grid_io_response", None) or {}
         vid_resp = st.session_state.pop("grid_video_response", None) or {}
         component()(rows=rows, workspace=str(ctx.root),
+                    # P21h: nút nhịp đọc nằm trong lưới nên lưới phải TỰ NÓI nó đang ở chế độ nào,
+                    # còn con số giây thì lấy từ Python — để JS tự viết "5" là hứa một nhịp không ai chạy.
+                    auto_refresh=refresh_state(ctx.root), refresh_seconds=REFRESH_SECONDS,
                     image_max=ga.B2_IMAGE_MAX,
                     video_max=ga.B4_VIDEO_MAX,
                     # P21c: ô tải trong modal cần tự nói trần của NÓ (khác trần mục native) và
@@ -861,7 +863,7 @@ def render(ctx: ga.Ctx) -> None:
     st.subheader("Grid story")
     st.markdown(NO_DIM_CSS, unsafe_allow_html=True)
     st.caption(f"Workspace: `{ctx.root}` — mỗi ô là file thật trong folder story (`caption.txt`, `image.png`, `seo.md`).")
-    refresh_toggle(ctx.root)
+    refresh_state(ctx.root)  # P21h: không còn widget ở đây — chỉ nạp prefs của workspace vừa mở
     pending_mode = st.session_state.pop("grid_mode_pending", None)  # nút ↩ trong bảng chẩn đoán: đổi TRƯỚC khi radio sinh ra
     if pending_mode:
         st.session_state["grid_mode"] = pending_mode

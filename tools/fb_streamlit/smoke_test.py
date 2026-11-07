@@ -740,6 +740,17 @@ check("prefs grid lưu file ẩn trong workspace, đọc lại đúng",
 (ga_root / ga.PREFS_FILE).write_text("không phải json", encoding="utf-8")
 check("prefs hỏng -> coi như rỗng, grid vẫn đọc được folder",
       ga.load_prefs(ga_root) == {} and bool(fbgrid.rows_for(gctx)))
+check("P21h set_pref_auto_refresh chỉ ghi khi THẬT SỰ đổi (luật P9b): cú bấm lặp không đụng file",
+      ga.set_pref_auto_refresh(ga_root, True) == ""
+      and ga.load_prefs(ga_root) == {"auto_refresh": True}
+      and (ga_root / ga.PREFS_FILE).read_text(encoding="utf-8") == '{\n  "auto_refresh": true\n}')
+before_tg = (ga_root / ga.PREFS_FILE).read_text(encoding="utf-8")
+check("P21h ghi lại giá trị cũ -> trả '' và giữ nguyên nội dung file prefs",
+      ga.set_pref_auto_refresh(ga_root, True) == "" and ga.pref_auto_refresh(ga_root) is True
+      and (ga_root / ga.PREFS_FILE).read_text(encoding="utf-8") == before_tg)
+check("P21h event auto_refresh đi qua dispatcher: sửa prefs của workspace, không sửa bài nào, có dòng báo thật",
+      ga.apply_event(gctx, {"source": "auto_refresh", "on": False}).lines == ["Tự làm mới: TẮT (lưu theo workspace)."]
+      and ga.pref_auto_refresh(ga_root) is False and not ga.apply_event(gctx, {"source": "auto_refresh", "on": False}).touched)
 
 # --- P4c: provider mặc định theo workspace + chọn riêng từng bài ---
 ga.set_pref_providers(ga_root, "b1", ["GridAPI"])
@@ -1657,21 +1668,26 @@ check("Grid native: khối copy hiện đủ 4 nội dung, Link trống ghi rõ"
       not at_cn.exception and "CAPTION TỪ FILE" in codes and "INPUT GỐC CỦA BÀI COPY" in codes
       and codes.count("(trống)") == 2)
 
-# --- P2e AppTest: nút tự làm mới (prefs theo workspace) + batch inline có tiến trình ---
+# --- P2e AppTest (P21h: nút tự làm mới là NÚT TRONG LƯỚI, không còn widget native) + batch inline ---
 at_tg = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
 at_tg.session_state["nav_page"] = "Grid"
 at_tg.run()
-tg = next((t for t in at_tg.toggle if t.key == fbgrid.REFRESH_KEY), None)
-check("Grid có nút tự làm mới, mặc định tắt", tg is not None and not at_tg.exception and not tg.value)
-if tg is not None:
-    tg.set_value(True).run()
-    check("bật tự làm mới -> lưu prefs của workspace",
-          not at_tg.exception and ga.load_prefs(smoke_root) == {"auto_refresh": True}
-          and at_tg.session_state.get(fbgrid.REFRESH_KEY) is True)
-    check("grid vẽ trong fragment (run_every 5s) không lỗi",
-          any("Grid story" in (h.value or "") for h in at_tg.subheader))
-    tg.set_value(False).run()
-    check("tắt tự làm mới ghi lại prefs", ga.load_prefs(smoke_root) == {"auto_refresh": False})
+check("P21h trang Grid không còn widget toggle nào nữa — lưới nhận trạng thái qua args, mặc định tắt",
+      not at_tg.exception and not at_tg.toggle and cap.get("auto_refresh") is False)
+at_tg.session_state[fbgrid.KEY] = {"event_id": "evt-tg-1", "source": "auto_refresh", "on": True}
+at_tg.run()
+check("bật tự làm mới bằng cú bấm trong lưới -> lưu prefs của workspace, session đổi theo, lưới thấy BẬT",
+      not at_tg.exception and ga.load_prefs(smoke_root) == {"auto_refresh": True}
+      and at_tg.session_state.get(fbgrid.REFRESH_KEY) is True and cap.get("auto_refresh") is True)
+check("P21h chữ 'mỗi N giây' trên nút lấy từ Python (JS không tự bịa số) + grid vẽ trong fragment không lỗi",
+      cap.get("refresh_seconds") == fbgrid.REFRESH_SECONDS
+      and any("Grid story" in (h.value or "") for h in at_tg.subheader))
+at_tg.session_state[fbgrid.KEY] = {"event_id": "evt-tg-2", "source": "auto_refresh", "on": False}
+at_tg.run()
+check("tắt tự làm mới ghi lại prefs và trả về lưới đúng trạng thái thật",
+      ga.load_prefs(smoke_root) == {"auto_refresh": False} and cap.get("auto_refresh") is False)
+check("P21h đổi nhịp đọc KHÔNG phải cớ quét lại 150 folder: auto_refresh là READ_SOURCES",
+      "auto_refresh" in fbgrid.READ_SOURCES)
 
 batch_sids = [stories.create_story(smoke_root, f"Batch UI {i}")["id"] for i in range(ga.MAX_BATCH + 1)]
 at_bc = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=30)
@@ -2727,9 +2743,10 @@ check("P18b kéo cột Link hẹp vẫn còn đủ hai nút: chữ link co lại
       "td.link .lnk { display:flex" in _js_p18b
       and "td.link .lnk a.link { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis" in _js_p18b
       and "td.link .lnk button.ln { flex:0 0 auto" in _js_p18b)
-check("P18b tiêu đề cột + chữ gợi ý nói đủ ba việc của ô Link (mở · copy · sửa) — một nút một việc",
+check("P18b tiêu đề cột + chữ gợi ý nói đủ ba việc của ô Link (mở · copy · sửa) — một nút một việc. "
+      "P21h bỏ dòng hint cuối lưới nên nhân chứng thứ ba là title của CHÍNH hai nút đứng trong ô",
       'nút copy = nguyên văn link' in _js_p18b and "Copy nguyên link đã đăng" in _link_cell
-      and "nút copy ở cột Link để copy nguyên link đã đăng" in _js_p18b)
+      and '"Sửa link"' in _link_cell and '"Nhập link"' in _link_cell)
 shutil.rmtree(_p18b_box, ignore_errors=True)
 
 # --- P18c: ← / → trong modal nhảy bài trước/kế ngay trên danh sách đang thấy, giữ nguyên tab ---
@@ -2759,10 +2776,11 @@ check("P18c ← → trong modal KHÔNG cướp phím của ô chữ đang gõ (g
       and 'e.key === "ArrowRight"' in _keys_p18c[_p18c_arrow:_p18c_arrow + 60])
 check("P18c bài vừa mở bằng ← → cũng trở thành hàng đang chọn — ↑ ↓ bấm tiếp đi từ đúng chỗ anh đang xem",
       "CURSOR = String(target.id);" in _nav_p18c and "paintCursor();" in _nav_p18c)
-check("P18c chữ gợi ý của lưới + dấu ? đầu modal nói đủ phím ← → (biết là khỏi đoán)",
-      "← → trong modal đổi bài" in _js_p18c
+check("P18c dấu ? đầu modal nói đủ phím ← → (biết là khỏi đoán) — P21h bỏ dòng hint cuối lưới, nên chỗ "
+      "duy nhất còn lại dạy hai phím này là chính thẻ help của modal + hai nút đầu modal",
+      "← → hoặc hai nút đầu modal" in _js_p18c
       and "sang bài trước/kế TRONG ĐÚNG danh sách đang hiện, giữ nguyên tab" in _js_p18c
-      and "helpChip([\"Cách dùng modal" in _js_p18c)  # P20: hướng dẫn dài rút vào ?, không còn footer
+      and 'helpChip(["Cách dùng modal' in _js_p18c)  # P20: hướng dẫn dài rút vào ?, không còn footer
 
 # --- P13a: log của lưới = ĐÚNG request gần nhất, trong một thẻ thu gọn/mở rộng được ---
 
@@ -3139,7 +3157,7 @@ scan_count["n"] = 0
 p8_cap.clear()
 _seed_cache(at_p8, age=-999.0)  # bản đọc quá hạn -> bật tự làm mới là phải quét lại
 at_p8.run()
-check("P8iii bật 'Tự làm mới grid (5s)' vẫn đúng chữ: quá 5 giây là đọc lại folder",
+check("P8iii bật tự làm mới (5s) bằng nút trong lưới vẫn đúng chữ: quá 5 giây là đọc lại folder",
       not at_p8.exception and scan_count["n"] == 1)
 
 src_hand_off = inspect.getsource(fbgrid.hand_off)
@@ -3147,7 +3165,7 @@ grid_src = Path(__file__).resolve().parent.joinpath("grid.py").read_text(encodin
 check("P8iii giao việc cho luồng nền không còn vẽ lại cả trang — hết cú loé trắng ngay sau ⚡/▶",
       not re.search(r"^\s+st\.rerun\(", src_hand_off, re.M) and "bỏ fragment polling" not in grid_src
       and "st.fragment(_body, run_every=POLL_SECONDS)(ctx)" in grid_src)
-check("P8iii nhịp fragment 2s tách khỏi nhịp đọc folder 5s của toggle",
+check("P8iii nhịp fragment 2s tách khỏi nhịp đọc folder 5s của nút tự làm mới",
       fbgrid.POLL_SECONDS == 2.0 and fbgrid.REFRESH_SECONDS == 5
       and "READ_SOURCES" in grid_src and fbgrid.PAYLOAD_KEY == "grid_payload")
 src_body = inspect.getsource(fbgrid._body)
@@ -4354,11 +4372,14 @@ check("P21d updateBar không còn early-return theo #batch — chữ ▶/⚠ ph�
       "(quên bỏ cái chốt này là hai nút còn lại đứng im mãi)",
       '"#batch"' not in _p21d_update and 'getElementById("queuerun")' in _p21d_update
       and 'getElementById("queueerr")' in _p21d_update and "return;" not in _p21d_update.split("if (q)")[0])
-check("P21d thanh nút còn đúng thứ tự tìm · import · ▶ · ⚠ · mở rộng · stats, không còn ô chọn tất cả chen giữa",
-      _p21d_bar.count("bar.appendChild(") == 6
-      and _p21d_bar.index("searchBox()") < _p21d_bar.index("ioButton()") < _p21d_bar.index("queueButton()")
+check("P21d thanh nút còn đúng thứ tự tìm · nhịp đọc (P21h) · import · ▶ · ⚠ · mở rộng · stats, "
+      "không còn ô chọn tất cả chen giữa",
+      _p21d_bar.count("bar.appendChild(") == 7
+      and _p21d_bar.index("searchBox()") < _p21d_bar.index("refreshButton()") < _p21d_bar.index("ioButton()")
+      and _p21d_bar.index("ioButton()") < _p21d_bar.index("queueButton()")
       < _p21d_bar.index("errorsButton()") < _p21d_bar.index("expandButton()")
-      < _p21d_bar.index("statsBar()"))
+      < _p21d_bar.index("statsBar()")
+      and "pickAll" not in _p21d_bar)
 check("P21d prefs cột cũ còn mang khóa 'pick' cũng vô hại: bề rộng dựng theo COLS (không phải theo file) "
       "và tổng chiều ngang tính từ COLS — khóa lạc không được nở lưới ra một cột ma",
       "COLS.forEach(c => { out[c.key] = Math.max(c.min, Number(saved[c.key]) || c.w); });" in _p21d_fe
@@ -4466,10 +4487,12 @@ check("P21f KHÔNG lan sang nút CÓ CHỮ (⚡ · ⋮ · 💾 · 🔤 · 📥):
       and 'button("💾 Lưu"' in _p21f_fe and 'button("🔤"' in _p21f_fe
       and 'button("📥 Import · Export"' in _p21f_fe)
 check("P21f chữ hướng dẫn không còn gọi một glyph không còn trên nút: tip cột Link · header cột # · "
-      "thẻ Link · dấu ? modal · dòng hint đều nói bằng TÊN VIỆC (nút copy / nút bút / nút bảng)",
+      "thẻ Link · dấu ? modal đều nói bằng TÊN VIỆC (nút copy / nút bút). P21h bỏ nốt dòng hint cuối lưới "
+      "nên nhân chứng cuối là CHÍNH title của nút bảng, không phải một đoạn chữ mô tả nó",
       "📋 = copy" not in _p21f_fe and "☰ mở modal" not in _p21f_fe and "↗ = mở" not in _p21f_fe
       and "🗑 Dời folder" not in _p21f_fe and "bấm ＋ trước" not in _p21f_fe
-      and "nút copy = nguyên văn link" in _p21f_fe and "nút bảng mở modal" in _p21f_fe)
+      and "nút copy = nguyên văn link" in _p21f_fe
+      and 'iconButton("layout", "Mở modal xem kết quả' in _p21f_fe)
 check("P21f màu báo THẬT SỰ hiện — lỗi cũ đo được: flash có gắn .ok/.bad nhưng `button.b` khai báo SAU, "
       "cùng specificity nên color/background/border không đổi một chút (rgb(199,213,229) cả hai trạng thái); "
       "giờ selector hai lớp .b thắng, và nét vẽ currentColor nên tích/cross lên xanh/càng cua",
@@ -4531,16 +4554,93 @@ check("P21g tooltip hứa 'Esc cũng thu được' thì Esc phải thu thật: n
       "lưới. Đo harness: bấm mở rộng -> Esc -> expandedMode() false, icon về 'M4 10V4h6M', 0 event gửi đi",
       'if (expandedMode()) { lsSet(EXPANDED_KEY, "0"); repaint(); }' in _p21g_esc
       and _p21g_esc.index("if (MENU)") < _p21g_esc.index("if (IO_OPEN)") < _p21g_esc.index("if (modalRef())"))
-check("P21g chữ hướng dẫn không gọi glyph đã mất: dòng hint cuối grid nói 'nút ngoéo ở thanh trên', không còn "
-      "⛢/🗗 ở đâu trong file",
-      "nút ngoéo ở thanh trên mở rộng kín cửa sổ" in _p21g_fe
-      and "⛢" not in _p21g_fe and "🗗" not in _p21g_fe)
+check("P21g chữ hướng dẫn không gọi glyph đã mất: ⛢/🗗 không còn ở đâu trong file. P21h bỏ dòng hint cuối "
+      "lưới nên chỗ duy nhất còn lại nói về nút ngoéo là title/aria-label của CHÍNH nút đó",
+      "⛢" not in _p21g_fe and "🗗" not in _p21g_fe
+      and '"Mở rộng: grid chiếm kín cửa sổ' in _p21g_exp
+      and 'Đang mở rộng kín cửa sổ — bấm để thu lại' in _p21g_exp
+      and 'el("div", "hint"' not in _p21g_fe)
 check("P21g dừng đúng chỗ: chỉ ba nhãn trên thanh nút + một nút icon. ⚡ theo dòng · ⋮ menu · 💾 Lưu · 🔤 · "
       "📥 Import · Export · số thứ tự ở cột # vẫn là CHỮ thật (P10a: nhãn phải nói đúng việc đang làm)",
       'button("⚡", "Chạy đủ pipeline' in _p21g_fe and 'button("⋮"' in _p21g_fe
       and 'button("💾 Lưu"' in _p21g_fe and 'button("📥 Import · Export"' in _p21g_fe
       and 'button(String(row.queue_pos || "·")' in _p21g_fe)
 # --- hết P21g ---
+
+# --- P21h: nút tự làm mới nằm TRONG lưới (cạnh ô tìm) + bỏ hẳn dòng hướng dẫn cuối grid ---
+_p21h_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p21h_css = _p21h_fe.split("<style>")[1].split("</style>")[0]
+_p21h_py = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+_p21h_ga = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p21h_reg = _p21h_fe.split("const ICON_PATHS = {")[1].split("\n};")[0]
+_p21h_btn = _p21h_fe.split("function refreshButton(")[1].split("\n}")[0]
+_p21h_on = _p21h_fe.split("function refreshOn(")[1].split("\n}")[0]
+_p21h_paint = _p21h_fe.split("function paintRefresh(")[1].split("\n}")[0]
+_p21h_title = _p21h_fe.split("function refreshTitle(")[1].split("\n}")[0]
+_p21h_update = _p21h_fe.split("function updateBar(")[1].split("\n}")[0]
+_p21h_repaint = _p21h_fe.split("function repaint(")[1].split("\n}")[0]
+_p21h_bar = _p21h_fe.split("const bar = el(\"div\", \"bar\");")[1].split("wrap.appendChild(bar);")[0]
+
+check("P21h bỏ HẲN block chữ cuối lưới: không còn el('div','hint'), không còn rule .hint trong CSS, "
+      "và const LEGEND của component cũng đi theo (đọc màu giờ nằm ở thẻ hover từng ô + chú giải bảng native)",
+      'el("div", "hint"' not in _p21h_fe and ".hint {" not in _p21h_css
+      and 'const LEGEND = "' not in _p21h_fe and "màu ô B0 B1 B2 B3" not in _p21h_fe)
+check("P21h widget native đã biến mất hẳn: grid.py không còn st.toggle nào, refresh_state chỉ NẠP prefs "
+      "khi đổi workspace (luật P9b) chứ không vẽ gì — nên không còn phần tử nào đứng trước lưới bị thêm/bớt "
+      "giữa các lượt vẽ (lỗi cũ P8iv: thêm widget là iframe bị dựng lại, loé trắng)",
+      "st.toggle" not in _p21h_py and "def refresh_state" in _p21h_py and "def refresh_toggle" not in _p21h_py
+      and 'st.session_state.get("grid_prefs_root") != str(root)' in _p21h_py
+      and "refresh_state(ctx.root)" in _p21h_py)
+check("P21h sự thật vẫn nằm ở Python: args auto_refresh + refresh_seconds gửi thẳng từ session/prefs, "
+      "cú bấm đổi nhịp được ghi vào session_state TRƯỚC khi apply_event để scan_needed của cùng lượt vẽ đã đúng",
+      "auto_refresh=refresh_state(ctx.root), refresh_seconds=REFRESH_SECONDS," in _p21h_py
+      and _p21h_py.index('st.session_state[REFRESH_KEY] = bool(event.get("on"))') < _p21h_py.index("out = ga.apply_event(ctx, event)")
+      and "auto_refresh" in _p21h_py.split("READ_SOURCES = {")[1].split("}")[0])
+check("P21h dispatcher tự quản phần của nó: source auto_refresh ghi prefs qua set_pref_auto_refresh "
+      "(chỉ ghi khi đổi — đã đo ở block P2e) và không đụng story.json của bài nào",
+      'elif source == "auto_refresh":' in _p21h_ga and "set_pref_auto_refresh(ctx.root, want)" in _p21h_ga
+      and "def set_pref_auto_refresh" in _p21h_ga and "def pref_auto_refresh" in _p21h_ga)
+check("P21h nút đứng ĐÚNG CHỗ anh hỏi: ngay sau ô tìm kiếm, trước nút Import/Export — và là nút icon "
+      "một mình theo khuôn P21f (iconButton + dataset.icon + aria-label), không kèm chữ",
+      _p21h_bar.index("searchBox()") < _p21h_bar.index("refreshButton()") < _p21h_bar.index("ioButton()")
+      and 'iconButton("refresh"' in _p21h_btn and 'b.id = REFRESH_BTN_ID;' in _p21h_btn)
+check("P21h glyph refresh là đường vẽ MỚI theo cùng khuôn legacy (viewBox 24, stroke currentColor qua .ic), "
+      "không phải bản copy từ registry — và khác hẳn hai glyph ngoéo đã có",
+      "refresh: " in _p21h_reg and _p21h_reg.split("refresh: ")[1].split(",")[0] not in
+      (_p21h_reg.split("expand: ")[1].split(",")[0], _p21h_reg.split("collapse: ")[1].split(",")[0]))
+check("P21h trạng thái đọc bằng CHÍNH NÚT: nền xanh khi BẬT (class .on trên nút .tog) + title/aria-label "
+      "nói đủ hai chiều (đang BẬT hay TẮT, tắt thì lưới cập nhật bằng gì) — vì chữ đã bỏ nên không còn "
+      "chỗ nào khác ghi nhịp",
+      'b.classList.toggle("on", on);' in _p21h_paint and 'b.setAttribute("aria-label", b.title);' in _p21h_paint
+      and "Tự làm mới: BẬT" in _p21h_title and "Tự làm mới: TẮT" in _p21h_title
+      and "chỉ cập nhật khi anh bấm gì đó hoặc khi luồng nền đang chạy" in _p21h_title)
+check("P21h con số giây KHÔNG do JS tự bịa: label lấy MODEL.refresh_seconds (Python gửi), thiếu số thì "
+      "nói 'theo định kỳ' chứ không hứa một nhịp không ai chạy",
+      "Number(MODEL.refresh_seconds || 0)" in _p21h_fe and "mỗi 5 giây" not in _p21h_fe
+      and '"theo định kỳ"' in _p21h_title)
+check("P21h bấm là đổi ngay (khuôn P10a) nhưng quyền đoán có cửa tắt: REFRESH_PENDING chỉ được dùng "
+      "chừng nào server còn chưa trả đúng giá trị đó, và mất hiệu lực khi đổi workspace",
+      "REFRESH_PENDING = next;" in _p21h_btn and "paintRefresh(b);  // đổi ngay lúc bấm" in _p21h_btn
+      and "REFRESH_PENDING = null;  // server đã trả đúng cú bấm này" in _p21h_on
+      and "if (MODEL.workspace !== wasWorkspace) REFRESH_PENDING = null;" in _p21h_fe)
+check("P21h nhánh vá tại chỗ cũng phải thấy nhịp mới: updateBar sơn lại nút theo id, và repaint() phải "
+      "truyền auto_refresh (lấy từ refreshOn, tức là đã tính cú bấm chưa xác nhận) — thiếu một trong hai "
+      "là nút đứng im tới lần dựng lại cả lưới kế tiếp",
+      "document.getElementById(REFRESH_BTN_ID);" in _p21h_update and "paintRefresh(r);" in _p21h_update
+      and "auto_refresh: refreshOn(), refresh_seconds: MODEL.refresh_seconds," in _p21h_repaint
+      and "auto_refresh: args.auto_refresh === true," in _p21h_fe)
+check("P21h bẫy CSS đã chặn: dùng .tog.on riêng chứ không phải .on trần, vì `button.q.on` (ô hàng đợi, "
+      "tím) có cùng specificity mà đứng TRƯỚC — viết .on chung là bài đã xếp hàng đổi sang xanh dương",
+      "button.b.tog.on {" in _p21h_css and "button.b.on {" not in _p21h_css
+      and _p21h_css.index("button.q.on {") < _p21h_css.index("button.b.tog.on {")
+      and _p21h_css.index("button.b.tog.on {") < _p21h_css.index("button.b.tog.on:hover {"))
+check("P21h cao lưới khi mở rộng không còn trừ một hằng số px đo hồi còn dòng hint (118): .expanded là "
+      "flex cột, .bar giữ nguyên cao, .scroll ăn phần còn lại — thanh nút tự quấn nên mọi con số đều sai",
+      ".wrap.expanded .scroll { max-height:calc(100vh" not in _p21h_css
+      and ".wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }" in _p21h_css
+      and ".wrap.expanded > .bar { flex:0 0 auto; }" in _p21h_css
+      and ".wrap.expanded .scroll { flex:1 1 auto; min-height:0; max-height:none; }" in _p21h_css)
+# --- hết P21h ---
 
 # cleanup test rows
 c = db.connect()

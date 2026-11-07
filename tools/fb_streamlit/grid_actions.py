@@ -163,6 +163,21 @@ def set_pref_cols(root: Path, cols) -> str:
     return save_prefs(root, prefs)
 
 
+def set_pref_auto_refresh(root: Path, on) -> str:
+    """Nhịp đọc folder của LƯỚI là prefs của workspace — chỉ ghi file khi anh thật sự đổi (luật P9b)."""
+    prefs = load_prefs(root)
+    want = bool(on)
+    if bool(prefs.get("auto_refresh")) is want:
+        return ""
+    prefs["auto_refresh"] = want
+    return save_prefs(root, prefs)
+
+
+def pref_auto_refresh(root: Path) -> bool:
+    """Chế độ đang lưu của workspace này — chưa có prefs thì coi như tắt."""
+    return bool(load_prefs(root).get("auto_refresh"))
+
+
 def pref_providers(root: Path) -> dict:
     """Provider của từng bước theo prefs workspace — MỘT DANH SÁCH, thứ tự chính là ưu tiên.
 
@@ -1333,6 +1348,10 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "save_cols":  # độ rộng cột là prefs của workspace, không phải của bài nào
             note = set_pref_cols(ctx.root, event.get("cols"))
             out.lines = [note] if note else []
+        elif source == "auto_refresh":  # P21h: nút nhịp đọc folder nằm TRONG lưới — cũng chỉ là prefs
+            want = bool(event.get("on"))
+            note = set_pref_auto_refresh(ctx.root, want)
+            out.lines = [note or f"Tự làm mới: {'BẬT' if want else 'TẮT'} (lưu theo workspace)."]
         elif source == "open":
             out.select, out.nav = sid, "Tạo bài"
         elif source == "b4_pick":
