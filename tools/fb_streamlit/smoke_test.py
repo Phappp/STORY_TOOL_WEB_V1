@@ -4410,10 +4410,11 @@ check("P21d updateBar không còn early-return theo #batch — chữ ▶/⚠ ph�
       "(quên bỏ cái chốt này là hai nút còn lại đứng im mãi)",
       '"#batch"' not in _p21d_update and 'getElementById("queuerun")' in _p21d_update
       and 'getElementById("queueerr")' in _p21d_update and "return;" not in _p21d_update.split("if (q)")[0])
-check("P21d thanh nút còn đúng thứ tự tìm · nhịp đọc (P21h) · import · ▶ · ⚠ · mở rộng · stats, "
-      "không còn ô chọn tất cả chen giữa",
-      _p21d_bar.count("bar.appendChild(") == 7
-      and _p21d_bar.index("searchBox()") < _p21d_bar.index("refreshButton()") < _p21d_bar.index("ioButton()")
+check("P21d thanh nút đúng thứ tự tìm · nhịp đọc (P21h) · import · ▶ · ⚠ · mở rộng · stats; "
+      "P27a thêm nút '🎧 Chọn file + giây' (queue audio) trước ioButton — 8 item, không ô chọn tất cả",
+      _p21d_bar.count("bar.appendChild(") == 8
+      and _p21d_bar.index("searchBox()") < _p21d_bar.index("refreshButton()")
+      < _p21d_bar.index("queueAudioButton()") < _p21d_bar.index("ioButton()")
       and _p21d_bar.index("ioButton()") < _p21d_bar.index("queueButton()")
       < _p21d_bar.index("errorsButton()") < _p21d_bar.index("expandButton()")
       < _p21d_bar.index("statsBar()")
@@ -4638,9 +4639,11 @@ check("P21h dispatcher tự quản phần của nó: source auto_refresh ghi pre
       "(chỉ ghi khi đổi — đã đo ở block P2e) và không đụng story.json của bài nào",
       'elif source == "auto_refresh":' in _p21h_ga and "set_pref_auto_refresh(ctx.root, want)" in _p21h_ga
       and "def set_pref_auto_refresh" in _p21h_ga and "def pref_auto_refresh" in _p21h_ga)
-check("P21h nút đứng ĐÚNG CHỗ anh hỏi: ngay sau ô tìm kiếm, trước nút Import/Export — và là nút icon "
-      "một mình theo khuôn P21f (iconButton + dataset.icon + aria-label), không kèm chữ",
-      _p21h_bar.index("searchBox()") < _p21h_bar.index("refreshButton()") < _p21h_bar.index("ioButton()")
+check("P21h nút đứng ĐÚNG CHỗ anh hỏi: ngay sau ô tìm kiếm, trước nút P27a (queue audio) và nút "
+      "Import/Export — và là nút icon một mình theo khuôn P21f (iconButton + dataset.icon + aria-label), "
+      "không kèm chữ",
+      _p21h_bar.index("searchBox()") < _p21h_bar.index("refreshButton()")
+      < _p21h_bar.index("queueAudioButton()") < _p21h_bar.index("ioButton()")
       and 'iconButton("refresh"' in _p21h_btn and 'b.id = REFRESH_BTN_ID;' in _p21h_btn)
 check("P21h glyph refresh là đường vẽ MỚI theo cùng khuôn legacy (viewBox 24, stroke currentColor qua .ic), "
       "không phải bản copy từ registry — và khác hẳn hai glyph ngoéo đã có",
@@ -7176,6 +7179,79 @@ finally:
     stories._recents_path = _p26d_rec
     shutil.rmtree(_p26d_box, ignore_errors=True)
 # --- hết P26d ---
+
+# --- P27a: nút "🎧 Chọn file + giây" cạnh ô tìm — chọn file + giây cho MỌI bài trong hàng đợi ---
+_p27a_box = Path(tempfile.mkdtemp(prefix="fbsmoke_p27a_"))
+_p27a_dd, _p27a_rec = paths.data_dir, stories._recents_path
+paths.data_dir = lambda: _p27a_box / "DATA"
+stories._recents_path = lambda: _p27a_box / "workspaces.json"
+_p27a_root = stories.set_current(stories.validate_root(_p27a_box / "ws_p27a"))
+_p27a_ctx = ga.Ctx(root=_p27a_root, providers={}, presets={}, defaults={})
+_p27a_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p27a_ga_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+try:
+    _p27a_col = audio.create("Nhac p27a")
+    audio.add_file(_p27a_col, _P25aUp(b"RIFFfake"), "mot.mp3")
+    audio.add_file(_p27a_col, _P25aUp(b"RIFFfake"), "hai.mp3")
+    ga.set_pref_audio(_p27a_root, collection=_p27a_col, seconds=30)
+    _p27a_q1 = stories.create_story(_p27a_root, "bai p27a 1")["id"]
+    _p27a_q2 = stories.create_story(_p27a_root, "bai p27a 2")["id"]
+    _p27a_nq = stories.create_story(_p27a_root, "bai p27a khong hang doi")["id"]
+    stories.update_story(_p27a_root, _p27a_q1, queued=True, queued_at=1.0)
+    stories.update_story(_p27a_root, _p27a_q2, queued=True, queued_at=2.0)
+    _p27a_b4 = lambda sid: dict(stories.load_story(_p27a_root, sid).get("b4") or {})
+
+    _p27a_l1 = ga.b4_queue_audio(_p27a_ctx, "hai.mp3", 10)
+    check("P27a chọn file + giây cho hàng đợi: CẢ HAI bài queued nhận đúng file + giây, "
+          "bài NGOÀI hàng đợi không đụng, nhãn kết quả nói đủ",
+          _p27a_b4(_p27a_q1)["audio"] == "hai.mp3" and _p27a_b4(_p27a_q1)["audio_seconds"] == 10
+          and _p27a_b4(_p27a_q2)["audio"] == "hai.mp3" and _p27a_b4(_p27a_q2)["audio_seconds"] == 10
+          and "hai" not in _p27a_b4(_p27a_nq).get("audio", "")
+          and "10 s" in _p27a_l1[0] and "2 bài" in _p27a_l1[0])
+
+    _p27a_l2 = ga.b4_queue_audio(_p27a_ctx, "", 0)
+    check("P27a giây = 0 (không nhập) -> theo prefs workspace (30 s), file không đổi (giữ chọn trước)",
+          _p27a_b4(_p27a_q1)["audio_seconds"] == 30 and _p27a_b4(_p27a_q1)["audio"] == "hai.mp3")
+
+    _p27a_l3 = ga.clear_b4_queue_audio(_p27a_ctx)
+    check("P27a 'Bỏ chọn': mọi khóa audio_* trong b4 của bài queued bị xóa, bài về mặc định",
+          _p27a_l3[0].startswith("P27a: bỏ chọn cho 2")
+          and "audio" not in _p27a_b4(_p27a_q1) and "audio_seconds" not in _p27a_b4(_p27a_q1)
+          and "audio" not in _p27a_b4(_p27a_q2) and "audio_seconds" not in _p27a_b4(_p27a_q2))
+
+    _p27a_l4 = ga.b4_queue_audio(_p27a_ctx, "mat.mp3", 5)
+    check("P27a tên file không còn trong bộ -> từ chối thẳng, không ghi gì",
+          "không còn trong bộ" in _p27a_l4[0] and "mat.mp3" in _p27a_l4[0]
+          and "audio" not in _p27a_b4(_p27a_q1))
+
+    # dispatch
+    _p27a_o1 = ga.apply_event(_p27a_ctx, {"source": "b4_queue_audio", "audio": "mot.mp3", "seconds": "15"})
+    check("P27a dispatch `b4_queue_audio` đọc đúng hai chìa + chuỗi từ iframe (làm tròn), "
+          "touched = 2 bài queued, giây 15 được ghi",
+          "“mot.mp3”" in _p27a_o1.lines[0] and "(15 s" in _p27a_o1.lines[0]
+          and len(_p27a_o1.touched) == 2
+          and _p27a_b4(_p27a_q1)["audio"] == "mot.mp3" and _p27a_b4(_p27a_q1)["audio_seconds"] == 15)
+    _p27a_o2 = ga.apply_event(_p27a_ctx, {"source": "b4_queue_audio_clear"})
+    check("P27a dispatch `b4_queue_audio_clear` xóa chọn + touched = 2 bài queued",
+          "bỏ chọn cho 2" in _p27a_o2.lines[0] and len(_p27a_o2.touched) == 2
+          and "audio" not in _p27a_b4(_p27a_q1))
+
+    # phía lưới
+    check("P27a phía lưới: nút '🎧 Chọn file + giây' đứng cạnh ô tìm (trước ioButton), "
+          "mở panel chọn file + giây cho hàng đợi, đọc MODEL.audio.files, gửi event b4_queue_audio",
+          "🎧 Chọn file + giây" in _p27a_fe and "b4_queue_audio" in _p27a_fe
+          and "queueButton()" in _p27a_fe and "b4queueaudio" in _p27a_fe)
+    check("P27a phía Python: grid_actions có b4_queue_audio + clear_b4_queue_audio + _queued_ids, "
+          "dispatch có b4_queue_audio + b4_queue_audio_clear",
+          "def b4_queue_audio(" in _p27a_ga_src and "def clear_b4_queue_audio(" in _p27a_ga_src
+          and "def _queued_ids(" in _p27a_ga_src
+          and 'elif source == "b4_queue_audio":' in _p27a_ga_src
+          and 'elif source == "b4_queue_audio_clear":' in _p27a_ga_src)
+finally:
+    paths.data_dir = _p27a_dd
+    stories._recents_path = _p27a_rec
+    shutil.rmtree(_p27a_box, ignore_errors=True)
+# --- hết P27a ---
 
 
 # cleanup test rows

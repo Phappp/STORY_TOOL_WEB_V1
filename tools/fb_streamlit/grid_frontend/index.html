@@ -34,6 +34,9 @@
   .stat.done { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
   .stat.queued { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); }
   .stats { display:inline-flex; gap:4px; }
+  .audqpick { display:flex; flex-direction:column; gap:4px; padding:6px 10px; margin-left:4px;
+    border:1px solid var(--border); border-radius:6px; background:var(--bg); min-width:260px; }
+  .audrow { display:flex; gap:6px; align-items:center; }
   .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
   .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }
@@ -2904,6 +2907,64 @@ function refreshButton() {
   return b;
 }
 
+// P27a: nút "🎧 Chọn file + giây" cạnh ô tìm — chọn file tiếng + giây cho MỌI bài trong hàng đợi.
+// Ghi vào story.json từng bài (P26c), nền ⚡/▶ tự theo. Nút "Bỏ chọn" xóa để về mặc định workspace.
+function queueAudioButton() {
+  const ids = queueIds();
+  const b = button("🎧 Chọn file + giây",
+    ids.length
+      ? ("Chọn file tiếng + số giây cho " + ids.length + " bài đang trong hàng đợi — "
+        + "chọn này ghi vào story.json của từng bài (P26c), các lần ⚡/▶ sau tự theo; "
+        + "bấm 'Bỏ chọn' để về mặc định workspace")
+      : "Không có bài nào trong hàng đợi — thêm bằng nút ▶",
+    (bb) => {
+      const host = bb.parentElement;
+      const old = host.querySelector(".audqpick");
+      if (old) { old.remove(); return; }
+      const panel = el("div", "audqpick");
+      panel.appendChild(el("div", "muted", "Chung cho " + ids.length + " bài trong hàng đợi — "
+        + "không đổi cài đặt của workspace; chọn này ghi vào story.json từng bài."));
+      const files = Array.isArray(MODEL.audio.files) ? MODEL.audio.files : [];
+      const sel = document.createElement("select");
+      sel.className = "prov";
+      const optDefault = el("option", null, "(theo id bài)");
+      optDefault.value = "";
+      sel.appendChild(optDefault);
+      files.forEach(name => { const o = el("option", null, name); o.value = name; sel.appendChild(o); });
+      sel.value = "";
+      const row1 = el("div", "audrow");
+      row1.appendChild(sel);
+      panel.appendChild(row1);
+      const secs = document.createElement("input");
+      secs.type = "number";
+      secs.min = "1";
+      secs.max = "600";
+      secs.value = String(Number(MODEL.audio.seconds || 60) || 60);
+      const row2 = el("div", "audrow");
+      row2.appendChild(secs);
+      row2.appendChild(el("span", "muted", " giây (1–600)"));
+      panel.appendChild(row2);
+      const go = button("🎬 Chọn cho hàng đợi", "Ghi file + giây vào story.json của "
+        + ids.length + " bài trong hàng đợi", gg => {
+          const n = Number(secs.value);
+          send({ source: "b4_queue_audio",
+                 audio: sel.value,
+                 seconds: (Number.isFinite(n) && n > 0) ? Math.round(n) : 0 });
+          host.querySelector(".audqpick") && host.querySelector(".audqpick").remove();
+        }, "act");
+      const clr = button("Bỏ chọn", "Xóa file + giây đã chọn — các bài về mặc định workspace",
+        () => { send({ source: "b4_queue_audio_clear" }); }, "act");
+      const row3 = el("div", "audrow");
+      row3.appendChild(go);
+      row3.appendChild(clr);
+      panel.appendChild(row3);
+      host.appendChild(panel);
+    }, "act");
+  b.id = "b4queueaudio";
+  if (!ids.length) b.disabled = true;
+  return b;
+}
+
 function queueIds() {
   return (MODEL.queue_ids || []).map(String);
 }
@@ -3186,6 +3247,7 @@ function render(args, force) {
   const bar = el("div", "bar");
   bar.appendChild(searchBox());
   bar.appendChild(refreshButton());  // P21h: nút nhịp đọc folder — trước đây là st.toggle đứng NGOÀI lưới
+  bar.appendChild(queueAudioButton());  // P27a: chọn file tiếng + giây cho hàng đợi
   bar.appendChild(ioButton());  // P22b: import/export nằm cạnh ô tìm — không còn mục native nào nữa
   bar.appendChild(queueButton());
   bar.appendChild(errorsButton());

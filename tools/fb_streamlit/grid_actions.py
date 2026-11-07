@@ -408,6 +408,61 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False, audio_name: str = "", seco
             f"{round(float(block.get('bytes') or 0) / 1048576, 1)} MB · ffmpeg {round(spent, 1)} s{over}"]
 
 
+def b4_queue_audio(ctx: Ctx, audio_name: str, seconds: int) -> list[str]:
+    """P27a: chọn file + giây cho MỌI bài ĐANG trong hàng đợi — ghi vào story.json từng bài (P26c),
+    nền ⚡/▶ tự theo. `audio_name` rỗng = KHÔNG chọn file (chỉ đổi giây); `seconds` = 0 = theo prefs
+    workspace. Tên file phải có thật trong bộ (server đối chiếu), không nhận đường dẫn từ trình duyệt.
+    """
+    setup = audio_setup(ctx.root)
+    if not setup["collection"]:
+        return ["P27a: workspace chưa chọn bộ sưu tập — chọn trong Cấu hình ▸ Âm thanh."]
+    if not setup["files"]:
+        return [f"P27a: bộ “{setup['collection']}” chưa có file nào."]
+    if audio_name and audio_name not in {f.name for f in setup["files"]}:
+        return [f"P27a: file “{audio_name}” không còn trong bộ “{setup['collection']}”."]
+    secs = int(seconds or setup["seconds"])
+    secs = min(AUDIO_SECONDS_MAX, max(AUDIO_SECONDS_MIN, secs))
+    touched = _queued_ids(ctx.root)
+    if not touched:
+        return ["P27a: không có bài nào trong hàng đợi."]
+    for sid in touched:
+        story = stories.load_story(ctx.root, sid)
+        block = dict(story.get("b4") or {})
+        if audio_name:
+            block["audio"] = audio_name
+        block["audio_seconds"] = secs
+        stories.update_story(ctx.root, sid, b4=block)
+    return [f"P27a: chọn “{audio_name or '(theo id)'}” ({secs} s) cho {len(touched)} bài trong hàng đợi."]
+
+
+def clear_b4_queue_audio(ctx: Ctx) -> list[str]:
+    """P27a: bỏ chọn file + giây cho mọi bài trong hàng đợi — các bài trở về mặc định workspace."""
+    touched = _queued_ids(ctx.root)
+    if not touched:
+        return ["P27a: không có bài nào trong hàng đợi."]
+    for sid in touched:
+        story = stories.load_story(ctx.root, sid)
+        block = dict(story.get("b4") or {})
+        block.pop("audio", None)
+        block.pop("audio_seconds", None)
+        block.pop("audio_collection", None)
+        block.pop("audio_from", None)
+        stories.update_story(ctx.root, sid, b4=block)
+    return [f"P27a: bỏ chọn cho {len(touched)} bài trong hàng đợi — về mặc định workspace."]
+
+
+def _queued_ids(root: Path) -> list[str]:
+    """P27a: danh sách id các bài có `queued=True` trong workspace — đọc từng story.json, không DB."""
+    ids = []
+    for sid in stories.list_story_ids(root):
+        try:
+            if stories.load_story(root, sid).get("queued"):
+                ids.append(sid)
+        except (stories.WorkspaceError, OSError, ValueError):
+            pass
+    return ids
+
+
 def b4_skip_reason(root: Path, sid: str, setup: dict | None = None) -> str:
     """⚡/▶ có ghép B4 cho bài này không: trả "" là giao việc, ngược lại là LÝ DO bỏ qua.
 
@@ -2017,6 +2072,19 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             block["link"] = url
             stories.update_story(ctx.root, sid, b4=block)
             out.lines, out.touched = [f"{sid}: link video B4 = {url or '(trống)'}."], [sid]
+        elif source == "b4_queue_audio":
+            # P27a: nút cạnh ô tìm — chọn file + giây cho MỌI bài đang trong hàng đợi.
+            # `audio` rỗng = chỉ đổi giây; `seconds` = 0 = theo prefs workspace.
+            secs = 0
+            try:
+                secs = int(event.get("seconds") or 0)
+            except (TypeError, ValueError):
+                secs = 0
+            out.lines, out.touched = b4_queue_audio(
+                ctx, str(event.get("audio") or ""), secs), _queued_ids(ctx.root)
+        elif source == "b4_queue_audio_clear":
+            # P27a: bỏ chọn file + giây cho mọi bài trong hàng đợi — về mặc định workspace.
+            out.lines, out.touched = clear_b4_queue_audio(ctx), _queued_ids(ctx.root)
         elif source == "queue_add_errors":
             ids = error_ids(buckets_for(ctx))
             base = time.time()
