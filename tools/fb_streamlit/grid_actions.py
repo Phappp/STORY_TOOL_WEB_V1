@@ -731,6 +731,8 @@ DUP_SIM = 0.90        # luật `sim`: tỷ lệ chữ giống nhau (tính trên 
 DUP_SIM_TOKENS = 10   # dưới ngần này chữ thì không so %: hai caption 5 chữ đụng nhau 90% là chuyện bình thường
 DUP_SIM_BLOCK = 0.5   # ứng viên phải chia sẻ ít ngần này cụm-3-từ mới đáng đem tính % (chặn cho rẻ)
 DUP_SIM_CANDS = 25    # trần số ứng viên bị tính % MỖI dòng — workspace toàn caption khuôn mẫu vẫn chạy nổi
+DUP_SIM_CUT_GAP = 5   # bản CŨ phải NGẮN hơn hẳn ngần này chữ mới bị gọi là 'bị cắt ngắn' — lệch vài chữ
+                      # vì emoji đầu dòng thì nói 'khác vài chữ' mới đúng
 _FB_ID_RES = (
     re.compile(r"/posts/(?:\d+[/@])?(\d{5,})"),
     re.compile(r"/(?:videos|reels|reel)/(?:[^/]+[/@])?(\d{5,})"),
@@ -860,28 +862,43 @@ def caption_shingles(tokens: list[str]) -> set[str]:
 
 
 def sim_index(cap_list: list[tuple[str, dict]]) -> dict:
-    """Chỉ mục ngược cụm-3-từ -> vị trí caption CŨ, dựng MỘT lần cho cả lượt xem trước."""
+    """Chỉ mục ngược cụm-3-từ -> vị trí caption CŨ, dựng MỘT lần cho cả lượt xem trước.
+
+    `sizes` kèm theo để mức chặn tính theo caption NGẮN HƠN của cặp (xem `sim_caption`): bài cũ
+    bị Facebook cắt còn 34 chữ mà file import là bản đầy đủ 200 chữ — lấy mốc 200 mà chặn là tự
+    loại đúng cái ca mình cần bắt.
+    """
     sh: dict[str, list[int]] = {}
+    sizes: list[int] = []
     for j, (cap, _rec) in enumerate(cap_list):
-        for s in caption_shingles(cap.split()):
+        mine = caption_shingles(cap.split())
+        sizes.append(len(mine))
+        for s in mine:
             sh.setdefault(s, []).append(j)
-    return {"sh": sh, "caps": cap_list}
+    return {"sh": sh, "caps": cap_list, "sizes": sizes}
 
 
-def sim_caption(cap: str, ws: dict) -> tuple[dict, float] | None:
-    """(bài cũ, tỷ lệ giống) nếu có caption ≥ DUP_SIM — luật `sim`, chạy SAU caption/near.
+def sim_caption(cap: str, ws: dict) -> tuple[dict, float, bool] | None:
+    """(bài cũ, tỷ lệ giống, bản_cũ_bị_cắt) nếu có caption ≥ DUP_SIM — luật `sim`, chạy SAU caption/near.
 
-    Vì sao phải lòng vòng thế này: đo thật 2026-11-07, đem so tay 200 dòng × 300 bài bằng
-    `SequenceMatcher` là hết **17.7 giây** cho một lượt bấm — và còn sai trong im lặng vì
-    `autojunk` mặc định coi dấu cách là "rác" ở chuỗi dài, caption 131 chữ sửa 4 chữ ra 0.32
-    thay vì ~0.97, tức là luật 90% sẽ KHÔNG BAO GIỜ nổ cờ. Nên: chặn ứng viên bằng số cụm-3-từ
-    chia sẻ (cả lượt quét 200 dòng hết ~20 ms), rồi mới tính % trên **TỪ** với autojunk=False,
-    và chỉ lấy tối đa DUP_SIM_CANDS ứng viên giống nhất để workspace toàn caption khuôn mẫu
-    vẫn bấm được. Bỏ sót thì còn hẹn lần sau, chứ khóa oan + treo tab là mất người dùng.
+    Hai con số, lấy số LỚN HƠN:
+      `ratio` đối xứng = bao nhiêu phần của HAI BẢN là chữ chung — dùng khi hai bản dài gần bằng
+        nhau (khác vài chữ, thêm emoji đầu: đo thật 95.5%, vẫn có cờ).
+      `cov` = bao nhiêu phần của BẢN NGẮN nằm trong bản dài — dùng cho ca "bài cũ bị cắt ngắn":
+        bản trong workspace chỉ còn 34 chữ vì Facebook cắt sau `det är…`, file import giữ bản đầy
+        đủ 65 chữ. Tỷ lệ đối xứng tụt xuống 68.8% (trượt luật 90%) trong khi 32/34 chữ của bản cũ
+        vẫn nằm trọn trong bài mới = 94.1%.
+    `cov` chỉ được tính khi bản NGẮN có ≥ DUP_SIM_TOKENS chữ, nếu không một caption 5 chữ sẽ phủ
+    100% mọi bài dài và lưới cờ đỏ toàn bộ.
+
+    Vì sao phải chặn ứng viên trước khi tính: đo thật 2026-11-07, đem so tay 200 dòng × 300 bài
+    bằng `SequenceMatcher` là hết **17.7 giây** cho một lượt bấm — và `autojunk` mặc định coi dấu
+    cách là "rác" ở chuỗi dài, caption 131 chữ sửa 4 chữ ra 0.32 thay vì ~0.97.
     """
     block = ws.get("sim") or {}
     caps = block.get("caps") or []
     sh = block.get("sh") or {}
+    sizes = block.get("sizes") or []
     tokens = cap.split()
     if not caps or len(tokens) < DUP_SIM_TOKENS:
         return None
@@ -892,15 +909,27 @@ def sim_caption(cap: str, ws: dict) -> tuple[dict, float] | None:
     for s in mine:
         for j in sh.get(s, ()):
             shared[j] += 1
-    floor = DUP_SIM_BLOCK * len(mine)
-    cands = sorted((j for j, n in shared.items() if n >= floor),
+
+    def _floor(j: int) -> float:
+        other = sizes[j] if j < len(sizes) else len(mine)
+        return DUP_SIM_BLOCK * min(len(mine), other)
+
+    cands = sorted((j for j, n in shared.items() if n >= _floor(j)),
                    key=lambda j: (-shared[j], j))[:DUP_SIM_CANDS]
-    best: tuple[dict, float] | None = None
+    best: tuple[dict, float, bool] | None = None
     for j in cands:
         other, rec = caps[j]
-        ratio = SequenceMatcher(None, tokens, other.split(), autojunk=False).ratio()
-        if ratio >= DUP_SIM and (best is None or ratio > best[1]):
-            best = (rec, ratio)
+        words = other.split()
+        m = SequenceMatcher(None, tokens, words, autojunk=False)
+        ratio = m.ratio()
+        short = min(len(tokens), len(words))
+        cov = 0.0
+        if short >= DUP_SIM_TOKENS:
+            cov = sum(b.size for b in m.get_matching_blocks()) / short
+        score = max(ratio, cov)
+        cut = cov > ratio and len(words) <= len(tokens) - DUP_SIM_CUT_GAP
+        if score >= DUP_SIM and (best is None or score > best[1]):
+            best = (rec, score, cut)
     return best
 
 
@@ -958,10 +987,11 @@ def import_dupes(ctx: Ctx, rows: list[dict], ws: dict | None = None) -> tuple[li
                 else:
                     hit = sim_caption(cap, ws)
                     if hit is not None:
-                        rec, ratio = hit
+                        rec, ratio, cut = hit
                         sim_pct = int(round(ratio * 100))
                         rules.append("sim")
-                        hits.append(_dup_hit("sim", rec, f"caption giống {sim_pct}% bài này (khác vài chữ)"))
+                        why = "bản cũ bị cắt ngắn, phần đầu trùng hết" if cut else "khác vài chữ"
+                        hits.append(_dup_hit("sim", rec, f"caption giống {sim_pct}% bài này ({why})"))
         for u in (row.get("images") or []):
             recs = ws.get("imgs", {}).get(dup_key(u)) or []
             if recs:

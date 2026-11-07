@@ -5910,6 +5910,61 @@ check("P23e lưới in con số THẬT lên chip ('caption 97%' từ `dup.sim`, 
       "chung) + help ô Import nói caption không cần giống hệt mới bị cờ",
       'caption " + dup.sim + "%" ' in _p23c_fe and 'sim: "caption gần giống"' in _p23c_fe
       and "≥90%" in _p23c_fe and "khuôn mẫu" in _p23c_fe)
+
+# --- P23f: "bài cũ bị Facebook cắt ngắn" không còn lọt qua cả năm luật ---
+# Đúng ca anh báo 2026-11-07: story_018/story_021 trong D1 lưu input.txt 198 ký tự kết bằng "det är..."
+# vì bản Facebook bị cắt, file import lại mang bản đầy đủ.
+_p23f_root = stories.validate_root(_p23a_box / "ws_p23f")
+_p23f_ctx = ga.build_ctx(db.connect(), _p23f_root)
+_p23f_old = ("🚨💔 DET SVENSKA KUNGAHUSET VÄCKER UPPMÄRKSAMHET: Kung Carl Gustaf uppges ha hamnat i en "
+             "svår situation när han tvingats överväga ett viktigt beslut. Orden ”Nu vet jag inte vad "
+             "jag ska göra, det är...")
+_p23f_sid = stories.create_story(_p23f_root, topic="Kungahuset")["id"]
+stories.save_input(_p23f_root, _p23f_sid, _p23f_old)
+_p23f_full = _p23f_old.replace("🚨💔 ", "").replace(
+    "det är...", "det är verkligen ett beslut som kungen har burit på länge och som nu plötsligt blivit "
+                 "offentligt efter en oväntad uppgift från hovet som ingen väntade sig alls")
+_p23f_items, _p23f_summ = ga.import_dupes(_p23f_ctx, [
+    {"url": "https://www.facebook.com/x/posts/900000001", "caption": _p23f_full, "images": []}])
+_p23f_ratio = SequenceMatcher(None, ga.norm_caption(_p23f_full).split(),
+                              ga.norm_caption(_p23f_old).split(), autojunk=False).ratio()
+check("P23f ca thật anh báo: bản cũ bị cắt còn 34 chữ, file import giữ bản đầy -> tỷ lệ ĐỐI XỨNG chỉ "
+      "%.1f%% nên P23e im lặng báo 'không trùng'; giờ `sim` so thêm ĐỘ PHỦ của bản ngắn (94%%) và nói rõ "
+      "'bản cũ bị cắt ngắn'" % (_p23f_ratio * 100),
+      _p23f_ratio < ga.DUP_SIM and len(_p23f_items) == 1 and _p23f_items[0]["rules"] == ["sim"]
+      and _p23f_items[0]["sim"] >= 90 and "cắt ngắn" in _p23f_items[0]["hits"][0]["what"])
+_p23f_items2, _ = ga.import_dupes(_p23f_ctx, [
+    {"url": "https://www.facebook.com/x/posts/900000002",
+     "caption": _p23f_old.replace("🚨💔 ", ""), "images": []}])
+check("P23f hai bản DÀI BẰNG NHAU, chỉ lệch emoji đầu dòng -> vẫn cờ nhưng nhãn là 'khác vài chữ': `cut` "
+      "cần bản cũ NGẮN hơn hẳn DUP_SIM_CUT_GAP chữ, không phải cứ độ phủ thắng tỷ lệ là gán chữ 'bị cắt'",
+      len(_p23f_items2) == 1 and _p23f_items2[0]["sim"] >= 90
+      and "cắt ngắn" not in _p23f_items2[0]["hits"][0]["what"])
+_p23f_shortcap = " ".join("w%d" % i for i in range(34))
+_p23f_longcap = _p23f_shortcap + " " + " ".join("x%d" % i for i in range(160))
+_p23f_ws = {"sim": ga.sim_index([(_p23f_shortcap, _p23e_rec)])}
+_p23f_mine = ga.caption_shingles(_p23f_longcap.split())
+_p23f_other = ga.caption_shingles(_p23f_shortcap.split())
+_p23f_shared = len(_p23f_mine & _p23f_other)
+check("P23f mức chặn phải tính theo caption NGẮN HƠN của cặp — không đổi chỗ này thì luật phủ không BAO "
+      "GIỜ chạy: bài 194 chữ với bản cũ 34 chữ chỉ chia %d cụm-3-từ, mốc cũ 0.5×%d=%.1f loại ứng viên "
+      "TRƯỚC KHI kịp tính %%; mốc mới 0.5×min=%.1f vẫn xét và bắt được"
+      % (_p23f_shared, len(_p23f_mine), ga.DUP_SIM_BLOCK * len(_p23f_mine),
+         ga.DUP_SIM_BLOCK * min(len(_p23f_mine), len(_p23f_other))),
+      _p23f_shared < ga.DUP_SIM_BLOCK * len(_p23f_mine)          # mức chặn CŨ tự loại ca này
+      and _p23f_shared >= ga.DUP_SIM_BLOCK * min(len(_p23f_mine), len(_p23f_other))
+      and ga.sim_caption(_p23f_longcap, _p23f_ws) is not None
+      and ga.sim_caption(_p23f_longcap, _p23f_ws)[2] is True)
+_p23f_ws6 = {"sim": ga.sim_index([(" ".join("y%d" % i for i in range(6)), _p23e_rec)])}
+check("P23f độ phủ không biến mọi caption ngắn thành trùng: 6 chữ của bài cũ nằm trọn trong bài 126 chữ "
+      "mà vẫn sạch cờ — bản NGẮN phải ≥ DUP_SIM_TOKENS chữ mới được tính phủ",
+      ga.sim_caption(" ".join("y%d" % i for i in range(6)) + " " + " ".join("q%d" % i for i in range(120)),
+                     _p23f_ws6) is None and ga.DUP_SIM_CUT_GAP == 5)
+check("P23f hai dòng money của luật này, xóa một là luật chết trong im lặng: `cov` phải đi kèm sàn số chữ, "
+      "và `_floor` lấy min của HAI caption",
+      "sum(b.size for b in m.get_matching_blocks())" in _p23c_a_src
+      and "min(len(mine), other)" in _p23c_a_src
+      and "DUP_SIM_CUT_GAP" in _p23c_a_src)
 shutil.rmtree(_p23a_box, ignore_errors=True)
 # --- hết P23a ---
 
