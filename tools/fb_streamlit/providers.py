@@ -277,6 +277,17 @@ def _codex_bin() -> str:
     return path
 
 
+def _codex_child_env(home=None) -> dict:
+    """Môi trường cho MỘT lượt chạy CLI: trỏ thẳng vào home của nhà cần nói chuyện, còn lại giữ nguyên.
+
+    Đây là chỗ duy nhất home của một provider đi vào CLI. Đường chạy ⚡/▶ không truyền home nên vẫn
+    dùng home mặc định của máy — hành vi cũ không đổi.
+    """
+    env = os.environ.copy()
+    env["CODEX_HOME"] = str(Path(home) if home else codex_home())
+    return env
+
+
 def _codex_chat(prompt: str, system: str) -> str:
     full_prompt = prompt if not system else f"{system}\n\n{prompt}"
     binary = _codex_bin()
@@ -356,10 +367,11 @@ def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> 
     return src
 
 
-def codex_login_status() -> str:
+def codex_login_status(home=None) -> str:
     binary = _codex_bin()
     try:
-        proc = subprocess.run([binary, "login", "status"], capture_output=True, text=True, timeout=60)
+        proc = subprocess.run([binary, "login", "status"], capture_output=True, text=True, timeout=60,
+                              env=_codex_child_env(home))
     except (subprocess.TimeoutExpired, OSError) as exc:
         raise ProviderError(f"Không chạy được codex login status: {exc}") from exc
     text = ((proc.stdout or "") + (proc.stderr or "")).strip()
@@ -368,9 +380,9 @@ def codex_login_status() -> str:
     return f"CHƯA ĐĂNG NHẬP — {text or 'codex login status trả về rỗng'}"
 
 
-def codex_login() -> str:
+def codex_login(home=None) -> str:
     binary = _codex_bin()
-    subprocess.Popen([binary, "login"])
+    subprocess.Popen([binary, "login"], env=_codex_child_env(home))
     return "Đã chạy `codex login` — browser sẽ mở ra để bạn đăng nhập. Xong rồi bấm 'Kiểm tra trạng thái'."
 
 
@@ -380,6 +392,7 @@ def codex_login() -> str:
 # Cả hai đường đều CHỈ ĐỌC: không gửi prompt, không đổi tài khoản, không sửa session.
 
 USAGE_TIMEOUT = 20           # giây cho một lượt hỏi app-server — hết giờ là rơi xuống CACHED, không treo UI
+USAGE_ALL_BUDGET = 60        # tổng giây cho MỘT lượt xem nhiều tài khoản (đo thật: ~2-3.2 s cho một nhà LIVE)
 USAGE_CACHED_MAX_FILES = 60  # chỉ quét newest-first và dừng ở file đầu có số -> không cần đọc hết
 USAGE_CACHED_MAX_BYTES = 12_000_000
 USAGE_CACHED_MAX_AGE_DAYS = 30
@@ -399,9 +412,70 @@ class CodexUsageError(RuntimeError):
 
 
 def codex_home() -> Path:
-    """Home của CLI đang dùng — bản này một tài khoản nên không có pool CODEX_HOME riêng."""
+    """Home của CLI mà tool đang CHẠY bằng nó — biến CODEX_HOME toàn máy, chưa đặt thì ~/.codex.
+
+    Đây cũng chính là home mà ⚡/▶ thật sự dùng: đường chạy CLI không tự đặt CODEX_HOME, nó kế thừa
+    môi trường của tiến trình python đang chạy streamlit (app.py nạp .env vào đó).
+    """
     raw = os.getenv("CODEX_HOME", "").strip()
     return Path(raw) if raw else Path.home() / ".codex"
+
+
+def _env_var_name(name) -> str:
+    """Khuôn tên biến môi trường từ tên provider — lấy đúng luật migrate_raw_keys đã dùng."""
+    return re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+
+
+def codex_home_var(provider_name) -> str:
+    """Tên biến chứa CODEX_HOME RIÊNG của một bộ Codex, vd 'CODEX5' -> 'CODEX5_CODEX_HOME'.
+
+    Đường dẫn nhà của tài khoản CHỈ đi từ file .env trong FB_TOOL_HOME ra, không có ngả nào để
+    browser hay một ô nhập nào nhét đường dẫn vào đây.
+    """
+    cleaned = _env_var_name(provider_name)
+    return f"{cleaned}_CODEX_HOME" if cleaned else "CODEX_HOME"
+
+
+def codex_home_for(provider_name="") -> Path:
+    """Home của MỘT bộ Codex: biến <TÊN>_CODEX_HOME nếu đã khai báo, ngược lại home mặc định của máy."""
+    var = codex_home_var(provider_name)
+    raw = os.getenv(var, "").strip() if provider_name else ""
+    return Path(raw) if raw else codex_home()
+
+
+def _field(row, key, default=""):
+    """Đọc một cột từ cả dict lẫn sqlite3.Row — `db.list_providers` trả Row, mà Row không có .get()."""
+    try:
+        val = row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if val is None else val
+
+
+def codex_accounts(providers) -> list[dict]:
+    """GOM danh sách provider thành các NHÀ Codex thật sự khác nhau (một home = một tài khoản CLI).
+
+    Provider loại codex_cli chỉ là cái tên trỏ vào CLI trên máy, nên nhiều tên có thể cùng một home —
+    thêm bộ không tạo thêm dung lượng. Mỗi nhà trả kèm providers (mọi tên dùng chung home), var (biến
+    .env khai báo home riêng của nó) và runs_here (nhà này có phải nhà ⚡/▶ đang chạy hay không).
+    """
+    default_key = str(codex_home()).casefold()
+    out, by_home = [], {}
+    for p in providers or []:
+        if str(_field(p, "kind")) != "codex_cli":
+            continue
+        name = str(_field(p, "name"))
+        key = str(codex_home_for(name)).casefold()
+        rec = by_home.get(key)
+        if rec is not None:
+            rec["providers"].append(name)
+            continue
+        var = codex_home_var(name)
+        rec = {"providers": [name], "home": str(codex_home_for(name)), "var": var,
+               "declared": bool(os.getenv(var, "").strip()), "runs_here": key == default_key}
+        by_home[key] = rec
+        out.append(rec)
+    return out
 
 
 def _num(value):
@@ -522,14 +596,18 @@ def _usage_result(obj, source: str, stamp: str = "", reason: str = "") -> dict:
         if isinstance(c, dict):
             credits = c
             break
+    account_id = ""
+    if isinstance(obj, dict):
+        account_id = str(obj.get("accountId") or obj.get("account_id") or "")
     return {"source": source, "stamp": stamp, "reason": reason, "plan": _usage_plan(obj),
+            "account_id": account_id,
             "windows": _usage_windows(obj), "reached": reached, "ordinary_allowed": allowed,
             "credits": {"has": bool(credits.get("hasCredits", credits.get("has_credits", False))),
                         "unlimited": bool(credits.get("unlimited", False)),
                         "balance": str(credits.get("balance", "") or "")}}
 
 
-def _codex_rate_limits_live(timeout: int):
+def _codex_rate_limits_live(timeout: int, home=None):
     """Hỏi `codex app-server` bằng JSON-RPC: initialize -> initialized -> account/rateLimits/read.
 
     Ba kỷ luật lấy nguyên từ đường đã chạy ổn bên legacy: stderr đổ ra DEVNULL (stderr của CLI hay
@@ -540,7 +618,7 @@ def _codex_rate_limits_live(timeout: int):
     env = os.environ.copy()
     for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"):
         env.pop(key, None)  # đọc hạn mức thì không cần key; đưa vào con là rủi ro lộ không cần thiết
-    env["CODEX_HOME"] = str(codex_home())
+    env["CODEX_HOME"] = str(home or codex_home())
     flags = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
     try:
         proc = subprocess.Popen([exe, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -618,14 +696,14 @@ def _codex_rate_limits_live(timeout: int):
     return result
 
 
-def _codex_rate_limits_cached():
+def _codex_rate_limits_cached(home=None):
     """Số CUỐI CÙNG CLI tự ghi vào session log — (block hạn mức, timestamp) hoặc (None, "").
 
     Quét newest-first và DỪNG ở file đầu có số: 198 file session trên máy này mà đọc hết là mất
     giây, mà file mới nhất luôn là file mang số đang dùng. Chỉ tin đúng event `token_count`:
     chữ "rate_limits" dán trong prompt của người dùng không phải là số hạn mức.
     """
-    session_dir = codex_home() / "sessions"
+    session_dir = (home or codex_home()) / "sessions"
     if not session_dir.is_dir():
         return None, ""
     try:
@@ -676,40 +754,44 @@ def _codex_rate_limits_cached():
     return None, ""
 
 
-def codex_usage(timeout: int = USAGE_TIMEOUT) -> dict:
-    """Hạn mức Codex theo đúng ba mức tin được: LIVE (CLI đang trả lời) -> CACHED (số cuối CLI ghi) -> UNKNOWN.
+def codex_usage(timeout: int = USAGE_TIMEOUT, home=None) -> dict:
+    """Hạn mức Codex của MỘT nhà, theo đúng ba mức tin được: LIVE (CLI đang trả lời) -> CACHED (số cuối CLI ghi) -> UNKNOWN.
 
-    Không bao giờ che một lượt LIVE hỏng thành kết quả đẹp: CACHED luôn kèm thời điểm của bản ghi và
-    lý do LIVE thất bại, để anh biết con số đang nhìn là cũ cỡ nào.
+    `home` là thư mục CLI của nhà cần xem — không truyền thì dùng home mặc định của máy. Không bao
+    giờ che một lượt LIVE hỏng thành kết quả đẹp: CACHED luôn kèm thời điểm của bản ghi và lý do LIVE
+    thất bại, để anh biết con số đang nhìn là cũ cỡ nào.
     """
+    where = Path(home) if home else codex_home()
     try:
-        return _usage_result(_codex_rate_limits_live(timeout), "LIVE")
+        return _usage_result(_codex_rate_limits_live(timeout, where), "LIVE")
     except Exception as exc:
         reason = str(exc) if isinstance(exc, CodexUsageError) else type(exc).__name__
-        block, stamp = _codex_rate_limits_cached()
+        block, stamp = _codex_rate_limits_cached(where)
         if block is not None:
             return _usage_result(block, "CACHED", _stamp_utc(stamp), reason)
         return _usage_result({}, "UNKNOWN", "", reason)
 
 
-def codex_usage_text(usage: dict) -> str:
-    """Chữ hiển thị hạn mức — nhãn nói NGUỒN trước con số, và không hứa bất kỳ API gói/billing nào.
+def _usage_head(usage: dict) -> str:
+    """Câu nguồn của MỘT tài khoản — nói NGUỒN trước con số và không hứa bất kỳ API gói/billing nào.
 
     `planType` ở đây là thứ CLI báo về tài khoản của nó, không phải bằng chứng về hợp đồng nào, nên
-    câu chữ là 'gói theo CLI báo'. Dòng cuối nói thật tình trạng trần: chỉ để anh quyết định, tool
-    không tự dừng hàng đợi vì số này.
+    câu chữ là 'gói theo CLI báo'. Codex không có HTTP API usage/plan để gọi, nên 'nguồn' luôn là CLI
+    trên máy — hoặc số đang chạy, hoặc bản cuối CLI tự ghi.
     """
-    source = str(usage.get("source") or "UNKNOWN")
-    if source == "UNKNOWN":
-        return ("Không đọc được hạn mức Codex"
-                + (f": {usage.get('reason')}" if usage.get("reason") else "")
-                + " — Codex CLI không trả lời và session log của nó cũng không có số nào còn tin được "
-                  "(kiểm tra `codex login status` ở hai nút bên cạnh).")
-    head = ("Hạn mức Codex — đọc trực tiếp từ Codex CLI trên máy (chỉ đọc: không gửi prompt, không đổi tài khoản):"
-            if source == "LIVE" else
-            f"Hạn mức Codex — bản CUỐI CLI ghi lúc {usage.get('stamp') or '?'} (CLI không trả lời ngay"
-            f"{': ' + str(usage.get('reason')) if usage.get('reason') else ''}) — số có thể đã đổi:")
-    lines = [head]
+    if usage.get("source") == "LIVE":
+        return ("đọc trực tiếp từ Codex CLI trên máy (chỉ đọc: không gửi prompt, không đổi tài khoản)")
+    reason = usage.get("reason")
+    return (f"bản CUỐI CLI ghi lúc {usage.get('stamp') or '?'} (CLI không trả lời ngay"
+            f"{': ' + str(reason) if reason else ''}) — số có thể đã đổi")
+
+
+def _usage_body_lines(usage: dict) -> list:
+    """Các dòng số của MỘT tài khoản: hai cửa sổ, gói, tín dụng, và kết luận trần nói thật tình hình.
+
+    Dòng cuối chỉ để anh quyết định — tool không tự dừng hàng đợi vì số này (luật 'xem chứ không phanh').
+    """
+    lines = []
     windows = usage.get("windows") or []
     for w in windows:
         used = float(w["used"])
@@ -735,6 +817,90 @@ def codex_usage_text(usage: dict) -> str:
                      "tới lúc cửa sổ reset; hàng đợi không tự dừng, anh quyết định có bấm ▶ không.")
     elif windows and max(float(w["used"]) for w in windows) >= 80:
         lines.append("→ Còn chạy được nhưng đã dùng ≥80% — batch dài dễ chạm trần giữa chừng.")
+    return lines
+
+
+def codex_usage_text(usage: dict) -> str:
+    """Chữ hiển thị hạn mức của MỘT tài khoản (nhà mặc định của máy) — nguồn trước, số sau."""
+    if usage.get("source") == "UNKNOWN":
+        return ("Không đọc được hạn mức Codex"
+                + (f": {usage.get('reason')}" if usage.get("reason") else "")
+                + " — Codex CLI không trả lời và session log của nó cũng không có số nào còn tin được "
+                  "(kiểm tra `codex login status` ở hai nút bên cạnh).")
+    return "\n".join([f"Hạn mức Codex — {_usage_head(usage)}:", *_usage_body_lines(usage)])
+
+
+def codex_usage_all(providers, timeout: int = USAGE_TIMEOUT, budget: int = USAGE_ALL_BUDGET) -> dict:
+    """Xem hạn mức của MỌI nhà Codex, hỏi tuần tự trong một ngân sách thời gian chung.
+
+    Tuần tự là có lý do: mỗi nhà là một process `app-server` (~2-3.2 s đo thật), mở hết cùng lúc thì
+    chỉ thêm nguy cơ. Quá ngân sách thì nhà còn lại báo UNKNOWN kèm lý do thật, chứ không treo trang.
+    Hai nhà khác thư mục nhưng CLI báo cùng `accountId` được gộp thành MỘT tài khoản — đó chính là
+    câu trả lời cho 'thêm nhiều provider codex có tăng dung lượng không'.
+    """
+    accounts = codex_accounts(providers)
+    records, by_id = [], {}
+    start = time.monotonic()
+    for acc in accounts:
+        left = int(budget - (time.monotonic() - start))
+        if left < 1:
+            usage = _usage_result({}, "UNKNOWN", "", f"hết ngân sách {budget}s của một lượt xem")
+        else:
+            usage = codex_usage(max(3, min(timeout, left)), Path(acc["home"]))
+        rec = dict(usage)
+        rec.update({"providers": list(acc["providers"]), "home": acc["home"], "var": acc["var"],
+                    "declared": acc["declared"], "runs_here": acc["runs_here"]})
+        aid = rec.get("account_id") or ""
+        first = by_id.get(aid) if aid else None
+        if first is not None:
+            first["providers"] = first["providers"] + rec["providers"]
+            first["homes"] = first["homes"] + [rec["home"]]
+            continue
+        rec["homes"] = [rec["home"]]
+        if aid:
+            by_id[aid] = rec
+        records.append(rec)
+    return {"accounts": records, "run_home": str(codex_home()),
+            "n_providers": sum(len(a["providers"]) for a in accounts)}
+
+
+def codex_usage_all_text(result: dict) -> str:
+    """Chữ hiển thị cho LƯỢT XEM TẤT CẢ: một khối mỗi tài khoản thật, kèm số bộ codex_cli đứng sau nó."""
+    accounts = result.get("accounts") or []
+    n_providers = int(result.get("n_providers") or 0)
+    if not accounts:
+        return ("Chưa có bộ nào loại 'Codex CLI (local)' trong Cấu hình ▸ Providers, nên không có tài "
+                "khoản Codex nào để xem hạn mức.")
+    lines = [f"Hạn mức Codex — {len(accounts)} tài khoản CLI thật, đọc từ máy cho {n_providers} bộ codex_cli "
+             "(chỉ đọc: không gửi prompt, không đổi tài khoản, không API tính phí nào được gọi):"]
+    for i, rec in enumerate(accounts, start=1):
+        names = " · ".join(rec.get("providers") or [])
+        lines.append("")
+        lines.append(f"▸ [{i}] {names}" + (f" — {rec['account_id'][:8]}" if rec.get("account_id") else ""))
+        if rec.get("source") == "UNKNOWN":
+            lines.append(f"· không đọc được tài khoản này: {rec.get('reason') or 'CLI không trả lời'} "
+                         "— session log của nhà này cũng không có số còn tin được.")
+            continue
+        lines.append(f"· {_usage_head(rec)}")
+        home_note = "home của CLI mà tool ĐANG chạy bằng ⚡/▶" if rec.get("runs_here") else \
+            "nhà riêng — ⚡/▶ vẫn chạy bằng home mặc định, chưa nối nhà này vào đường chạy"
+        declared = f"khai báo ở biến {rec['var']}" if rec.get("declared") else "không khai báo home riêng"
+        lines.append(f"· home: {rec['home']} ({declared}) — {home_note}")
+        if len(rec.get("homes") or []) > 1:
+            lines.append(f"· {len(rec['homes'])} home khác nhau nhưng CLI báo cùng một accountId "
+                         "→ chỉ MỘT tài khoản, dung lượng không cộng dồn.")
+        lines.extend(_usage_body_lines(rec))
+    if n_providers > len(accounts):
+        lines.append("")
+        lines.append(f"→ {n_providers} tên bộ chỉ là {len(accounts)} tài khoản: thêm provider codex_cli "
+                     "KHÔNG tăng dung lượng, vì CLI trên máy chỉ có đúng số tài khoản đã đăng nhập.")
+    live_ok = [r for r in accounts if r.get("windows")]
+    free = [r for r in accounts
+            if r.get("windows") and not (r.get("reached") or r.get("ordinary_allowed") is False)]
+    if len(live_ok) > 1 and free and len(free) < len(live_ok):
+        lines.append(f"→ Còn {len(free)}/{len(live_ok)} tài khoản chưa chạm trần — "
+                     f"({', '.join(' · '.join(r['providers']) for r in free)}): muốn chạy tiếp thì chỉ định "
+                     "nhà đó cho B2, nhà đã trần vẫn phải chờ reset.")
     return "\n".join(lines)
 
 

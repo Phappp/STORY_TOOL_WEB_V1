@@ -699,28 +699,43 @@ def page_providers(c):
         if r["kind"] == "openai" and not (r["key_env"] or "").strip():
             st.caption("Lưu ý: provider không có key env thì request sẽ gửi không Authorization header (chỉ dùng được với endpoint công khai).")
         if r["kind"] == "codex_cli":
+            home = prov.codex_home_for(r["name"])
+            var = prov.codex_home_var(r["name"])
+            st.caption(
+                f"Nhà CLI của **{r['name']}**: `{home}`"
+                + ("" if home == prov.codex_home()
+                   else " · ⚠ đường chạy ⚡/▶ vẫn dùng home mặc định của máy, chưa nối nhà này vào.")
+                + f" Muốn thêm tài khoản Codex thật: tạo bộ `codex_cli` mới rồi thêm dòng "
+                  f"`{var}=<đường dẫn home>` vào `{paths.env_path()}` (tool tự đọc, không nhập đường dẫn ở đâu khác). "
+                  f" Hai bộ cùng một home là MỘT tài khoản — không cộng dung lượng."
+            )
             l1, l2, l3 = st.columns(3)
-            if l1.button("🔑 Đăng nhập Codex (mở browser)"):
+            if l1.button("🔑 Đăng nhập Codex (mở browser)",
+                         help=f"Đăng nhập vào đúng nhà {home} của bộ này — tài khoản khác thì home khác, "
+                              "không đụng tới nhà đang dùng."):
                 try:
-                    st.info(prov.codex_login())
+                    st.info(prov.codex_login(home))
                 except prov.ProviderError as exc:
                     st.error(str(exc))
-            if l2.button("Kiểm tra trạng thái đăng nhập"):
+            if l2.button("Kiểm tra trạng thái đăng nhập", help=f"Hỏi CLI xem nhà {home} đã đăng nhập chưa."):
                 try:
-                    st.success(prov.codex_login_status())
+                    st.success(prov.codex_login_status(home))
                 except prov.ProviderError as exc:
                     st.error(str(exc))
-            if l3.button("📊 Hạn mức Codex (chỉ đọc)",
-                         help="Hỏi chính Codex CLI trên máy — không gửi prompt, không đổi tài khoản, "
-                              "không có API tính phí nào được gọi. Số cũ sẽ ghi rõ là cũ."):
-                usage = prov.codex_usage()
-                text = prov.codex_usage_text(usage)
-                if usage["source"] == "UNKNOWN":
+            if l3.button("📊 Hạn mức Codex (chỉ đọc) — xem tất cả tài khoản",
+                         help="Hỏi chính Codex CLI trên máy cho MỌI bộ loại Codex, gộp những bộ cùng một "
+                              "tài khoản thật. Không gửi prompt, không đổi tài khoản, không có API tính phí "
+                              "nào được gọi. Số cũ sẽ ghi rõ là cũ."):
+                with st.spinner("Đang hỏi Codex CLI trên máy…"):
+                    usage = prov.codex_usage_all(db.list_providers(c))
+                text = prov.codex_usage_all_text(usage)
+                sources = [a["source"] for a in usage["accounts"]]
+                if not sources or all(s == "UNKNOWN" for s in sources):
                     st.error(text)
-                elif usage["source"] == "CACHED":
-                    st.warning(text)
-                else:
+                elif all(s == "LIVE" for s in sources):
                     st.success(text)
+                else:
+                    st.warning(text)
 
 
 # ---------- page: Workspace ----------

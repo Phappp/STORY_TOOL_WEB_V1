@@ -4747,7 +4747,7 @@ check("P18f một tài khoản một home: home đọc từ CODEX_HOME, chưa đ
       str(prov.codex_home()) == str(_p18f_home)
       and 'os.getenv("CODEX_HOME", "")' in (Path(__file__).resolve().parent / "providers.py").read_text(encoding="utf-8"))
 _REAL_LIVE_P18F = prov._codex_rate_limits_live
-prov._codex_rate_limits_live = lambda timeout: (_ for _ in ()).throw(
+prov._codex_rate_limits_live = lambda timeout=0, home=None: (_ for _ in ()).throw(
     prov.CodexUsageError("hạn mức", "hết chờ"))
 _u18f_cached = prov.codex_usage()
 check("P18f LIVE hỏng -> CACHED thật, và lý do LIVE hỏng đi kèm chứ bị nuốt: source/used/reason/stamp "
@@ -4755,13 +4755,13 @@ check("P18f LIVE hỏng -> CACHED thật, và lý do LIVE hỏng đi kèm chứ 
       _u18f_cached["source"] == "CACHED" and _u18f_cached["windows"][0]["used"] == 44.0
       and _u18f_cached["reason"] == "hạn mức: hết chờ" and _u18f_cached["stamp"]
       and _u18f_cached["plan"] == "plus")
-prov._codex_rate_limits_live = lambda timeout: _P18F_LIVE
+prov._codex_rate_limits_live = lambda timeout=0, home=None: _P18F_LIVE
 _u18f_live = prov.codex_usage()
 check("P18f LIVE trả lời là KHÔNG thèm đọc session log: source LIVE, reason trống",
       _u18f_live["source"] == "LIVE" and _u18f_live["reason"] == ""
       and [w["used"] for w in _u18f_live["windows"]] == [0.0, 100.0])
 os.environ["CODEX_HOME"] = str(Path(tempfile.mkdtemp(prefix="fbcodex_empty_")))
-prov._codex_rate_limits_live = lambda timeout: (_ for _ in ()).throw(
+prov._codex_rate_limits_live = lambda timeout=0, home=None: (_ for _ in ()).throw(
     prov.CodexUsageError("app-server", "CLI đóng pipe trước khi trả lời"))
 _u18f_unknown = prov.codex_usage()
 check("P18f cả hai đường cùng hỏng -> UNKNOWN kèm lý do, windows rỗng — không có trường hợp 'nguồn lạ "
@@ -4787,7 +4787,7 @@ check("P18f giữ kỷ luật an toàn của đường đọc: stderr đổ th�
       "và lượt hỏi có trần giây để không treo trang",
       "stderr=subprocess.DEVNULL" in _p18f_sec
       and all(k in _p18f_sec for k in ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"))
-      and 'env["CODEX_HOME"] = str(codex_home())' in _p18f_sec
+      and 'env["CODEX_HOME"] = str(home or codex_home())' in _p18f_sec
       and "proc.terminate()" in _p18f_sec and "proc.kill()" in _p18f_sec
       and "max(3, min(timeout, 45))" in _p18f_sec)
 check("P18f KHÔNG gọi HTTP nào để hỏi hạn mức — Codex không có API usage/plan/để mà gọi; ai thêm "
@@ -4795,10 +4795,10 @@ check("P18f KHÔNG gọi HTTP nào để hỏi hạn mức — Codex không có 
       "httpx" not in _p18f_sec)
 _p18f_app_src = (Path(__file__).resolve().parent / "app.py").read_text(encoding="utf-8")
 check("P18f nút nằm ĐÚNG chỗ hai nút đăng nhập (Cấu hình ▸ Providers, hàng 3 cột) và màu nói đúng mức "
-      "tin: LIVE xanh, CACHED vàng, UNKNOWN đỏ",
+      "tin: LIVE xanh, có số CACHED/UNKNOWN lẫn vào thì vàng, không đọc được gì thì đỏ",
       'l1, l2, l3 = st.columns(3)' in _p18f_app_src
-      and 'l3.button("📊 Hạn mức Codex (chỉ đọc)"' in _p18f_app_src
-      and 'if usage["source"] == "UNKNOWN":' in _p18f_app_src
+      and 'l3.button("📊 Hạn mức Codex (chỉ đọc) — xem tất cả tài khoản"' in _p18f_app_src
+      and 'all(s == "UNKNOWN" for s in sources)' in _p18f_app_src
       and "st.error(text)" in _p18f_app_src and "st.warning(text)" in _p18f_app_src
       and "st.success(text)" in _p18f_app_src)
 _p18f_grid_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
@@ -4813,7 +4813,7 @@ check("P18f là chỗ XEM chứ không phải cái phanh: grid / grid_actions / 
 db.add_provider(conn, "P18fCodex", "codex_cli", "", "", "")
 _p18f_pid = next(x["id"] for x in db.list_providers(conn) if x["name"] == "P18fCodex")
 _p18f_real_usage = prov.codex_usage
-prov.codex_usage = lambda timeout=0: _u18f
+prov.codex_usage = lambda timeout=0, home=None: _u18f
 try:
     at_p18f = AppTest.from_file(str(Path(__file__).resolve().parent / "app.py"), default_timeout=30)
     at_p18f.run()
@@ -4837,6 +4837,181 @@ finally:
     prov.codex_usage = _p18f_real_usage
     db.delete_provider(conn, _p18f_pid)
 # --- hết P18f ---
+
+# --- P18g: NHIỀU tài khoản Codex — một lượt xem hỏi hết, gộp trùng theo home rồi theo accountId ---
+# Nhà của từng bộ lấy từ biến <TÊN>_CODEX_HOME trong .env (khuôn tên biến y hệt <TÊN>_API_KEY của
+# migrate_raw_keys). Không có ngả nào khác: đường dẫn tuyệt đối không bao giờ được browser gửi lên.
+_P18G_H1 = Path(tempfile.mkdtemp(prefix="fbcodex_h1_"))   # home MẶC ĐỊNH của máy trong test này
+_P18G_H2 = Path(tempfile.mkdtemp(prefix="fbcodex_h2_"))   # home riêng, khai báo bằng biến
+_P18G_ENV_OLD = {v: os.environ.get(v) for v in ("CODEX_HOME", "G1_CODEX_HOME", "G2_CODEX_HOME",
+                                                "G3_CODEX_HOME", "SA_CODEX_HOME", "SB_CODEX_HOME")}
+os.environ["CODEX_HOME"] = str(_P18G_H1)
+os.environ["G2_CODEX_HOME"] = str(_P18G_H2)
+_P18G_PROVIDERS = [{"name": "G1", "kind": "codex_cli"}, {"name": "G3", "kind": "codex_cli"},
+                   {"name": "G2", "kind": "codex_cli"}, {"name": "TTAG", "kind": "openai"}]
+
+
+def _p18g_logline(percent):
+    """Một dòng session log thật-shaped cho home giả, để đo CACHED theo từng nhà."""
+    return json.dumps({"timestamp": _p18f_iso(-60), "type": "event_msg", "payload": {
+        "type": "token_count", "info": None,
+        "rate_limits": {"limit_id": "codex",
+                        "primary": {"used_percent": float(percent), "window_minutes": 300}}}})
+
+
+for _h18g, _pct18g in ((_P18G_H1, 66), (_P18G_H2, 22)):
+    (_h18g / "sessions" / "2026-11-07").mkdir(parents=True, exist_ok=True)
+    (_h18g / "sessions" / "2026-11-07" / "rollout.jsonl").write_text(_p18g_logline(_pct18g), encoding="utf-8")
+
+check("P18g tên biến home theo ĐÚNG khuôn tên biến key (xóa hết chữ thường/không alnum): 'G2' -> "
+      "G2_CODEX_HOME, tên có gạch ngang/dấu cách bị lọc y như migrate_raw_keys — tên rỗng thì về "
+      "CODEX_HOME chung",
+      prov.codex_home_var("G2") == "G2_CODEX_HOME"
+      and prov.codex_home_var("codex 5-x") == "CODEX5X_CODEX_HOME"
+      and prov.codex_home_var("") == "CODEX_HOME"
+      and 're.sub(r"[^A-Z0-9]", "", str(name or "").upper())' in _p18f_sec)
+check("P18g home của một bộ = biến riêng nếu .env đã khai báo, chưa khai báo thì home mặc định của "
+      "máy — không có 'nhà thứ hai ảo' chỉ vì đặt thêm một cái tên provider",
+      str(prov.codex_home_for("G2")) == str(_P18G_H2)
+      and str(prov.codex_home_for("G1")) == str(_P18G_H1)
+      and str(prov.codex_home_for("CHUA_KAI_BAO")) == str(_P18G_H1))
+_acc18g = prov.codex_accounts(_P18G_PROVIDERS)
+check("P18g gom provider thành NHÀ: 3 bộ codex_cli mà chỉ 2 home -> 2 tài khoản, G1+G3 đứng chung một "
+      "khối, provider openai bị loại — đây chính là câu trả lời cho 'thêm nhiều bộ codex có tính là "
+      "nhiều tài khoản không'",
+      len(_acc18g) == 2 and [a["providers"] for a in _acc18g] == [["G1", "G3"], ["G2"]]
+      and [a["home"] for a in _acc18g] == [str(_P18G_H1), str(_P18G_H2)])
+check("P18g mỗi nhà nói rõ NÓ là ai: biến nào khai báo home, nhà này có phải nhà tool đang chạy "
+      "bằng hay không — để nhãn không thể nói dối",
+      _acc18g[0]["runs_here"] is True and _acc18g[0]["declared"] is False
+      and _acc18g[1]["runs_here"] is False and _acc18g[1]["declared"] is True
+      and _acc18g[1]["var"] == "G2_CODEX_HOME")
+check("P18g không có bộ codex nào -> không có nhà nào, không crash (kể cả providers = None)",
+      prov.codex_accounts([{"name": "T", "kind": "openai"}]) == [] and prov.codex_accounts(None) == [])
+
+_P18G_FREE = {"ordinaryUsageAllowed": True, "accountId": "acct-2", "rateLimits": {
+    "limitId": "codex",
+    "primary": {"usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1794033241},
+    "secondary": {"usedPercent": 5, "windowDurationMins": 10080, "resetsAt": 1794369307},
+    "planType": "plus"}}
+_P18G_BY_HOME = {}
+_P18G_CALLS = []
+_REAL_LIVE_P18G = prov._codex_rate_limits_live
+_REAL_USAGE_P18G = prov.codex_usage
+
+
+def _p18g_live(timeout=0, home=None):
+    _P18G_CALLS.append(str(home))
+    obj = _P18G_BY_HOME.get(str(home))
+    if obj is None:
+        raise prov.CodexUsageError("hạn mức", "hết chờ")
+    return obj
+
+
+prov._codex_rate_limits_live = _p18g_live
+try:
+    _P18G_BY_HOME = {str(_P18G_H1): _P18F_LIVE, str(_P18G_H2): _P18G_FREE}  # H1 chạm trần, H2 còn số
+    _all18g = prov.codex_usage_all(_P18G_PROVIDERS)
+    check("P18g một cú bấm hỏi TỪNG NHÀ một và hỏi đúng home của nhà đó (không phải hỏi home mặc định "
+          "ba lần) — app-server nhận home theo tham số",
+          sorted(_P18G_CALLS) == sorted([str(_P18G_H1), str(_P18G_H2)]))
+    check("P18g số của từng nhà đứng riêng: nhà chạm trần vẫn báo ĐÃ CHẠM TRẦN, nhà còn hạn mức không bị "
+          "tô chung thành hết — ba cửa sổ trên một màn hình không được lẫn vào nhau",
+          len(_all18g["accounts"]) == 2 and _all18g["n_providers"] == 3
+          and [a["reached"] for a in _all18g["accounts"]] == ["rate_limit_reached", None]
+          and [a["windows"][0]["used"] for a in _all18g["accounts"]] == [0.0, 12.0])
+    _t18g = prov.codex_usage_all_text(_all18g)
+    check("P18g đầu dòng nói ĐỦ hai con số: mấy tài khoản thật và mấy bộ codex_cli đứng sau — đọc là "
+          "biết thêm tên bộ có tăng dung lượng hay không",
+          "2 tài khoản CLI thật, đọc từ máy cho 3 bộ codex_cli" in _t18g
+          and "3 tên bộ chỉ là 2 tài khoản: thêm provider codex_cli KHÔNG tăng dung lượng" in _t18g)
+    check("P18g mỗi khối kể được nhà nào (tên bộ + accountId ngắn), home nào, khai báo ở biến nào, và "
+          "nhà nào tool CHƯA chạy bằng — đường dẫn không tới từ browser nên phải chỉ chỗ sửa trong .env",
+          "▸ [1] G1 · G3 — acct-1" in _t18g and "(không khai báo home riêng)" in _t18g
+          and "home của CLI mà tool ĐANG chạy bằng ⚡/▶" in _t18g
+          and "▸ [2] G2 — acct-2" in _t18g and "(khai báo ở biến G2_CODEX_HOME)" in _t18g
+          and "chưa nối nhà này vào đường chạy" in _t18g)
+    check("P18g có nhà còn trần mà nhà khác chưa hết thì nói to cơ hội: bao nhiêu/bao nhiêu tài khoản "
+          "còn chạy được — nhưng vẫn là chữ để anh quyết, tool không tự đổi provider",
+          "Còn 1/2 tài khoản chưa chạm trần" in _t18g and "chỉ định" in _t18g
+          and "nhà đã trần vẫn phải chờ reset" in _t18g)
+
+    # Hai home khác nhau nhưng CLI báo cùng accountId -> vẫn là MỘT tài khoản.
+    os.environ["SA_CODEX_HOME"] = str(_P18G_H1)
+    os.environ["SB_CODEX_HOME"] = str(_P18G_H2)
+    _P18G_BY_HOME = {str(_P18G_H1): _P18F_LIVE, str(_P18G_H2): dict(_P18F_LIVE, accountId="acct-1")}
+    _same18g = prov.codex_usage_all([{"name": "SA", "kind": "codex_cli"},
+                                     {"name": "SB", "kind": "codex_cli"}])
+    _tsame18g = prov.codex_usage_all_text(_same18g)
+    check("P18g hai home nhưng CÙNG accountId bị gộp thành một khối: tên bộ dồn hết vào nhau và dòng "
+          "giải thích nói thẳng 'dung lượng không cộng dồn' — không được để anh tưởng có hai tài khoản",
+          len(_same18g["accounts"]) == 1 and _same18g["accounts"][0]["providers"] == ["SA", "SB"]
+          and len(_same18g["accounts"][0]["homes"]) == 2 and "dung lượng không cộng dồn" in _tsame18g
+          and "2 tên bộ chỉ là 1 tài khoản" in _tsame18g)
+
+    # Nhà im lặng phải rơi xuống session log CỦA CHÍNH NÓ, không ăn số của nhà bên cạnh.
+    _P18G_BY_HOME = {str(_P18G_H2): _P18G_FREE}
+    _cach18g = prov.codex_usage_all(_P18G_PROVIDERS)
+    _tcach18g = prov.codex_usage_all_text(_cach18g)
+    check("P18g LIVE hỏng ở nhà nào thì đọc session log của NHÀ ĐÓ: G1·G3 ra CACHED 66% từ "
+          "home mặc định, G2 vẫn LIVE 12% — số của nhà này không được đội lốt nhà kia",
+      [a["source"] for a in _cach18g["accounts"]] == ["CACHED", "LIVE"]
+          and _cach18g["accounts"][0]["windows"][0]["used"] == 66.0
+          and _cach18g["accounts"][1]["windows"][0]["used"] == 12.0
+          and "bản CUỐI CLI ghi lúc" in _tcach18g)
+
+    _P18G_CALLS.clear()
+    _broke18g = prov.codex_usage_all(_P18G_PROVIDERS, budget=0)
+    check("P18g quá ngân sách thời gian là KHÔNG spawn thêm process nào nữa và báo thẳng bằng UNKNOWN "
+          "(một lượt xem không được treo trang Provider)",
+          _P18G_CALLS == [] and all(a["source"] == "UNKNOWN" for a in _broke18g["accounts"])
+          and "ngân sách" in _broke18g["accounts"][0]["reason"])
+    _tbroke18g = prov.codex_usage_all_text(_broke18g)
+    check("P18g UNKNOWN của một nhà không được bịa số: không %, không 'cửa sổ', và nhà nào cũng có dòng "
+          "'không đọc được tài khoản này' của riêng nó",
+          "%" not in _tbroke18g and "cửa sổ" not in _tbroke18g
+          and _tbroke18g.count("không đọc được tài khoản này") == 2)
+    _empty18g = prov.codex_usage_all_text({"accounts": [], "n_providers": 0})
+    check("P18g chưa có bộ Codex nào thì chỉ dẫn đúng chỗ thêm, không phải màn hình trắng",
+          "Codex CLI (local)" in _empty18g and "Providers" in _empty18g)
+    check("P18g chữ của MỘT nhà dùng chung bộ mã với P18f: cùng một câu nguồn hiện trong cả "
+          "codex_usage_text lẫn khối của codex_usage_all_text — hai màn hình không được nói hai kiểu",
+          "đọc trực tiếp từ Codex CLI trên máy" in prov.codex_usage_text(_u18f_live)
+          and "đọc trực tiếp từ Codex CLI trên máy" in _t18g
+          and "ĐÃ CHẠM TRẦN" in prov.codex_usage_text(_u18f_live)
+          and "→ Còn chạy được nhưng đã dùng ≥80%" not in _t18g)
+finally:
+    prov._codex_rate_limits_live = _REAL_LIVE_P18G
+    prov.codex_usage = _REAL_USAGE_P18G
+    for _k18g, _v18g in _P18G_ENV_OLD.items():
+        if _v18g is None:
+            os.environ.pop(_k18g, None)
+        else:
+            os.environ[_k18g] = _v18g
+    for _d18g in (_P18G_H1, _P18G_H2):
+        shutil.rmtree(_d18g, ignore_errors=True)
+
+check("P18g không có ngả nào để browser đưa home vào: grid / grid_actions / steps + HTML component không "
+      "biết gì về codex_home, còn app.py chỉ lấy tên bộ từ DB — đường dẫn đi từ file .env ra",
+      all("codex_home" not in (Path(__file__).resolve().parent / f).read_text(encoding="utf-8")
+          for f in ("grid.py", "grid_actions.py", "steps.py"))
+      and "codex_home" not in (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+      and "prov.codex_usage_all(db.list_providers(c))" in _p18f_app_src)
+_run18g = _p18f_src[_p18f_src.index("def _codex_chat("):_p18f_src.index("def codex_login_status(")]
+check("P18g THẬT như những gì nó nói: đường CHẠY CLI (_codex_chat / imagegen) vẫn chưa nhận home riêng, "
+      "nên màn hình hạn mức phải cảnh báo 'chưa nối nhà này vào đường chạy' chứ không được làm bộ mặt "
+      "như đã chạy đa tài khoản — nối home vào run là phần tiếp theo, cần anh duyệt",
+      "CODEX_HOME" not in _run18g and "env=_codex_child_env" not in _run18g
+      and "chưa nối nhà này vào đường chạy" in _p18f_sec
+      and "⚠ đường chạy ⚡/▶ vẫn dùng home mặc định" in _p18f_app_src)
+check("P18g hai nút đăng nhập cũng đi theo home của bộ đang chọn (trước đây máy nào cũng chỉ login được "
+      "một tài khoản): env của CLI con do _codex_child_env quyết định, không truyền home thì y như cũ",
+      "def _codex_child_env(home=None)" in _p18f_src[:_p18f_src.index("# ---------- P18f")]
+      and "env=_codex_child_env(home)" in _p18f_src
+      and "prov.codex_login(home)" in _p18f_app_src
+      and "prov.codex_login_status(home)" in _p18f_app_src)
+# --- hết P18g ---
+
 
 # cleanup test rows
 c = db.connect()
