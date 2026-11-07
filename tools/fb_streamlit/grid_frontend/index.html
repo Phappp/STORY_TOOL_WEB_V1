@@ -277,6 +277,12 @@
   button.b.tog.on { background:var(--accent); color:#0b1620; border-color:var(--accent); }
   button.b.tog.on:hover { filter:brightness(1.1); }
   .empty { padding:20px; color:var(--muted); }
+  /* P24a: nút nới cửa sổ VẼ. Đứng NGOÀI <tbody> (ngay dưới .bar) vì patchCells đếm
+     LAST_TBODY.children theo chỉ số hàng — thêm node vào tbody là lệch cả bảng. */
+  .more { margin:6px 10px 0; padding:3px 10px; font:inherit; font-size:12px; color:var(--muted);
+    background:var(--btn); border:1px solid var(--border); border-radius:6px; cursor:pointer;
+    align-self:flex-start; }
+  .more:hover { color:var(--text); border-color:var(--accent); }
   .muted { color:var(--muted); }
   /* ô tìm kiếm ngay trên grid — lọc client-side, không gửi event mỗi lần gõ */
   .bar input.find { height:24px; width:210px; font:inherit; font-size:12px; padding:1px 6px;
@@ -526,6 +532,33 @@ function visible() {
     const fields = searchFields(row);
     return terms.every(t => fields.some(f => f.indexOf(t) >= 0));
   });
+}
+
+// P24a: VẼ tối đa SHOWN hàng, nhưng phần DỮ LIỆU vẫn là cả workspace.
+// Vì sao cắt ở DOM chứ không cắt ở payload: ô tìm, ◂ ▸ trong modal (`neighbours`) và Export đều đọc
+// `visible()`/`rows()` client-side (P6d+P18c) — Python mà chỉ gửi 20 bài thì ba chỗ đó âm thầm chỉ
+// còn thấy 20, tức là "tìm không ra" dễ bị hiểu thành "không có bài". Nút ▴ đầu lưới chỉ nới cửa sổ
+// VẼ, mọi tính năng khác giữ nguyên. Bài MỚI NHẤT nằm CUỐI danh sách (`list_story_ids` sắp tăng dần
+// theo id) nên cửa sổ lấy ĐUÔI.
+const PAGE_ROWS = 20;
+let SHOWN = PAGE_ROWS;   // số hàng được vẽ — reset khi đổi workspace
+function windowed(list) {
+  // Đang tìm thì vẽ HẾT: 5 kết quả trong 400 bài mà còn bắt bấm "xem thêm" là nói dối người đọc.
+  if (SEARCH.trim() || list.length <= SHOWN) return list;
+  return list.slice(list.length - SHOWN);
+}
+function showMoreButton(full, drawn) {
+  const rest = full.length - drawn.length;
+  if (rest <= 0) return null;
+  const step = Math.min(PAGE_ROWS, rest);
+  const b = el("button", "more", "▴ Hiện " + step + " bài cũ hơn (còn " + rest + ")");
+  b.type = "button";
+  b.title = "Lưới đang vẽ " + drawn.length + " bài MỚI NHẤT trong " + full.length
+    + " bài của bộ lọc này cho nhẹ trang. Bấm để vẽ thêm " + step + " bài cũ hơn.\n"
+    + "Chỉ phần VẼ bị cắt — dữ liệu vẫn nguyên: ô tìm, ◂ ▸ trong modal và Export vẫn đi hết cả "
+    + full.length + " bài.";
+  b.addEventListener("click", () => { SHOWN += PAGE_ROWS; repaint(); });
+  return b;
 }
 
 function lsGet(key) { try { return window.localStorage.getItem(key); } catch (_) { return null; } }
@@ -2859,8 +2892,11 @@ function statsBar() {
 }
 
 function countText() {
-  return "hiện " + visible().length + " bài"
-    + (SEARCH.trim() ? "/" + rows().length + " (đang tìm “" + SEARCH.trim() + "”)" : "")
+  const full = visible();
+  const drawn = windowed(full).length;
+  return "hiện " + drawn + (drawn < full.length ? "/" + full.length : "") + " bài"
+    + (drawn < full.length ? " (mới nhất — ▴ xem bài cũ hơn)" : "")
+    + (SEARCH.trim() ? " trong " + rows().length + " bài" : "")
     + (MODEL.workspace ? " · " + MODEL.workspace : "");
 }
 
@@ -2987,14 +3023,15 @@ function render(args, force) {
     video_types: Array.isArray(args.video_types) ? args.video_types : [],
     video_response: args.video_response && typeof args.video_response === "object" ? args.video_response : {},
   };
-  if (MODEL.workspace !== wasWorkspace) REFRESH_PENDING = null;  // đổi workspace: không có cú bấm nào đang chờ nữa
+  if (MODEL.workspace !== wasWorkspace) { REFRESH_PENDING = null; SHOWN = PAGE_ROWS; }  // đổi workspace: không có cú bấm nào đang chờ nữa, cửa sổ vẽ về 20
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
   ingestIo();        // tương tự cho bảng Import/Export — preview phải hiện ngay lượt vẽ này
   ingestVideo();     // và cho mẩu video vừa được server xác nhận (P21c)
   const alive = new Set(rows().map(r => String(r.id)));
   if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
   if (CURSOR && !alive.has(CURSOR)) CURSOR = "";
-  const list = visible();
+  const full = visible();
+  const list = windowed(full);
   const lsig = listSigOf(list);
   const wantModal = !!modalRef();
   const W = widths();
@@ -3040,10 +3077,12 @@ function render(args, force) {
 
   if (!rows().length) {
     wrap.appendChild(el("div", "empty", "Workspace này chưa có story nào (hoặc bộ lọc đang che hết) — mở trang Tạo bài, hoặc đổi bộ lọc 'Lọc bài'."));
-  } else if (!visible().length) {
+  } else if (!full.length) {
     wrap.appendChild(el("div", "empty", "Không bài nào khớp “" + SEARCH.trim() + "” trong " + rows().length
       + " bài đang hiện — thử từ ngắn hơn (id, một chữ trong chủ đề) hoặc xoá ô tìm."));
   } else {
+    const more = showMoreButton(full, list);
+    if (more) wrap.appendChild(more);  // ở ĐẦU lưới vì bài mới nhất nằm cuối: mở thêm là thêm lên trên
     const scroll = el("div", "scroll");
     table = document.createElement("table");
     const group = el("colgroup");

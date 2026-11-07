@@ -4628,7 +4628,8 @@ check("P21h bấm là đổi ngay (khuôn P10a) nhưng quyền đoán có cửa 
       "chừng nào server còn chưa trả đúng giá trị đó, và mất hiệu lực khi đổi workspace",
       "REFRESH_PENDING = next;" in _p21h_btn and "paintRefresh(b);  // đổi ngay lúc bấm" in _p21h_btn
       and "REFRESH_PENDING = null;  // server đã trả đúng cú bấm này" in _p21h_on
-      and "if (MODEL.workspace !== wasWorkspace) REFRESH_PENDING = null;" in _p21h_fe)
+      and re.search(r"if \(MODEL\.workspace !== wasWorkspace\) \{ REFRESH_PENDING = null; SHOWN = PAGE_ROWS; \}", _p21h_fe)
+      is not None)  # P24a thêm reset cửa sổ vẽ vào đúng dòng này — vẫn phải là MỘT dòng, hai việc đều thuộc đổi workspace
 check("P21h nhánh vá tại chỗ cũng phải thấy nhịp mới: updateBar sơn lại nút theo id, và repaint() phải "
       "truyền auto_refresh (lấy từ refreshOn, tức là đã tính cú bấm chưa xác nhận) — thiếu một trong hai "
       "là nút đứng im tới lần dựng lại cả lưới kế tiếp",
@@ -5911,6 +5912,92 @@ check("P23e lưới in con số THẬT lên chip ('caption 97%' từ `dup.sim`, 
       and "≥90%" in _p23c_fe and "khuôn mẫu" in _p23c_fe)
 shutil.rmtree(_p23a_box, ignore_errors=True)
 # --- hết P23a ---
+
+
+# --- P24a: lưới chỉ VẼ 20 bài mới nhất, ▴ mở dần — chạy thật bằng node chứ không soi chữ ---
+_p24a_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p24a_src = re.search(r"(const PAGE_ROWS = 20;.*?)\nfunction lsGet", _p24a_fe, re.S).group(1)
+_p24a_node = shutil.which("node")
+if _p24a_node:
+    _p24a_js = """
+let SEARCH = "";
+const repaintCalls = [];
+const repaint = () => repaintCalls.push(1);
+const el = (tag, cls, text) => {
+  const o = { tag, className: cls, text, type: "", title: "", _h: null,
+              addEventListener(kind, fn) { o._h = fn; } };
+  return o;
+};
+%s
+const mk = n => Array.from({ length: n }, (_, i) => ({ id: "story_" + String(i).padStart(3, "0") }));
+const full40 = mk(40);
+const out = [];
+SEARCH = ""; SHOWN = 20;
+const w20 = windowed(full40);
+out.push(["cửa sổ lấy ĐUÔI 20 bài mới nhất (id 020..039), không phải đầu",
+          w20.length === 20 && w20[0].id === "story_020" && w20[19].id === "story_039"]);
+SEARCH = "   ";
+out.push(["ô tìm chỉ có khoảng trắng = không tìm gì -> vẫn cắt còn 20",
+          windowed(full40).length === 20]);
+SEARCH = "hue";
+out.push(["đang tìm thì vẽ HẾT kết quả (40 bài khớp không phải bấm thêm)",
+          windowed(full40).length === 40]);
+SEARCH = "";
+out.push(["workspace <= 20 bài không bị cắt và không có nút",
+          windowed(mk(20)).length === 20 && showMoreButton(mk(20), windowed(mk(20))) === null
+          && showMoreButton(mk(5), windowed(mk(5))) === null]);
+const b20 = showMoreButton(full40, w20);
+out.push(["nhãn nói đủ hai số: hiện thêm 20, còn 20",
+          !!b20 && b20.text === "▴ Hiện 20 bài cũ hơn (còn 20)"]);
+out.push(["title nói thẳng chỉ phần VẼ bị cắt, dữ liệu vẫn nguyên cho tìm/modal/Export",
+          !!b20 && b20.title.includes("Chỉ phần VẼ bị cắt") && b20.title.includes("Export vẫn đi hết")]);
+out.push(["bấm một lần = thêm đúng 20 hàng và gọi repaint đúng 1 lần",
+          (function () { const before = SHOWN; b20._h(); return SHOWN === before + 20 && repaintCalls.length === 1; })()]);
+SHOWN = 40;
+out.push(["mở tới hết thì nút biến mất (không bấm mãi được)",
+          windowed(full40).length === 40 && showMoreButton(full40, windowed(full40)) === null]);
+SHOWN = 20;
+const b5 = showMoreButton(mk(25), windowed(mk(25)));
+out.push(["dư 5 bài thì nút đòi đúng 5, không đòi 20", !!b5 && b5.text === "▴ Hiện 5 bài cũ hơn (còn 5)"]);
+SHOWN = 20;
+out.push(["nút bẹp khi list rỗng", showMoreButton([], []) === null]);
+console.log(JSON.stringify(out));
+""" % _p24a_src
+    _p24a_tmp = Path(tempfile.mkdtemp(prefix="fbjs24a_")) / "window.js"
+    _p24a_tmp.write_text(_p24a_js, encoding="utf-8")
+    _p24a_proc = subprocess.run([_p24a_node, str(_p24a_tmp)], capture_output=True, text=True, encoding="utf-8")
+    _p24a_rows = []
+    if _p24a_proc.returncode == 0:
+        try:
+            _p24a_rows = json.loads(_p24a_proc.stdout.strip().splitlines()[-1])
+        except Exception:
+            _p24a_rows = []
+    for _p24a_name, _p24a_ok in _p24a_rows:
+        check("P24a %s" % _p24a_name, _p24a_ok)
+    check("P24a harness node phải chạy được và trả đủ 10 nhận định (lỗi cú pháp trong khối windowed "
+          "là lưới chết im lặng, suite chữ không thấy gì)", len(_p24a_rows) == 10)
+    shutil.rmtree(_p24a_tmp.parent, ignore_errors=True)
+else:
+    print("(bỏ qua harness P24a: không có node trong PATH)")
+
+_p24a_render = _p24a_fe.split("function render(")[1].split("window.addEventListener")[0]
+check("P24a nút ▴ đứng NGOÀI <tbody> — patchCells/listSigOf đếm LAST_TBODY.children theo chỉ số hàng, "
+      "thêm node vào tbody là lệch ô của mọi bài sau đó",
+      "wrap.appendChild(more)" in _p24a_render and "tbody.appendChild(more)" not in _p24a_fe
+      and _p24a_render.index("wrap.appendChild(more)")
+      < _p24a_render.index('tbody = document.createElement("tbody")'))
+check("P24a chữ ký vá ô tính trên CỬA SỔ ĐÃ VẼ (`list`), không phải cả danh sách — nếu lấy `full` thì "
+      "mở thêm bài sẽ bị fast-path bỏ qua vì 'lưới không đổi'",
+      "const lsig = listSigOf(list)" in _p24a_render and "patchCells(list)" in _p24a_render
+      and "LAST_SIGS = list.map" in _p24a_render)
+check("P24a đổi workspace thì cửa sổ về lại 20 (đừng để SHOWN phình sang bộ khác) và có rule CSS .more "
+      "nên nút không hiện như chữ trần",
+      "REFRESH_PENDING = null; SHOWN = PAGE_ROWS;" in _p24a_fe and ".more {" in _p24a_fe)
+check("P24a ô đếm nói ĐỦ hai số + trỏ đúng chỗ tìm bài cũ ('hiện 20/40 bài (mới nhất — ▴ xem bài cũ hơn)') "
+      "chứ không chỉ báo 20 rồi để người đọc đoán",
+      'return "hiện " + drawn' in _p24a_fe and "(mới nhất — ▴ xem bài cũ hơn)" in _p24a_fe
+      and 'const drawn = windowed(full).length;' in _p24a_fe)
+# --- hết P24a ---
 
 
 # cleanup test rows
