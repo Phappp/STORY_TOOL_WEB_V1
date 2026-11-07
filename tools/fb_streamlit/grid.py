@@ -33,7 +33,7 @@ APP_RUN_KEY = "grid_app_run"       # đếm lượt vẽ cả trang: lượt m�
 READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request", "modal_request",
                 # bảng Import/Export: đọc file anh chọn rồi trả lời, export chỉ dựng chuỗi trong RAM —
                 # không folder story nào đổi nên nhịp tick sau khỏi quét lại 150 bài
-                "import_read", "export_request",
+                "import_read", "import_detail", "export_request",
                 # P21h: cú bấm đổi NHỊP ĐỌC không đổi nội dung folder — đọc lại 150 bài ngay lúc đó
                 # là trả giá cho một việc chưa bắt đầu; prefs đã ghi, tick sau vẫn đúng.
                 "auto_refresh",
@@ -41,7 +41,7 @@ READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"
                 # sau từng mẩu (656–932 ms/lần, đo P8iii) còn chậm hơn chính cú tải. Lượt cuối tự xin
                 # quét lại qua `grid_video_scan`.
                 "video_chunk", "video_abort"}
-IO_SOURCES = {"import_read", "import_commit", "b0_retry", "export_request"}  # mọi việc của modal Import/Export
+IO_SOURCES = {"import_read", "import_detail", "import_commit", "b0_retry", "export_request"}  # mọi việc của modal Import/Export
 VIDEO_SOURCES = {"video_chunk", "video_abort"}  # tải video trong modal B4 — buffer nằm ở session
 VIDEO_UP_KEY = "grid_video_up"  # các mẩu đang ghồng trong RAM của phiên này
 VIDEO_SCAN_KEY = "grid_video_scan"  # mẩu cuối đã ghi xong -> lượt vẽ kế phải đọc lại folder
@@ -486,7 +486,11 @@ def _io(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     done = str(st.session_state.get(CSV_DONE_KEY) or "")
     try:
         if src == "import_read":
-            out.io = ga.io_preview(event.get("name"), event.get("data"), done, ctx)
+            out.io = ga.io_preview(event.get("name"), event.get("data"), done, ctx,
+                                   bool(event.get("all")))
+        elif src == "import_detail":
+            out.io = ga.io_detail(ctx, event.get("name"), event.get("data"),
+                                  int(event.get("index") or 0))
         elif src == "import_commit":
             out.io, ids = ga.io_commit(ctx, event.get("name"), event.get("data"), done,
                                        bool(event.get("skip_dupes")))

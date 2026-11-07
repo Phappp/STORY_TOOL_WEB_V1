@@ -4104,11 +4104,12 @@ check("P22e trần số ảnh hiện ở preview (PREVIEW_IMGS) nhỏ hơn số 
 check("P22e Python KHÔNG viết hộ chữ '(chưa có chữ…)' — caption trống trả '' để lưới quyết định lời, một chỗ nói",
       _p22_ppaste["items"][0]["caption"] == "" and "chưa có chữ" not in str(_p22_ppaste["items"]))
 _p22_item_src = _p22_fe.split("function ioItemCard")[1].split("function ioPreviewCard")[0]
-check("P22e lưới vẽ thumbnail BẰNG ẢNH THẬT (img src = link trong file, lazy, mở ra tab) — không xin Python lần nào",
-      "img.src = String(url)" in _p22_fe.split("function ioThumb")[1].split("function ioItemCard")[0]
+check("P22e/P23b lưới vẽ thumbnail BẰNG ẢNH THẬT (img src = link trong file, lazy, mở ra tab) — ảnh "
+      "KHÔNG xin Python; riêng nút ▾ chi tiết mới xin MỘT dòng qua import_detail",
+      "img.src = String(url)" in _p22_fe.split("function ioThumb")[1].split("function ioDupChip")[0]
       and 'img.loading = "lazy"' in _p22_fe and 'img.referrerPolicy = "no-referrer"' in _p22_fe
-      and "(st.items || []).forEach(item => body.push(ioItemCard(item)))" in _p22_fe
-      and "item.head" not in _p22_fe and "source:" not in _p22_item_src)
+      and "ioItemCard(item, d, dtl)" in _p22_fe
+      and "item.head" not in _p22_fe and 'ioThumb(u)' in _p22_item_src)
 check("P22e ảnh tải không được thì Ô TỰ NÓI ✕ Kèm lý do — im lặng thành ô trống là bắt anh đoán link hỏng hay tool hỏng",
       "img.onerror" in _p22_fe.split("function ioThumb")[1].split("function ioItemCard")[0]
       and 'el("span", "ph", "✕")' in _p22_fe and "B0 vẫn tải ảnh khi chạy" in _p22_fe)
@@ -4120,9 +4121,10 @@ check("P22e '.iocap' CHỈ là caption — nhãn '(không link)' phải class ri
       and '"iocap none"' not in _p22_fe.split("function ioItemCard")[1].split("function ioPreviewCard")[0]
       and ".ioitem .iomut" in _p22_fe)
 _p22_paste_slice = _p22_fe.split("function ioPasteField")[1].split("function ioImportCard")[0]
-check("P22d ô dán nằm TRONG thẻ Import và gửi lại đúng import_read — không mở event 'import_paste' thứ hai",
+check("P22d/P23b ô dán nằm TRONG thẻ Import và gửi lại đúng import_read — không mở event 'import_paste' "
+      "thứ hai (P23b 'xem hết' cũng đi lại import_read với all:true, thành BA chỗ dùng chung một event)",
       "body = [ioFilePicker(), ioPasteField()]" in _p22_fe
-      and _p22_fe.count('source: "import_read"') == 2
+      and _p22_fe.count('source: "import_read"') == 3
       and 'send({ source: "import_read", name, data: IO_FILE.data })' in _p22_paste_slice
       and "import_paste" not in _p22_fe and "import_paste" not in _p22_grid_src)
 check("P22d bản nháp dán SỐNG QUA LƯỢT VẼ (IO_PASTE ở module, nạp lại vào textarea) — repaint mỗi 2s khi luồng nền chạy không xóa chữ đang gõ",
@@ -5624,6 +5626,66 @@ check("P23a khi MỌI dòng đều nghi trùng thì không tạo gì và bảo t
       _p23a_all["made"] == 0 and len(stories.list_story_ids(_p23a_a_root)) == 2
       and "Toàn bộ" in _p23a_all["line"] and "nghi trùng" in _p23a_all["line"])
 
+# --- P23b: frontend chống trùng — thẻ mang số thứ tự, bản ĐẦY ĐỦ xin RIÊNG từng dòng, không nhét cả file ---
+_p23b_pv = ga.io_preview("p.json", _p23a_b64, "", _p23a_ctx)
+check("P23b io_preview mỗi thẻ mang `i` (số thứ tự dòng) để lưới gắn đúng cờ 🔎 vào đúng bài, "
+      "và mặc định là bản gọn (full=False, listed=đúng số thẻ hiện)",
+      [it["i"] for it in _p23b_pv["items"]] == list(range(len(_p23b_pv["items"])))
+      and _p23b_pv["full"] is False and _p23b_pv["listed"] == len(_p23b_pv["items"]))
+_p23b_many = [{"url": "https://www.facebook.com/posts/700000000%d" % i,
+               "caption": "chữ riêng của dòng %d, đủ dài để không dính luật nào" % i, "images": []}
+              for i in range(10)]
+_p23b_mb64 = base64.b64encode(json.dumps(_p23b_many, ensure_ascii=False).encode("utf-8")).decode("ascii")
+_p23b_short = ga.io_preview("many.json", _p23b_mb64, "", _p23a_ctx)
+_p23b_full = ga.io_preview("many.json", _p23b_mb64, "", _p23a_ctx, True)
+check("P23b 'xem hết' (full=True) liệt kê MỌI dòng hợp lệ chứ không chỉ PREVIEW_ROWS, mỗi dòng vẫn là "
+      "bản gọn (caption cắt + tối đa PREVIEW_IMGS ảnh) — bật full không phải nhét cả file vào DOM",
+      len(_p23b_short["items"]) == ga.PREVIEW_ROWS and len(_p23b_full["items"]) == 10
+      and _p23b_full["full"] is True and _p23b_full["listed"] == 10
+      and all(len(it["thumbs"]) <= ga.PREVIEW_IMGS for it in _p23b_full["items"]))
+_p23b_det = ga.io_detail(_p23a_ctx, "p.json", _p23a_b64, 4)
+check("P23b io_detail trả bản của ĐÚNG một dòng: cờ trùng kèm BÀI VA CHẠM (id + topic + state B0) — "
+      "dòng 5 (index 4) là caption giống hệt nên hits trỏ đúng bài cũ",
+      _p23b_det["kind"] == "detail" and _p23b_det["index"] == 4 and _p23b_det["rules"] == ["caption"]
+      and _p23b_det["hits"][0]["id"] == _p23a_oid and _p23b_det["hits"][0]["b0"] == stories.DONE
+      and "giống hệt từng chữ" in _p23b_det["hits"][0]["what"])
+_p23b_det1 = ga.io_detail(_p23a_ctx, "p.json", _p23a_b64, 1)
+check("P23b io_detail dòng có ảnh trả HẾT ảnh bài đó (trần DETAIL_IMGS, không bị cắt còn 3 như ô gọn) "
+      "để đọc trọn bài sắp thêm",
+      _p23b_det1["rules"] == ["near"] and _p23b_det1["imgs"] == 1 and len(_p23b_det1["thumbs"]) == 1)
+_p23b_det3 = ga.io_detail(_p23a_ctx, "p.json", _p23a_b64, 3)
+check("P23b io_detail trả caption ĐẦY ĐỦ của dòng (nối thêm vẫn nguyên văn, không cắt ở PREVIEW_CAP_CHARS)",
+      _p23b_det3["rules"] == ["near"]
+      and _p23b_det3["caption"].startswith(" ".join(_P23A_CAP.split()))
+      and len(_P23A_CAP) > 120 and "hôm qua" in _p23b_det3["caption"])
+_p23b_oob = ga.io_detail(_p23a_ctx, "p.json", _p23a_b64, 99)
+_p23b_neg = ga.io_detail(_p23a_ctx, "p.json", _p23a_b64, -1)
+check("P23b io_detail chỉ số ngoài phạm vi thì NÓI rõ bằng `error` chứ không ném — bấm thẻ khi file đã "
+      "đổi không được sập modal",
+      "không còn" in _p23b_oob.get("error", "") and "không còn" in _p23b_neg.get("error", ""))
+_p23b_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+check("P23b modal có HAI nút khi nghi trùng (một nút một việc): 'bỏ M nghi trùng' gửi skip_dupes:true, "
+      "'Vẫn tạo hết N' gửi false — mặc định KHÔNG chặn, anh mới là người bấm",
+      "skip_dupes: !!" in _p23b_fe and "commit(true)" in _p23b_fe and "commit(false)" in _p23b_fe
+      and "Vẫn tạo hết" in _p23b_fe and "bỏ " in _p23b_fe)
+check("P23b cờ 🔎 đọc từ dup_items theo đúng số thứ tự dòng (`i` của Python) rồi gắn lên từng thẻ — "
+      "không còn một dòng đếm vô nghĩa, và thẻ bị cờ đổi viền đỏ",
+      "IO_DUP_LABELS" in _p23b_fe and "ioDupChip" in _p23b_fe
+      and "dupe[Number(item.i)]" in _p23b_fe and "ioItemCard(item, d, dtl)" in _p23b_fe)
+check("P23b 'chi tiết' mỗi dòng xin RIÊNG qua import_detail (data + index) — không gửi cả file caption/ảnh "
+      "một lần; đóng thì chỉ xóa IO_DETAIL tại chỗ, không gọi Python",
+      'source: "import_detail"' in _p23b_fe and "ioDetailPanel" in _p23b_fe and "IO_DETAIL = {}" in _p23b_fe)
+check("P23b 'xem hết danh sách' lật IO_ALL rồi import_read mang all:true — cờ SỐNG QUA LƯỢT VẼ (module, "
+      "không nằm DOM) nên ghim cả trong ioSig",
+      "IO_ALL = !st.full" in _p23b_fe and "all: IO_ALL" in _p23b_fe and "ioViewAllToggle" in _p23b_fe
+      and "IO_ALL," in _p23b_fe.split("function ioSig")[1].split("function syncIo")[0])
+_p23b_g_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+check("P23b grid dẫn import_detail vào io_detail + import_read truyền all — Python vẫn là chỗ DUY NHẤT "
+      "quyết nội dung; import_detail là event ĐỌC nên khỏi quét lại 150 bài",
+      'out.io = ga.io_detail(ctx, event.get("name")' in _p23b_g_src
+      and 'bool(event.get("all"))' in _p23b_g_src
+      and '"import_detail"' in _p23b_g_src.split("READ_SOURCES")[1].split("IO_SOURCES")[0])
+
 _p23a_old_links, _p23a_old_skips = ga.pick_links([_P23A_OLD, "fb.watch/abcd12",
                                                   "https://m.facebook.com/posts/1234567890"])
 check("P23a đường legacy một cột link (pick_links) vẫn bỏ trùng như cũ — đổi luật chỉ ở modal Import "
@@ -5637,7 +5699,7 @@ check("P23a MỘT chỗ quyết định trùng là gì: luật `seen` đã rút 
       "chỉ còn ở pick_links, grid truyền ctx + skip_dupes chứ không tự chế logic riêng",
       "if value in seen:" not in _p23a_a_src
       and _p23a_a_src.count("bỏ link trùng") == 1
-      and "ga.io_preview(event.get(\"name\"), event.get(\"data\"), done, ctx)" in _p23a_g_src
+      and 'event.get("data"), done, ctx' in _p23a_g_src
       and 'bool(event.get("skip_dupes"))' in _p23a_g_src
       and "def import_dupes" in _p23a_a_src)
 check("P23a chống trùng CHỈ ĐỌC: không ghi folder, không gọi provider, không httpx, không đụng hàng "

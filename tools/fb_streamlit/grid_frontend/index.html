@@ -151,6 +151,21 @@
   .ioitem .iocap.none { font-style:italic; }
   .iocap.tog { background:none; border:0; padding:0; color:var(--accent); font:inherit;
     font-size:11px; cursor:pointer; align-self:flex-start; }
+  /* P23b: cờ nghi trùng + thẻ chi tiết xin riêng từng dòng (không nhét cả file vào DOM). */
+  .ioline.warn { color:#ffcf84; }
+  .iowrap { min-width:0; }
+  .ioitem.dup { border-left-color:var(--error-b); }
+  .ioitem .iodup { flex:0 0 auto; font-size:10px; font-weight:650; color:#ffcf84;
+    border:1px solid var(--error-b); border-radius:999px; padding:1px 7px; cursor:help;
+    white-space:nowrap; }
+  .iodet { margin:4px 0 6px 9px; padding:7px 9px; border:1px solid var(--border);
+    border-radius:7px; background:var(--field); min-width:0; display:flex; flex-direction:column; gap:4px; }
+  .iodeth { font-size:11px; font-weight:650; color:var(--muted); }
+  .iodetph { display:flex; flex-wrap:wrap; gap:4px; }
+  .iodetph img, .iodetph .ph { width:54px; height:54px; object-fit:cover; border:1px solid var(--border);
+    border-radius:5px; background:var(--bg); display:block; }
+  .iodetph .ph { display:inline-flex; align-items:center; justify-content:center; font-size:10px; color:var(--muted); }
+  .iodetcap { font-size:12px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--text); }
   .mcard .cbd input[type=file] { font:inherit; font-size:12px; color:var(--muted); max-width:100%; }
   /* P22c: TRÁI = hai ô thao tác (import trên, export dưới), PHẢI = ô XEM TRƯỚC nội dung thật.
      auto-fit để bảng hẹp thì preview tự xuống dưới, không bao giờ bị bóp mất chữ. */
@@ -2006,6 +2021,14 @@ let VID_TIMER = null;   // đồng hồ báo "mẩu này không được xác nh
 const VID_WAIT_MS = 20000;
 const IO_CAPS = new Set();  // link nào đang MỞ caption đầy đủ — cùng lý do: bảng dựng lại mỗi tick,
                             // trạng thái để trong DOM thì mất trước khi anh kịp đọc.
+// P23b: chống trùng hiển thị trong modal Import. Cờ "xem hết" và thẻ chi tiết phải SỐNG QUA LƯỢT VẼ
+// vì repaint()/syncIo dựng lại toàn bộ DOM mỗi nhịp; để trong DOM là mất trước khi kịp bấm.
+let IO_ALL = false;     // "▾ xem hết danh sách" đang bật? -> import_read gửi all:true, Python liệt kê MỌI dòng
+let IO_DETAIL = {};     // payload chi tiết MỘT dòng vừa xin (kind:detail) — index để biết thẻ nào đang mở
+const IO_DUP_LABELS = {
+  file: "trùng trong file", link: "link đã có bài",
+  caption: "caption giống hệt", near: "nghi trùng",
+};
 
 function ioModel() { return MODEL.io && typeof MODEL.io === "object" ? MODEL.io : {}; }
 function ioCap() { return mib(ioModel().max_bytes, 8); }
@@ -2146,27 +2169,50 @@ function ioImportCard() {
   } else if (st.kind === "preview") {
     const kept = Number(st.rows || 0);
     const cap = Number(st.with_caption || 0);
+    const dq = st.dupes || {};
+    const dups = dq.checked ? Number(dq.rows || 0) : 0;   // số dòng bị đánh cờ (P23a), KHÔNG phải số đã chặn
+    const clean = Math.max(0, kept - dups);
     state = st.again ? "done" : kept ? "queued" : "error";
     body.push(ioNote("📄 “" + String(st.name || "") + "” · " + kept + " bài hợp lệ → xem ở ô Xem trước."));
-    const go = button((st.again ? "✓ Đã tạo " : "➕ Tạo ") + kept + " bài mới" + (cap ? " (B0 chỉ tải ảnh)" : " + trích B0"),
-      !kept ? "Không có dòng hợp lệ nào — link Facebook ở cột A, hoặc {url, text, media} đúng dạng lưới Export."
-        : st.again ? "File này vừa import lần trước rồi — bấm lại là nhân đôi bài."
-        : "Tạo " + kept + " folder story (cột Nguồn = link) rồi giao B0 chạy trong luồng nền"
-          + (cap ? " — " + cap + " bài đã có caption trong file nên B0 chỉ tải ảnh"
-            : " — mỗi bài một việc, bộ rảnh tới đâu chạy tới đó")
-          + ". Không có undo: muốn xóa thì dời folder vào .trash.",
-      b => {
-        b.disabled = true;
-        send({ source: "import_commit", name: String((IO_FILE || {}).name || st.name || ""), data: String((IO_FILE || {}).data || "") });
-      });
-    go.disabled = !kept || !!st.again || !IO_FILE;
+    const commit = skip => send({ source: "import_commit",
+      name: String((IO_FILE || {}).name || st.name || ""), data: String((IO_FILE || {}).data || ""),
+      skip_dupes: !!skip });
+    const dead = !kept || !!st.again || !IO_FILE;
+    if (dups > 0)
+      body.push(ioNote("🔎 " + dups + "/" + kept + " dòng nghi trùng — xem cờ 🔎 trên từng thẻ ở ô Xem trước."
+        + " Lưới KHÔNG tự chặn: hai nút dưới là hai lựa chọn của anh.", "warn"));
+    if (dups > 0 && clean > 0) {
+      const bSkip = button((st.again ? "✓ Đã tạo " : "➕ Tạo ") + clean + " bài (bỏ " + dups + " nghi trùng)",
+        "Tạo " + clean + " folder cho " + clean + " dòng SẠCH, GIỮ LẠI " + dups + " dòng nghi trùng ngoài —"
+        + " an toàn khi file dán trùng lặp. Không có undo." + (cap ? " B0 tải ảnh sẵn, không trích lại bài." : ""),
+        b => { b.disabled = true; commit(true); });
+      bSkip.disabled = dead;
+      const bAll = button("➕ Vẫn tạo hết " + kept + " bài",
+        "Tạo đủ " + kept + " folder kể " + dups + " dòng nghi trùng — chọn khi anh biết chúng là bài khác thật."
+        + " Trùng link vẫn tạo folder MỚI, không gộp vào bài cũ. Không có undo.",
+        b => { b.disabled = true; commit(false); });
+      bAll.disabled = dead;
+      body.push(bSkip);
+      body.push(bAll);
+    } else {
+      const go = button((st.again ? "✓ Đã tạo " : "➕ Tạo ") + kept + " bài mới" + (cap ? " (B0 chỉ tải ảnh)" : " + trích B0"),
+        !kept ? "Không có dòng hợp lệ nào — link Facebook ở cột A, hoặc {url, text, media} đúng dạng lưới Export."
+          : st.again ? "File này vừa import lần trước rồi — bấm lại là nhân đôi bài."
+          : dups ? "Tạo đủ " + kept + " folder kể " + dups + " dòng nghi trùng (mỗi bài một việc, bộ rảnh tới đâu chạy tới đó)."
+            : "Tạo " + kept + " folder story (cột Nguồn = link) rồi giao B0 chạy trong luồng nền"
+              + (cap ? " — " + cap + " bài đã có caption trong file nên B0 chỉ tải ảnh"
+                : " — mỗi bài một việc, bộ rảnh tới đâu chạy tới đó")
+              + ". Không có undo: muốn xóa thì dời folder vào .trash.",
+        b => { b.disabled = true; commit(false); });
+      go.disabled = dead;
+      body.push(go);
+    }
     if (!IO_FILE && !st.again && kept)
       body.push(ioNote("· lưới không giữ hộ nội dung giữa hai lần mở bảng —"
         + " chọn lại file hoặc dán lại chữ ở ô trên rồi bấm Tạo.", "bad"));
     if (st.again)
       body.push(ioNote("✓ Nội dung này vừa import xong — chọn file khác / dán chữ khác,"
         + " hoặc Export rồi sửa trong workspace.", "ok"));
-    body.push(go);
   } else if (st.kind === "commit") {
     state = st.again ? "error" : "done";
     body.push(ioNote((st.again ? "⚠ " : "✓ ") + String(st.line || ""), st.again ? "bad" : "ok"));
@@ -2183,7 +2229,8 @@ function ioImportCard() {
       "JSON: đúng dạng lưới Export — caption lấy thẳng từ “text”, ảnh từ “media[].photo_image.uri”, nên B0 chỉ tải ảnh chứ không đọc lại bài.",
       "Ô dán chữ đi ĐÚNG đường của file (cùng xem trước, cùng bấm Tạo, cùng trần dung lượng) — mở đầu bằng [ hay { thì đọc là JSON, còn lại là một dòng một link.",
       "Chọn file và dán chữ là hai nguồn của cùng một lần tạo: nguồn nào bấm Xem trước SAU thì nguồn đó sẽ được tạo.",
-      "Trần " + ioCap() + " MB và " + Number(ioModel().max_rows || 200) + " bài một lần; dòng trùng link tự bỏ, dòng vượt trần hiện ở ô Xem trước.",
+      "Trần " + ioCap() + " MB và " + Number(ioModel().max_rows || 200) + " bài một lần; dòng vượt trần hiện ở ô Xem trước.",
+      "Chống trùng P23a: dòng trùng link/caption/ảnh bị GẮN CỜ 🔎 chứ KHÔNG tự bỏ — anh bấm nút nào mới quyết tạo hay bỏ.",
       "Bấm “➕ Tạo N bài mới” là tạo thật N folder + hẹn B0 — chưa bấm thì chưa có gì thay đổi.",
       "Import xong mà bài vẫn thiếu caption (link riêng tư) → dùng thẻ “🔁 B0 còn thiếu” bên dưới."] });
 }
@@ -2248,8 +2295,54 @@ function ioThumb(url) {
   return img;
 }
 
-function ioItemCard(item) {
-  const row = el("div", "ioitem");
+function ioDupChip(dup) {
+  const rules = (dup && Array.isArray(dup.rules)) ? dup.rules : [];
+  if (!rules.length) return null;
+  const chip = el("span", "iodup", "🔎 " + rules.map(r => IO_DUP_LABELS[r] || r).join(" · "));
+  const hits = (dup.hits || []).map(h => "· " + (h.what || "")
+    + (h.id ? " → bài " + h.id + (h.topic ? " “" + h.topic + "”" : "") + " (" + (h.b0 || h.status || "?") + ")" : "")).join("\n");
+  chip.title = "Nghi trùng (P23a) — KHÔNG tự chặn, anh quyết bằng hai nút ở ô Import.\n"
+    + hits + (Number(dup.hits_more || 0) > 0 ? "\n· … còn " + dup.hits_more + " bài va chạm nữa" : "");
+  return chip;
+}
+
+function ioDetailPanel(detail) {
+  const box = el("div", "iodet");
+  if (detail.error) { box.appendChild(ioNote("⚠ " + String(detail.error), "bad")); return box; }
+  const urls = (Array.isArray(detail.thumbs) ? detail.thumbs : []).filter(u => String(u || "").trim());
+  if (urls.length || Number(detail.imgs || 0)) {
+    const strip = el("div", "iodetph");
+    urls.forEach(u => {
+      const a = el("a", "link");
+      a.href = String(u); a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.appendChild(ioThumb(u));
+      strip.appendChild(a);
+    });
+    const more = Number(detail.imgs || 0) - urls.length;
+    if (more > 0) strip.appendChild(el("span", "ph", "+" + more));
+    box.appendChild(el("div", "iodeth", "🖼 " + Number(detail.imgs || 0) + " ảnh trong bài này"));
+    box.appendChild(strip);
+  }
+  const cap = String(detail.caption || "").trim();
+  box.appendChild(el("div", "iodeth", "📝 caption " + (cap ? "(" + cap.length + " ký tự" + (detail.clipped ? ", cắt hiển thị" : "") + ")" : "trống — B0 sẽ trích từ link nguồn")));
+  box.appendChild(el("div", "iodetcap", cap || "(chưa có chữ trong file)"));
+  const hits = (detail.hits || []);
+  if (hits.length) {
+    box.appendChild(el("div", "iodeth", "🔎 " + (detail.rules || []).map(r => IO_DUP_LABELS[r] || r).join(" · ")));
+    hits.forEach(h => {
+      const line = h.id
+        ? (h.what || "") + " → bài " + h.id + (h.topic ? " “" + h.topic + "”" : "") + " (" + (h.b0 || h.status || "?") + ")"
+        : (h.what || "");
+      box.appendChild(ioNote("· " + line, "warn"));
+    });
+    if (Number(detail.hits_more || 0) > 0) box.appendChild(ioNote("· … còn " + detail.hits_more + " bài va chạm nữa", "warn"));
+  } else box.appendChild(ioNote("✓ Dòng này không dính cờ trùng nào — tạo là tạo mới.", "ok"));
+  return box;
+}
+
+function ioItemCard(item, dup, detail) {
+  const wrap = el("div", "iowrap");
+  const row = el("div", "ioitem" + (dup ? " dup" : ""));
   const raw = String(item.url || "");
   const urls = (Array.isArray(item.thumbs) ? item.thumbs : []).filter(u => String(u || "").trim());
   const n = Number(item.imgs || 0);
@@ -2266,7 +2359,7 @@ function ioItemCard(item) {
     });
     if (n > urls.length) {
       const more = el("span", "ph", "+" + (n - urls.length));
-      more.title = "Còn " + (n - urls.length) + " ảnh nữa trong file — tạo bài rồi mở bài ở lưới để xem hết.";
+      more.title = "Còn " + (n - urls.length) + " ảnh nữa trong file — bấm ▾ chi tiết để xem hết (không cần tạo bài).";
       strip.appendChild(more);
     }
     row.appendChild(strip);
@@ -2282,6 +2375,8 @@ function ioItemCard(item) {
     line.appendChild(a);
   } else line.appendChild(el("span", "iomut", "(không link)"));
   if (n) line.appendChild(el("span", "ioimg", n + " ảnh"));
+  const chip = ioDupChip(dup);
+  if (chip) line.appendChild(chip);
   col.appendChild(line);
   const capText = String(item.caption || "").trim();
   const cap = el("div", "iocap" + (IO_CAPS.has(raw) ? " full" : ""),
@@ -2298,8 +2393,48 @@ function ioItemCard(item) {
     });
     col.appendChild(tog);
   }
+  // P23b: "chi tiết" xin RIÊNG dòng này từ Python (caption đầy đủ + hết ảnh + bài va chạm),
+  // để xem TOÀN BỘ một bài sắp thêm mà không nhét cả file vào DOM.
+  const idx = Number(item.i || 0);
+  const det = el("button", "iocap tog", detail ? "▴ gọn chi tiết" : "▾ chi tiết bài này");
+  det.type = "button";
+  det.title = detail ? "Đóng bản đầy đủ của dòng này lại."
+    : "Xin bản ĐẦY ĐỦ của riêng dòng này: hết caption, hết ảnh, và bài cũ nào nó trùng (nếu có). Chưa tạo folder nào.";
+  det.addEventListener("click", () => {
+    if (detail) { IO_DETAIL = {}; repaint(); return; }
+    if (!IO_FILE) return;
+    IO_BUSY = true;
+    send({ source: "import_detail", name: String((IO_FILE || {}).name || ""),
+      data: String((IO_FILE || {}).data || ""), index: idx });
+    repaint();
+  });
+  if (!IO_FILE && !detail) det.disabled = true;
+  col.appendChild(det);
   row.appendChild(col);
-  return row;
+  wrap.appendChild(row);
+  if (detail) wrap.appendChild(ioDetailPanel(detail));
+  return wrap;
+}
+
+function ioViewAllToggle(st) {
+  const rows = Number(st.rows || 0);
+  const listed = Number(st.listed || (st.items || []).length || 0);
+  if (rows <= listed && !st.full) return null;   // một màn đã thấy hết thì không cần nút
+  const b = el("button", "iocap tog", st.full ? "▴ chỉ hiện " + Math.min(listed, 6) + " dòng đầu"
+    : "▾ xem hết " + rows + " dòng");
+  b.type = "button";
+  b.title = st.full ? "Thu về danh sách gọn (vài dòng đầu) cho đỡ dài."
+    : "Liệt kê TẤT CẢ " + rows + " dòng sẽ tạo (mỗi dòng vẫn là bản gọn) — chưa tạo folder nào.";
+  b.addEventListener("click", () => {
+    IO_ALL = !st.full;
+    if (!IO_FILE) return;
+    IO_BUSY = true;
+    send({ source: "import_read", name: String((IO_FILE || {}).name || st.name || ""),
+      data: String((IO_FILE || {}).data || ""), all: IO_ALL });
+    repaint();
+  });
+  if (!IO_FILE) b.disabled = true;
+  return b;
 }
 
 function ioPreviewCard() {
@@ -2317,12 +2452,26 @@ function ioPreviewCard() {
     body.push(ioNote("⏳ Đang đọc “" + st.name + "” — chưa tạo bài nào."));
   } else if (st.kind === "preview") {
     state = st.again ? "done" : Number(st.rows || 0) ? "queued" : "error";
+    const dq = st.dupes || {};
+    if (dq.checked) body.push(ioNote((Number(dq.rows || 0) ? "🔎 " : "✓ ") + String(dq.line || ""),
+      Number(dq.rows || 0) ? "warn" : "ok"));
     body.push(ioNote("📄 " + String(st.name || "") + " · " + String(st.line || "")));
-    if ((st.items || []).length) body.push(ioNote("Sẽ vào " + Number(st.rows || 0) + " bài:"));
-    (st.items || []).forEach(item => body.push(ioItemCard(item)));
-    const hidden = Number(st.total || 0) - (st.items || []).length;
+    if ((st.items || []).length)
+      body.push(ioNote((st.full ? "Đủ " : "Sẽ vào ") + Number(st.rows || 0) + " bài"
+        + (st.full ? " (đang liệt kê hết):" : ":")));
+    const dupe = {};
+    (st.dup_items || []).forEach(d => { dupe[Number(d.i)] = d; });
+    const shownDetail = IO_DETAIL && String(IO_DETAIL.kind || "") === "detail" ? IO_DETAIL : null;
+    (st.items || []).forEach(item => {
+      const d = dupe[Number(item.i)];
+      const dtl = shownDetail && Number(shownDetail.index) === Number(item.i) ? shownDetail : null;
+      body.push(ioItemCard(item, d, dtl));
+    });
+    const hidden = Number(st.rows || 0) - (st.items || []).length;
     if (hidden > 0) body.push(ioNote("· … còn " + hidden + " bài nữa trong file (bảng chỉ liệt kê " + (st.items || []).length + " dòng đầu)"));
-    // Python đã viết sẵn "bỏ dòng …" / "bỏ link trùng …" — thêm chữ "bỏ" nữa là đọc trùng.
+    const tog = ioViewAllToggle(st);
+    if (tog) body.push(tog);
+    // Python đã viết sẵn "bỏ dòng …" — thêm chữ "bỏ" nữa là đọc trùng.
     (st.skipped || []).forEach(line => body.push(ioNote("· " + line)));
     if (Number(st.skipped_more || 0) > 0) body.push(ioNote("· … còn " + st.skipped_more + " dòng bị bỏ nữa"));
     if (Number(st.capped || 0) > 0) body.push(ioNote("· " + st.capped + " dòng cuối vượt trần "
@@ -2346,7 +2495,10 @@ function ioPreviewCard() {
     + " Export — nội dung thật sẽ hiện ngay đây trước khi anh bấm Tạo / ⬇ Lưu."));
   return card({ title: "👁 Xem trước", state: state, body: body,
     help: ["Chữ lưới ĐỌC ĐƯỢC từ file/nội dung dán/vừa dựng, không phải chữ diễn giải — nên đây là chỗ phát hiện chọn sai file.",
-      "Import: mỗi bài là một thẻ — ảnh thật trong file (tối đa 3), link bài gốc, và caption đã đọc được. Dòng bị bỏ hiện kèm lý do.",
+      "Import: mỗi bài là một thẻ — ảnh thật trong file (tối đa 3), link bài gốc, caption đã đọc được, và cờ 🔎 nếu nghi trùng (P23a).",
+      "Bấm ▾ chi tiết trên một thẻ để xin bản ĐẦY ĐỦ riêng dòng đó (hết caption + hết ảnh + bài cũ nó trùng) — không nhét cả file vào trang.",
+      "▾ xem hết " + Number(st.rows || 0) + " dòng liệt kê mọi bài sẽ tạo; mặc định chỉ hiện vài dòng đầu cho đỡ dài.",
+      "Cờ trùng CHỈ ĐỂ XEM: lưới không tự bỏ dòng nào — hai nút ở ô Import mới quyết tạo hết hay bỏ nghi trùng.",
       "Export: xem trước đoạn ĐẦU của file (nội dung đầy đủ vẫn tải về bằng ⬇, kể cả khi ở đây bị cắt).",
       "Bảng này không phải hàng đợi: chưa bấm ➕ Tạo / ⬇ Lưu thì chưa có folder hay file nào."],
     actions: [ex.text ? copyTextIcon(ex.text, "ioprev",
@@ -2452,13 +2604,17 @@ function ingestIo() {
   }
   if (kind === "export") IO_EXPORT = r;
   else if (kind === "b0_retry") IO_B0 = r;
-  else if (kind === "preview" || kind === "commit") { IO_STATE = r; if (kind === "commit") IO_B0 = {}; }
+  else if (kind === "detail") IO_DETAIL = r;
+  else if (kind === "preview" || kind === "commit") { IO_STATE = r; if (kind === "commit") IO_B0 = {};
+    // thẻ chi tiết gắn theo SỔ THỨ TỰ dòng — đổi file là sổ đổi theo, để nó treo lại là chỉ bài sai
+    if (kind === "preview") IO_DETAIL = {}; }
 }
 
 function ioSig() {
   if (!IO_OPEN) return "";
   return JSON.stringify([(IO_FILE || {}).name || "", IO_SEQ, IO_BUSY, visible().length, rows().length,
-    Number(ioModel().b0_todo || 0), ioCap(), Array.from(IO_CAPS).sort().join("|")]);
+    Number(ioModel().b0_todo || 0), ioCap(), Array.from(IO_CAPS).sort().join("|"),
+    IO_ALL, (IO_DETAIL || {}).index === undefined ? "" : IO_DETAIL.index]);
 }
 
 function syncIo() {

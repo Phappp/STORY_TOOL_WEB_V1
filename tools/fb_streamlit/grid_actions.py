@@ -697,6 +697,8 @@ def export_name(ctx: Ctx, kind: str) -> str:
 PREVIEW_ROWS = 6  # modal chỉ liệt kê bấy nhiêu dòng đầu — đủ để thấy chọn sai file hay không
 PREVIEW_SKIPPED = 8  # số lý do bỏ dòng hiển thị trong modal (phần dư gom thành một dòng đếm)
 PREVIEW_IMGS = 3  # ảnh THẬT hiện mỗi bài — nhiều hơn là gửi cả chục link cho một ô xem nhanh
+DETAIL_CAP_CHARS = 4000  # caption ĐẦY ĐỦ của MỘT dòng khi bấm "chi tiết" — đủ dài cho bài scrape, vẫn có trần
+DETAIL_IMGS = 12  # ảnh hiện trong thẻ chi tiết (nhiều hơn ô gọn) — một dòng thôi nên gửi hết không nặng DOM
 PREVIEW_CAP_CHARS = 420  # chữ cắt ở đây chỉ để đọc tại chỗ; bản ghi vào folder vẫn nguyên văn
 EXPORT_KINDS = {"json": "JSON (import lại được)", "csv": "CSV 2 cột (link nguồn · link đã đăng)"}
 
@@ -904,13 +906,16 @@ def decode_upload(data) -> tuple[bytes, str]:
     return raw, sha1(raw).hexdigest()
 
 
-def io_preview(name, data, done: str = "", ctx: Ctx | None = None) -> dict:
+def io_preview(name, data, done: str = "", ctx: Ctx | None = None, full: bool = False) -> dict:
     """Đọc file + đếm + CÁO BÁO trùng, CHƯA đụng folder nào — modal hiện trước khi anh bấm Tạo bài.
 
     Trả `again` khi dấu vân tay trùng file vừa import lần trước để lưới chặn được cú bấm đôi
     (folder tạo gấp đôi là thứ mất cả buổi dọn, không phải chuyện để người dùng tự nhớ).
     Có `ctx` (lưới luôn truyền) thì kiểm thêm bốn điều kiện trùng P23a trên TOÀN BỘ dòng hợp lệ,
     kể cả dòng thứ 7 trở đi mà ô Xem trước chưa liệt kê; `dup_items[].i` là số thứ tự dòng.
+    `full` bật "xem hết danh sách": liệt kê MỌI dòng hợp lệ chứ không chỉ PREVIEW_ROWS dòng đầu —
+    mỗi thẻ vẫn gọn (link + caption cắt ngắn + đếm ảnh), nội dung đầy đủ của một dòng xin qua `io_detail`.
+    Mỗi item mang `i` (số thứ tự dòng) để lưới gắn đúng cờ trùng vào đúng thẻ.
     """
     out = {"kind": "preview", "name": str(name or "(không tên)")[:120]}
     try:
@@ -923,11 +928,14 @@ def io_preview(name, data, done: str = "", ctx: Ctx | None = None) -> dict:
     shown = skipped[:PREVIEW_SKIPPED]
     with_caption = sum(1 for r in kept if str(r.get("caption") or "").strip())
     capped = max(0, len(rows) - len(kept))
+    listed = kept if full else kept[:PREVIEW_ROWS]
     items = []
-    for r in kept[:PREVIEW_ROWS]:
+    for idx, r in enumerate(kept):
+        if not full and idx >= PREVIEW_ROWS:
+            break
         cap, clipped = preview_caption(r.get("caption"))
         imgs = [str(u or "") for u in (r.get("images") or []) if str(u or "").strip()]
-        items.append({"url": str(r.get("url") or ""), "caption": cap, "clipped": clipped,
+        items.append({"i": idx, "url": str(r.get("url") or ""), "caption": cap, "clipped": clipped,
                       "imgs": len(imgs), "thumbs": imgs[:PREVIEW_IMGS]})
     dupes = {"checked": False, "rows": 0, "total": len(kept),
              "by_rule": dict.fromkeys(DUP_RULE_LABELS, 0), "line": ""}
@@ -940,6 +948,8 @@ def io_preview(name, data, done: str = "", ctx: Ctx | None = None) -> dict:
         "again": bool(done) and digest == done,
         "rows": len(kept),
         "total": len(rows),
+        "full": bool(full),
+        "listed": len(items),
         "with_caption": with_caption,
         "capped": capped,
         "skipped": shown,
@@ -951,6 +961,45 @@ def io_preview(name, data, done: str = "", ctx: Ctx | None = None) -> dict:
                  + (f" · {with_caption} bài có caption sẵn trong file (B0 chỉ tải ảnh)" if with_caption else "")
                  + (f" · {capped} dòng cuối vượt trần {MAX_IMPORT}/lần, chưa import" if capped else "")
                  + (f" · {dupes['line']}" if dupes.get("checked") else "")),
+    })
+    return out
+
+
+def io_detail(ctx: Ctx, name, data, index: int) -> dict:
+    """Toàn bộ MỘT dòng sắp thêm (XIN RIÊNG khi anh bấm thẻ đó) — không gửi cả file vào DOM.
+
+    Lý do có hàm này: một bài có thể mang caption vài KB và chục ảnh; nhét hết cho 200 dòng vào
+    ô Xem trước là treo tab (đo P22d: 4 MB base64 là trình duyệt ngừng phản hồi). Nên mặc định
+    chỉ hiện bản gọn, ai muốn đọc hết thì xin đúng dòng đó — `import_dupes` chạy lại để lấy cờ +
+    bài va chạm của chính dòng, vì nó rẻ (chỉ đọc folder) và giữ ĐÚNG một nguồn sự thật trùng.
+    """
+    raw, _digest = decode_upload(data)
+    rows, _skipped = parse_import(raw, str(name or "")[:120])
+    kept = list(rows[:MAX_IMPORT])
+    idx = int(index or 0)
+    out = {"kind": "detail", "index": idx, "name": str(name or "(không tên)")[:120]}
+    if not kept:
+        out["error"] = "File không còn dòng hợp lệ nào — có thể workspace hoặc file đã đổi."
+        return out
+    if not 0 <= idx < len(kept):
+        out["error"] = f"Dòng {idx + 1} không còn trong file này (còn {len(kept)} dòng)."
+        return out
+    row = kept[idx]
+    _items, dupes = import_dupes(ctx, kept)
+    hit = next((it for it in _items if int(it["i"]) == idx), None)
+    imgs = [str(u or "") for u in (row.get("images") or []) if str(u or "").strip()]
+    cap = " ".join(str(row.get("caption") or "").split())
+    out.update({
+        "total": len(kept),
+        "url": str(row.get("url") or ""),
+        "caption": cap[:DETAIL_CAP_CHARS],
+        "clipped": len(cap) > DETAIL_CAP_CHARS,
+        "imgs": len(imgs),
+        "thumbs": imgs[:DETAIL_IMGS],
+        "rules": (hit or {}).get("rules") or [],
+        "hits": (hit or {}).get("hits") or [],
+        "hits_more": (hit or {}).get("hits_more") or 0,
+        "line": dupes["line"],
     })
     return out
 
