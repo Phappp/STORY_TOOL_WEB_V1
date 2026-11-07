@@ -13,7 +13,9 @@ import os
 import re
 import tempfile
 import time
+from collections import Counter
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from hashlib import sha1
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse
@@ -719,11 +721,16 @@ DUP_RULE_LABELS = {
     "file": "trùng link ngay trong file này",
     "link": "link đã có bài trong workspace",
     "caption": "caption giống hệt bài đã có",
-    "near": "nghi trùng (caption gần giống / ảnh trùng)",
+    "sim": "caption gần giống ≥90% bài đã có",
+    "near": "nghi trùng (caption nối thêm / ảnh trùng)",
 }
 DUP_MIN_CAP = 24      # caption ngắn hơn mức này không đem so chữ: "ăn cơm ngon" đụng nhau vô nghĩa
 DUP_NEAR_CHARS = 120  # độ dài đoạn đầu để còn gọi là "gần giống" khi hai link khác nhau
 DUP_HITS = 3          # mỗi dòng liệt kê tối đa bấy nhiêu bài va chạm, phần dư chỉ đếm
+DUP_SIM = 0.90        # luật `sim`: tỷ lệ chữ giống nhau (tính trên TỪ) để bị gọi là gần trùng
+DUP_SIM_TOKENS = 10   # dưới ngần này chữ thì không so %: hai caption 5 chữ đụng nhau 90% là chuyện bình thường
+DUP_SIM_BLOCK = 0.5   # ứng viên phải chia sẻ ít ngần này cụm-3-từ mới đáng đem tính % (chặn cho rẻ)
+DUP_SIM_CANDS = 25    # trần số ứng viên bị tính % MỖI dòng — workspace toàn caption khuôn mẫu vẫn chạy nổi
 _FB_ID_RES = (
     re.compile(r"/posts/(?:\d+[/@])?(\d{5,})"),
     re.compile(r"/(?:videos|reels|reel)/(?:[^/]+[/@])?(\d{5,})"),
@@ -799,14 +806,15 @@ def _dup_self(rule: str, what: str) -> dict:
 
 
 def ws_dup_index(ctx: Ctx, need_caps: bool = False, need_imgs: bool = False) -> dict:
-    """Một lượt quét workspace -> bảng so trùng: khóa link -> bài, caption -> bài, link ảnh -> bài.
+    """Một lượt quét workspace -> bảng so trùng: khóa link -> bài, caption -> bài, link ảnh -> bài,
+    cộng chỉ mục cụm-3-từ của mọi caption cũ cho luật `sim` (P23e).
 
     `input.txt` và `refs/ref.json` chỉ đọc khi file import THẬT SỰ có chữ / có ảnh, vì import một
     cột link (CSV/Excel) mà đọc kèm ~300 file nữa thì chậm hơn chính lượt bấm. Hai bài cũ cùng một
     khóa thì bài gặp trước thắng: đây là chỗ để GỌI TÊN bài va chạm, không phải chỗ phân xử bài nào
     "đúng" — cảnh báo luôn nói id + topic để anh tự nhìn mà quyết.
     """
-    idx = {"links": {}, "caps": {}, "cap_list": [], "near": {}, "imgs": {}}
+    idx = {"links": {}, "caps": {}, "cap_list": [], "near": {}, "imgs": {}, "sim": {}}
     for sid in stories.list_story_ids(ctx.root):
         story = stories.load_story(ctx.root, sid)
         rec = {"id": sid, "topic": str(story.get("topic") or ""), "status": str(story.get("status") or ""),
@@ -826,6 +834,8 @@ def ws_dup_index(ctx: Ctx, need_caps: bool = False, need_imgs: bool = False) -> 
                 if k and k not in seen_urls:
                     seen_urls.add(k)
                     idx["imgs"].setdefault(k, []).append(rec)
+    if need_caps:
+        idx["sim"] = sim_index(idx["cap_list"])
     return idx
 
 
@@ -844,6 +854,56 @@ def near_caption(cap: str, cap_list: list[tuple[str, dict]]) -> dict | None:
     return None
 
 
+def caption_shingles(tokens: list[str]) -> set[str]:
+    """Mỗi cụm Ba chữ liên tiếp của caption là một 'dấu vân tay' để chặn ứng viên so %."""
+    return {" ".join(tokens[i:i + 3]) for i in range(len(tokens) - 2)}
+
+
+def sim_index(cap_list: list[tuple[str, dict]]) -> dict:
+    """Chỉ mục ngược cụm-3-từ -> vị trí caption CŨ, dựng MỘT lần cho cả lượt xem trước."""
+    sh: dict[str, list[int]] = {}
+    for j, (cap, _rec) in enumerate(cap_list):
+        for s in caption_shingles(cap.split()):
+            sh.setdefault(s, []).append(j)
+    return {"sh": sh, "caps": cap_list}
+
+
+def sim_caption(cap: str, ws: dict) -> tuple[dict, float] | None:
+    """(bài cũ, tỷ lệ giống) nếu có caption ≥ DUP_SIM — luật `sim`, chạy SAU caption/near.
+
+    Vì sao phải lòng vòng thế này: đo thật 2026-11-07, đem so tay 200 dòng × 300 bài bằng
+    `SequenceMatcher` là hết **17.7 giây** cho một lượt bấm — và còn sai trong im lặng vì
+    `autojunk` mặc định coi dấu cách là "rác" ở chuỗi dài, caption 131 chữ sửa 4 chữ ra 0.32
+    thay vì ~0.97, tức là luật 90% sẽ KHÔNG BAO GIỜ nổ cờ. Nên: chặn ứng viên bằng số cụm-3-từ
+    chia sẻ (cả lượt quét 200 dòng hết ~20 ms), rồi mới tính % trên **TỪ** với autojunk=False,
+    và chỉ lấy tối đa DUP_SIM_CANDS ứng viên giống nhất để workspace toàn caption khuôn mẫu
+    vẫn bấm được. Bỏ sót thì còn hẹn lần sau, chứ khóa oan + treo tab là mất người dùng.
+    """
+    block = ws.get("sim") or {}
+    caps = block.get("caps") or []
+    sh = block.get("sh") or {}
+    tokens = cap.split()
+    if not caps or len(tokens) < DUP_SIM_TOKENS:
+        return None
+    mine = caption_shingles(tokens)
+    if not mine:
+        return None
+    shared: Counter = Counter()
+    for s in mine:
+        for j in sh.get(s, ()):
+            shared[j] += 1
+    floor = DUP_SIM_BLOCK * len(mine)
+    cands = sorted((j for j, n in shared.items() if n >= floor),
+                   key=lambda j: (-shared[j], j))[:DUP_SIM_CANDS]
+    best: tuple[dict, float] | None = None
+    for j in cands:
+        other, rec = caps[j]
+        ratio = SequenceMatcher(None, tokens, other.split(), autojunk=False).ratio()
+        if ratio >= DUP_SIM and (best is None or ratio > best[1]):
+            best = (rec, ratio)
+    return best
+
+
 def dup_summary_line(counts: dict, flagged: int, total: int) -> str:
     """Một dòng tổng kết chống trùng — nói đủ từng luật, kể cả khi chẳng trùng gì."""
     if not total:
@@ -855,7 +915,7 @@ def dup_summary_line(counts: dict, flagged: int, total: int) -> str:
 
 
 def import_dupes(ctx: Ctx, rows: list[dict], ws: dict | None = None) -> tuple[list[dict], dict]:
-    """Bốn điều kiện trùng cho từng dòng import -> (cờ theo dòng, bản tổng kết). KHÔNG bỏ dòng nào.
+    """Năm điều kiện trùng cho từng dòng import -> (cờ theo dòng, bản tổng kết). KHÔNG bỏ dòng nào.
 
     `i` là số thứ tự dòng trong chính `rows` (0-based) để modal gắn đúng cờ vào đúng thẻ. Dòng sạch
     không xuất hiện trong `items`, nên `dupes.rows == 0` là lưới nói thẳng "không trùng gì" thay vì
@@ -884,6 +944,7 @@ def import_dupes(ctx: Ctx, rows: list[dict], ws: dict | None = None) -> tuple[li
                 rules.append("link")
                 hits.append(_dup_hit("link", rec, "link này đã có bài trong workspace"))
         cap = norm_caption(row.get("caption"))
+        sim_pct = 0
         if len(cap) >= DUP_MIN_CAP:
             rec = ws["caps"].get(cap)
             if rec is not None:
@@ -894,6 +955,13 @@ def import_dupes(ctx: Ctx, rows: list[dict], ws: dict | None = None) -> tuple[li
                 if rec is not None:
                     rules.append("near")
                     hits.append(_dup_hit("near", rec, "caption của bài cũ nằm trọn trong đầu bài này (hoặc ngược lại)"))
+                else:
+                    hit = sim_caption(cap, ws)
+                    if hit is not None:
+                        rec, ratio = hit
+                        sim_pct = int(round(ratio * 100))
+                        rules.append("sim")
+                        hits.append(_dup_hit("sim", rec, f"caption giống {sim_pct}% bài này (khác vài chữ)"))
         for u in (row.get("images") or []):
             recs = ws.get("imgs", {}).get(dup_key(u)) or []
             if recs:
@@ -905,8 +973,11 @@ def import_dupes(ctx: Ctx, rows: list[dict], ws: dict | None = None) -> tuple[li
         uniq = list(dict.fromkeys(rules))
         for rule in uniq:
             counts[rule] += 1
-        items.append({"i": i, "url": str(row.get("url") or ""), "rules": uniq,
-                      "hits": hits[:DUP_HITS], "hits_more": max(0, len(hits) - DUP_HITS)})
+        item = {"i": i, "url": str(row.get("url") or ""), "rules": uniq,
+                "hits": hits[:DUP_HITS], "hits_more": max(0, len(hits) - DUP_HITS)}
+        if sim_pct:
+            item["sim"] = sim_pct  # lưới hiện "🔎 93%" chứ không bắt anh đoán chữ gần giống là gần mấy phần
+        items.append(item)
     return items, {"rows": len(items), "total": len(rows), "by_rule": counts,
                    "line": dup_summary_line(counts, len(items), len(rows))}
 
@@ -931,7 +1002,7 @@ def io_preview(name, data, done: str = "", ctx: Ctx | None = None, full: bool = 
 
     Trả `again` khi dấu vân tay trùng file vừa import lần trước để lưới chặn được cú bấm đôi
     (folder tạo gấp đôi là thứ mất cả buổi dọn, không phải chuyện để người dùng tự nhớ).
-    Có `ctx` (lưới luôn truyền) thì kiểm thêm bốn điều kiện trùng P23a trên TOÀN BỘ dòng hợp lệ,
+    Có `ctx` (lưới luôn truyền) thì kiểm thêm các điều kiện trùng P23a/P23e trên TOÀN BỘ dòng hợp lệ,
     kể cả dòng thứ 7 trở đi mà ô Xem trước chưa liệt kê; `dup_items[].i` là số thứ tự dòng.
     `full` bật "xem hết danh sách": liệt kê MỌI dòng hợp lệ chứ không chỉ PREVIEW_ROWS dòng đầu —
     mỗi thẻ vẫn gọn (link + caption cắt ngắn + đếm ảnh), nội dung đầy đủ của một dòng xin qua `io_detail`.

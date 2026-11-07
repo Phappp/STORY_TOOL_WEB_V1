@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -5579,9 +5580,10 @@ check("P23a caption ngắn dưới trần DUP_MIN_CAP không đem so chữ (kh�
 check("P23a import_dupes KHÔNG bỏ dòng nào: sáu dòng vào nguyên vẹn, items chỉ là tập con có cờ",
       len(_p23a_rows) == 6 and all(0 <= int(it["i"]) < 6 for it in _p23a_items)
       and {int(it["i"]) for it in _p23a_items} < set(range(6)))
-check("P23a bản tổng kết đếm đủ TỪNG luật, khớp số cờ trên dòng, và header nói 'N/M dòng nghi trùng'",
+check("P23a bản tổng kết đếm đủ TỪNG luật, khớp số cờ trên dòng, và header nói 'N/M dòng nghi trùng' "
+      "(P23e thêm khóa `sim` vào by_rule — sáu dòng này mỗi dòng chỉ đụng một luật nên sim = 0)",
       _p23a_summ["total"] == 6 and _p23a_summ["rows"] == 5
-      and _p23a_summ["by_rule"] == {"file": 1, "link": 1, "caption": 1, "near": 2}
+      and _p23a_summ["by_rule"] == {"file": 1, "link": 1, "caption": 1, "sim": 0, "near": 2}
       and sum(_p23a_summ["by_rule"].values()) == sum(len(r) for r in _p23a_rules.values())
       and _p23a_summ["line"].startswith("5/6 dòng nghi trùng"))
 _p23a_ci, _p23a_clean = ga.import_dupes(_p23a_ctx, [{"url": "https://fb.watch/zzzz9/", "caption": ""}])
@@ -5852,6 +5854,61 @@ check("P23d docstring của dup_key phải nói đủ ba chuyện (id nào nhậ
       "bó tay) — khóa so trùng là chỗ người sau dễ 'sửa cho thông minh hơn' nhất",
       "fbid" in ga.dup_key.__doc__ and "watch:" in ga.dup_key.__doc__
       and "_DUP_TRACK_PREFIXES" in (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8"))
+
+# --- P23e: caption KHÔNG cần giống hệt mới bị cờ (luật `sim` ≥90%, chặn ứng viên bằng cụm-3-từ) ---
+_p23e_root = stories.validate_root(_p23a_box / "ws_p23e")
+_p23e_ctx = ga.build_ctx(db.connect(), _p23e_root)
+_p23e_old = " ".join("tuchung%d" % i for i in range(120))
+_p23e_words = _p23e_old.split()
+for _p23e_k in (30, 60, 90):
+    _p23e_words[_p23e_k] = "khac%d" % _p23e_k
+_p23e_edit = " ".join(_p23e_words)             # 3 chữ khác, ở GIỮA bài
+_p23e_sid = stories.create_story(_p23e_root, topic="Bài dài")["id"]
+stories.save_input(_p23e_root, _p23e_sid, _p23e_old)
+_p23e_items, _p23e_summ = ga.import_dupes(_p23e_ctx, [
+    {"url": "https://www.facebook.com/posts/3000000001", "caption": _p23e_edit, "images": []},
+    {"url": "https://www.facebook.com/posts/3000000002", "caption": _p23e_old, "images": []},
+    {"url": "https://www.facebook.com/posts/3000000003",
+     "caption": " ".join("khachan%d" % i for i in range(120)), "images": []},
+])
+_p23e_rules = {int(it["i"]): (list(it["rules"]), int(it.get("sim") or 0)) for it in _p23e_items}
+check("P23e luật `sim` bắt được cái mà HAI luật chữ cũ cùng trượt: sửa 3 chữ ở giữa bài dài vẫn bị cờ "
+      "và nói rõ giống bao nhiêu % (P23a chỉ có giống-hệt hoặc bài cũ nằm trọn ở ĐẦU)",
+      _p23e_rules.get(0, ([], 0))[0] == ["sim"] and _p23e_rules[0][1] >= 90
+      and ("%d%%" % _p23e_rules[0][1]) in _p23e_items[0]["hits"][0]["what"])
+check("P23e giống HẸT vẫn do luật `caption` gọi (tra dict, khỏi tính %): `sim` chạy SAU, không cướp "
+      "việc của đường rẻ, và bài chữ khác hẳn thì im",
+      _p23e_rules.get(1, ([], 0))[0] == ["caption"] and 2 not in _p23e_rules
+      and "caption gần giống" in _p23e_summ["line"])
+check("P23e vì sao PHẢI so trên TỪ với autojunk=False: đo ngay trên dữ liệu này, SequenceMatcher ký tự "
+      "mặc định ra 0.241 (<90%) tức luật 90% không BAO GIỜ nổ cờ — 'dọn cho gọn' một dòng là giết luật",
+      SequenceMatcher(None, _p23e_edit, _p23e_old).ratio() < ga.DUP_SIM
+      and SequenceMatcher(None, _p23e_edit.split(), _p23e_old.split(), autojunk=False).ratio() >= ga.DUP_SIM
+      and "autojunk=False" in _p23c_a_src and ga.DUP_SIM == 0.90)
+_p23e_rec = {"id": "story_900", "topic": "", "status": "", "b0": ""}
+_p23e_ws = {"sim": ga.sim_index([(" ".join("a%d" % i for i in range(8)), _p23e_rec)])}
+check("P23e caption dưới DUP_SIM_TOKENS chữ không đem so % — hai câu 6-8 chữ đụng nhau 90% là chuyện "
+      "bình thường, cờ oan nhiều hơn cờ ích",
+      ga.sim_caption("a0 a1 a2 a3 a4 a5 x6", _p23e_ws) is None
+      and ga.sim_caption(" ".join("a%d" % i for i in range(8)), _p23e_ws) is None)
+_p23e_caps = [" ".join("t%d" % ((i * 131 + j * 17) % 5000) for j in range(140)) for i in range(300)]
+_p23e_ws2 = {"sim": ga.sim_index([(c, dict(_p23e_rec, id="story_%03d" % i)) for i, c in enumerate(_p23e_caps)])}
+_p23e_q = []
+for _p23e_i in range(200):
+    _p23e_w = _p23e_caps[_p23e_i].split()
+    for _p23e_k in (7, 40, 90):
+        _p23e_w[_p23e_k] = "z%d" % _p23e_k
+    _p23e_q.append(" ".join(_p23e_w))
+_p23e_t = time.perf_counter()
+_p23e_hits = [ga.sim_caption(c, _p23e_ws2) for c in _p23e_q]
+_p23e_el = time.perf_counter() - _p23e_t
+check("P23e đắt nhất cũng phải rẻ: 200 dòng × 300 caption cũ qua `sim` hết %.2f s (trần 2 s) và bắt đủ "
+      "200 bản sửa 3 chữ — bản naive so ký tự hết 17.7 s nên mới phải chặn bằng cụm-3-từ" % _p23e_el,
+      _p23e_el < 2.0 and all(h is not None and h[1] >= ga.DUP_SIM for h in _p23e_hits))
+check("P23e lưới in con số THẬT lên chip ('caption 97%' từ `dup.sim`, không phải chữ 'gần giống' chung "
+      "chung) + help ô Import nói caption không cần giống hệt mới bị cờ",
+      'caption " + dup.sim + "%" ' in _p23c_fe and 'sim: "caption gần giống"' in _p23c_fe
+      and "≥90%" in _p23c_fe and "khuôn mẫu" in _p23c_fe)
 shutil.rmtree(_p23a_box, ignore_errors=True)
 # --- hết P23a ---
 

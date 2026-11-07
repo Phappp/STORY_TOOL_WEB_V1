@@ -2033,7 +2033,7 @@ let IO_ALL = false;     // "▾ xem hết danh sách" đang bật? -> import_rea
 let IO_DETAIL = {};     // payload chi tiết MỘT dòng vừa xin (kind:detail) — index để biết thẻ nào đang mở
 const IO_DUP_LABELS = {
   file: "trùng trong file", link: "link đã có bài",
-  caption: "caption giống hệt", near: "nghi trùng",
+  caption: "caption giống hệt", sim: "caption gần giống", near: "nghi trùng",
 };
 
 function ioModel() { return MODEL.io && typeof MODEL.io === "object" ? MODEL.io : {}; }
@@ -2242,6 +2242,9 @@ function ioImportCard() {
       "Chọn file và dán chữ là hai nguồn của cùng một lần tạo: nguồn nào bấm Xem trước SAU thì nguồn đó sẽ được tạo.",
       "Trần " + ioCap() + " MB và " + Number(ioModel().max_rows || 200) + " bài một lần; dòng vượt trần hiện ở ô Xem trước.",
       "Chống trùng P23a: dòng trùng link/caption/ảnh bị GẮN CỜ 🔎 chứ KHÔNG tự bỏ — anh bấm nút nào mới quyết tạo hay bỏ.",
+      "Caption không cần giống HẸT mới bị cờ: giống hệt → 🔎 'caption giống hệt'; chỉ khác vài chữ "
+        + "(≥90%) → 🔎 'caption 93%' — con số đó là tỷ lệ chữ thật, bài cũ nào bị đụng thì xem ▾ chi tiết. "
+        + "Caption theo khuôn mẫu (chỉ đổi tên quán) vì vậy cũng dính cờ, cờ để xem chứ không chặn.",
       "Hai giới hạn của chống trùng, nói thẳng để đừng tin tưởng mù quáng: link rút gọn fb.watch/… "
         + "KHÔNG bao giờ dính cờ với link thường của cùng một video (muốn biết nó trỏ đi đâu phải hỏi "
         + "máy chủ Facebook, còn đây chỉ so chữ), và bài đã xóa nằm trong .trash KHÔNG được đếm là bài "
@@ -2313,7 +2316,8 @@ function ioThumb(url) {
 function ioDupChip(dup) {
   const rules = (dup && Array.isArray(dup.rules)) ? dup.rules : [];
   if (!rules.length) return null;
-  const chip = el("span", "iodup", "🔎 " + rules.map(r => IO_DUP_LABELS[r] || r).join(" · "));
+  const chip = el("span", "iodup", "🔎 " + rules.map(r =>
+    r === "sim" && Number(dup.sim) ? "caption " + dup.sim + "%" : (IO_DUP_LABELS[r] || r)).join(" · "));
   const hits = (dup.hits || []).map(h => "· " + (h.what || "")
     + (h.id ? " → bài " + h.id + (h.topic ? " “" + h.topic + "”" : "") + " (" + (h.b0 || h.status || "?") + ")" : "")).join("\n");
   chip.title = "Nghi trùng (P23a) — KHÔNG tự chặn, anh quyết bằng hai nút ở ô Import.\n"
