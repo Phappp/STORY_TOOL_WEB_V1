@@ -4925,12 +4925,14 @@ try:
           "biết thêm tên bộ có tăng dung lượng hay không",
           "2 tài khoản CLI thật, đọc từ máy cho 3 bộ codex_cli" in _t18g
           and "3 tên bộ chỉ là 2 tài khoản: thêm provider codex_cli KHÔNG tăng dung lượng" in _t18g)
-    check("P18g mỗi khối kể được nhà nào (tên bộ + accountId ngắn), home nào, khai báo ở biến nào, và "
-          "nhà nào tool CHƯA chạy bằng — đường dẫn không tới từ browser nên phải chỉ chỗ sửa trong .env",
-          "▸ [1] G1 · G3 — acct-1" in _t18g and "(không khai báo home riêng)" in _t18g
+    check("P18g mỗi khối kể được nhà nào (tên bộ + nhãn tài khoản), home nào, khai báo ở biến nào, và "
+          "nhà nào tool CHƯA chạy bằng — đường dẫn không tới từ browser nên phải chỉ chỗ sửa trong .env. "
+          "Hai home giả của P18g KHÔNG có auth.json nên nhãn phải rơi về id, không được bịa email",
+          "▸ [1] G1 · G3 — id acct-1" in _t18g and "(không khai báo home riêng)" in _t18g
           and "home của CLI mà tool ĐANG chạy bằng ⚡/▶" in _t18g
-          and "▸ [2] G2 — acct-2" in _t18g and "(khai báo ở biến G2_CODEX_HOME)" in _t18g
-          and "chưa nối nhà này vào đường chạy" in _t18g)
+          and "▸ [2] G2 — id acct-2" in _t18g and "(khai báo ở biến G2_CODEX_HOME)" in _t18g
+          and "chưa nối nhà này vào đường chạy" in _t18g
+          and "@" not in _t18g)
     check("P18g có nhà còn trần mà nhà khác chưa hết thì nói to cơ hội: bao nhiêu/bao nhiêu tài khoản "
           "còn chạy được — nhưng vẫn là chữ để anh quyết, tool không tự đổi provider",
           "Còn 1/2 tài khoản chưa chạm trần" in _t18g and "chỉ định" in _t18g
@@ -5011,6 +5013,209 @@ check("P18g hai nút đăng nhập cũng đi theo home của bộ đang chọn (
       and "prov.codex_login(home)" in _p18f_app_src
       and "prov.codex_login_status(home)" in _p18f_app_src)
 # --- hết P18g ---
+
+# --- P18i: màn hạn mức PHẢI gọi được tên từng tài khoản — email đã che + gói đọc từ token của home ---
+# Lý do thật mà block này chốt: `accountId` của app-server chỉ là chuỗi hex, còn branch CACHED
+# (session log) thì không kèm id nào cả — nên hai nhà cùng một tài khoản hiện ra hai khối y hệt nhau
+# mà không cách nào phân biệt. CLI tự lưu email + account id + gói trong `id_token` ở auth.json của
+# từng home; đọc file đó (chỉ các claim mô tả, email đã che) là đủ, không gọi mạng, không spawn CLI.
+_P18I_ENV_OLD = {v: os.environ.get(v) for v in ("CODEX_HOME", "IC_CODEX_HOME", "ID_CODEX_HOME")}
+_P18I_H1 = Path(tempfile.mkdtemp(prefix="fbcodex_id1_"))
+_P18I_H2 = Path(tempfile.mkdtemp(prefix="fbcodex_id2_"))
+_P18I_RAW_EMAIL = "kit.tran.dz@example.com"
+_P18I_MASK = "ki***@example.com"
+_P18I_ACCESS = "SECUREDONTPRINT.accesstokenvalue"
+_P18I_REFRESH = "SECUREDONTPRINT.refreshtokenvalue"
+
+
+def _p18i_jwt(claims):
+    """Một JWT GIẢ đúng khuôn (header.payload.signature, base64url không padding) cho fixture."""
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode("utf-8")).decode("ascii").rstrip("=")
+    return "eyJhbGciOiJub25lIn0." + body + ".c2ln"
+
+
+def _p18i_auth(account_id="acct-kit", plan="plus", email=_P18I_RAW_EMAIL, tokens=True):
+    payload = {"email": email, "https://api.openai.com/auth": {
+        "chatgpt_account_id": account_id, "chatgpt_plan_type": plan, "chatgpt_user_id": "user-1"}}
+    data = {"auth_mode": "chatgpt" if tokens else "apikey", "OPENAI_API_KEY": None}
+    if tokens:
+        data["tokens"] = {"id_token": _p18i_jwt(payload), "access_token": _P18I_ACCESS,
+                          "refresh_token": _P18I_REFRESH, "account_id": account_id}
+    return json.dumps(data)
+
+
+def _p18i_write(home, text):
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "auth.json").write_text(text, encoding="utf-8")
+
+
+# Các dạng auth.json thật gặp: claim thiếu account id, chỉ có API key, file hỏng, file không phải object.
+_P18I_DIR = Path(tempfile.mkdtemp(prefix="fbcodex_id_variants_"))
+_p18i_home_no_claim = _P18I_DIR / "no_claim"
+_p18i_home_no_claim.mkdir(parents=True, exist_ok=True)
+_p18i_jwt_no_claim = "eyJhbGciOiJub25lIn0." + base64.urlsafe_b64encode(json.dumps(
+    {"email": _P18I_RAW_EMAIL, "https://api.openai.com/auth": {"chatgpt_user_id": "user-1"}}
+).encode("utf-8")).decode("ascii").rstrip("=") + ".c2ln"
+(_p18i_home_no_claim / "auth.json").write_text(json.dumps(
+    {"auth_mode": "chatgpt", "tokens": {"id_token": _p18i_jwt_no_claim, "account_id": "acct-plain",
+                                        "access_token": _P18I_ACCESS}}), encoding="utf-8")
+_p18i_home_apikey = _P18I_DIR / "apikey"
+_p18i_home_apikey.mkdir(parents=True, exist_ok=True)
+(_p18i_home_apikey / "auth.json").write_text(_p18i_auth(tokens=False), encoding="utf-8")
+_p18i_home_missing = _P18I_DIR / "khong_ton_tai"
+_p18i_home_broken = _P18I_DIR / "broken"
+_p18i_write(_p18i_home_broken, '{"auth_mode": "chatgpt", "tokens":')
+_p18i_home_list = _P18I_DIR / "is_list"
+_p18i_write(_p18i_home_list, "[1, 2, 3]")
+# Nguồn của đúng hàm đọc danh tính, để chốt cấu trúc 'chỉ đụng id_token'.
+_p18i_id_src = _p18f_src[_p18f_src.index("def codex_identity("):_p18f_src.index("def _usage_result(")]
+
+os.environ["CODEX_HOME"] = str(_P18I_H1)
+os.environ["IC_CODEX_HOME"] = str(_P18I_H1)
+os.environ["ID_CODEX_HOME"] = str(_P18I_H2)
+try:
+    _p18i_write(_P18I_H1, _p18i_auth())
+    _id18i = prov.codex_identity(_P18I_H1)
+    check("P18i một home có token -> email ĐÃ CHE + account id + gói, đủ để màn hạn mức gọi tên tài khoản",
+          _id18i == {"auth_mode": "chatgpt", "email": _P18I_MASK, "account_id": "acct-kit", "plan": "plus"})
+    check("P18i email che vẫn nhận ra nhau mà không lộ hộp thư: giữ tối đa 2 ký tự đầu + toàn bộ domain; "
+          "hộp thư ngắn thì giữ 1 ký tự, không có @ hoặc rỗng thì KHÔNG có nhãn (không được in '@***')",
+          prov._mask_email(_P18I_RAW_EMAIL) == _P18I_MASK
+          and prov._mask_email("ab@gmail.com") == "a***@gmail.com"
+          and prov._mask_email("abcdef@gmail.com") == "ab***@gmail.com"
+          and prov._mask_email("no-at-sign") == "" and prov._mask_email("@gmail.com") == ""
+          and prov._mask_email("") == "" and prov._mask_email(None) == ""
+          and _P18I_RAW_EMAIL not in _P18I_MASK)
+    check("P18i token đăng nhập KHÔNG phải thứ hàm này đụng tới: id + gói lấy từ `id_token` (chỉ giải mã "
+          "payload để đọc claim, không xác minh chữ ký), `access_token`/`refresh_token` nằm im trong file "
+          "và không xuất hiện ở bất kỳ giá trị nào trả về",
+          _P18I_ACCESS not in json.dumps(_id18i, ensure_ascii=False)
+          and _P18I_REFRESH not in json.dumps(_id18i, ensure_ascii=False)
+          and _P18I_RAW_EMAIL not in json.dumps(_id18i, ensure_ascii=False)
+          and '"id_token"' in _p18i_id_src and "access_token" not in _p18i_id_src
+          and "refresh_token" not in _p18i_id_src)
+    check("P18i đọc danh tính là ĐƯỜNG OFFLINE: không httpx, không subprocess, không chạm hai hàm hỏi "
+          "CLI — một lượt xem hạn mức không được thưa thêm request hay process nào",
+          "httpx" not in _p18i_id_src and "subprocess" not in _p18i_id_src
+          and "_codex_rate_limits_live" not in _p18i_id_src
+          and "_codex_rate_limits_cached" not in _p18i_id_src
+          and "account/rateLimits" not in _p18i_id_src)
+    _id18i_fb = prov.codex_identity(_p18i_home_no_claim)
+    check("P18i token không có claim account thì vẫn còn `tokens.account_id` làm phương án hai (id vẫn "
+          "dùng để gộp trùng), email/gói chỉ hiện khi claim có thật",
+          _id18i_fb.get("account_id") == "acct-plain" and _id18i_fb.get("email") == _P18I_MASK)
+    _id18i_api = prov.codex_identity(_p18i_home_apikey)
+    check("P18i home đăng nhập bằng API key (auth.json không có `tokens`) -> chỉ nói auth_mode, KHÔNG có "
+          "dòng 'gói plus' hay email bịa ra", _id18i_api == {"auth_mode": "apikey"})
+    check("P18i auth.json mất / hỏng / không phải object -> {} chứ không ném lỗi: nhà chưa đăng nhập vẫn "
+          "phải hiện được khối hạn mức của nó kèm lý do thật",
+          prov.codex_identity(_p18i_home_missing) == {} and prov.codex_identity(_p18i_home_broken) == {}
+          and prov.codex_identity(_p18i_home_list) == {})
+    check("P18i JWT rác (sai base64, thiếu dấu chấm, payload không phải object) -> {} — giải mã được cái "
+          "gì thì nói nấy, không được crash giữa lượt xem",
+          prov._jwt_claims("not-a-jwt") == {} and prov._jwt_claims("a") == {}
+          and prov._jwt_claims("") == {} and prov._jwt_claims(None) == {}
+          and prov._jwt_claims("e30.###.e30") == {}
+          and prov._jwt_claims("a." + base64.urlsafe_b64encode(b"[1,2]").decode().rstrip("=") + ".c") == {}
+          and prov._jwt_claims("a." + base64.urlsafe_b64encode(b'{"email":"x@y.z"}').decode().rstrip("=") + ".c")
+          == {"email": "x@y.z"})
+    check("P18i không truyền home -> đọc nhà mặc định của máy (mọi lời gọi một tài khoản của P18f giữ "
+          "nguyên hành vi cũ)",
+          prov.codex_identity().get("email") == _P18I_MASK
+          and "def codex_identity(home=None)" in _p18f_sec)
+    _tag_cases = [
+        prov._usage_account_tag({"identity": {"email": _P18I_MASK}, "account_id": "acct-kit"}),
+        prov._usage_account_tag({"identity": {}, "account_id": "acct-kit-0000"}),
+        prov._usage_account_tag({"identity": {}, "account_id": ""}),
+    ]
+    check("P18i nhãn ứng viên cho tên bộ: email che > id > 'chưa có token' (thứ tự không được đảo — id hex "
+          "mà chen trước thì màn hình lại vô nghĩa như cũ), và cả ba đều là chữ, không phải None/rỗng",
+          _tag_cases[0] == f" — {_P18I_MASK}" and _tag_cases[1] == " — id acct-kit"
+          and "chưa có token" in _tag_cases[2]
+          and all(isinstance(t, str) and t.strip() for t in _tag_cases)
+          and _P18I_RAW_EMAIL not in "".join(_tag_cases))
+
+    # Hai home, LIVE chết, session log KHÔNG có id nào: chỉ danh tính từ token mới gộp được chúng.
+    for _h18i in (_P18I_H1, _P18I_H2):
+        (_h18i / "sessions" / "2026-11-07").mkdir(parents=True, exist_ok=True)
+        (_h18i / "sessions" / "2026-11-07" / "rollout.jsonl").write_text(
+            _p18g_logline(40), encoding="utf-8")
+    _p18i_write(_P18I_H2, _p18i_auth())          # cùng account_id 'acct-kit' với H1
+    _P18I_CALLS = []
+
+    def _p18i_dead_live(timeout=0, home=None):
+        _P18I_CALLS.append(str(home))
+        raise prov.CodexUsageError("hạn mức", "hết chờ")
+
+    _REAL_LIVE_P18I = prov._codex_rate_limits_live
+    prov._codex_rate_limits_live = _p18i_dead_live
+    try:
+        _two18i = prov.codex_usage_all([{"name": "IC", "kind": "codex_cli"},
+                                        {"name": "ID", "kind": "codex_cli"}])
+        _ttxt18i = prov.codex_usage_all_text(_two18i)
+        check("P18i hai home CACHED-only giờ GỘP được thành MỘT tài khoản nhờ id trong token (trước P18i "
+              "đây là hai khối không phân biệt nổi) — số vẫn là CACHED của từng nhà, không bịa LIVE",
+              len(_two18i["accounts"]) == 1 and _two18i["accounts"][0]["providers"] == ["IC", "ID"]
+              and len(_two18i["accounts"][0]["homes"]) == 2
+              and _two18i["accounts"][0]["source"] == "CACHED"
+              and _two18i["accounts"][0]["account_id"] == "acct-kit"
+              and sorted(_P18I_CALLS) == sorted([str(_P18I_H1), str(_P18I_H2)]))
+        check("P18i đầu khối hiện EMAIL ĐÃ CHE thay cho chuỗi hex, và dòng giải thích '2 home khác nhau "
+              "nhưng CLI báo cùng MỘT tài khoản' cũng gọi tên bằng email che đó",
+              f"▸ [1] IC · ID — {_P18I_MASK}" in _ttxt18i and _P18I_RAW_EMAIL not in _ttxt18i
+              and f"cùng MỘT tài khoản ({_P18I_MASK})" in _ttxt18i
+              and "dung lượng không cộng dồn" in _ttxt18i)
+        check("P18i đầu trang nói rõ email ấy ở đâu ra và đã che — để không ai tưởng tool gọi API đọc hộp thư",
+          "Email che" in _ttxt18i and "token đăng nhập" in _ttxt18i and "chỉ đọc" in _ttxt18i)
+        # Hai home KHÁC tài khoản: vẫn phải ra hai khối, mỗi khối một email.
+        _p18i_write(_P18I_H2, _p18i_auth(account_id="acct-other", plan="free",
+                                         email="rob.other@another.com"))
+        _sep18i = prov.codex_usage_all([{"name": "IC", "kind": "codex_cli"},
+                                        {"name": "ID", "kind": "codex_cli"}])
+        _stxt18i = prov.codex_usage_all_text(_sep18i)
+        check("P18i hai tài khoản thật thì hiện HAI khối, mỗi khối email riêng — đây đúng là cái anh hỏi "
+              "'vì sao đăng nhập hai tài khoản mà báo một'",
+              len(_sep18i["accounts"]) == 2 and _P18I_MASK in _stxt18i
+              and "ro***@another.com" in _stxt18i and "2 tài khoản CLI thật" in _stxt18i)
+        check("P18i gói lấy từ token chỉ ĐỔ VÀO khi bản hạn mức không tự có gói: session log fixture "
+              "không có plan_type nên dòng 'gói theo CLI báo' ở đây là của token — vẫn là chữ CLI báo chứ "
+              "không phải hợp đồng billing, và không được ghi đè số LIVE/CACHED đã có sẵn",
+              _two18i["accounts"][0]["plan"] == "plus"
+              and "gói theo CLI báo: plus" in _ttxt18i
+              and prov.codex_usage_all_text(_sep18i).count("gói theo CLI báo: free") == 1)
+        # Home chưa đăng nhập: không có email, nhưng khối vẫn phải hiện và phải tự nhận là không có token.
+        _p18i_home_empty = Path(tempfile.mkdtemp(prefix="fbcodex_id_none_"))
+        (_p18i_home_empty / "sessions" / "2026-11-07").mkdir(parents=True, exist_ok=True)
+        (_p18i_home_empty / "sessions" / "2026-11-07" / "rollout.jsonl").write_text(
+            _p18g_logline(10), encoding="utf-8")
+        os.environ["ID_CODEX_HOME"] = str(_p18i_home_empty)
+        _none18i = prov.codex_usage_all([{"name": "IC", "kind": "codex_cli"},
+                                         {"name": "ID", "kind": "codex_cli"}])
+        _ntxt18i = prov.codex_usage_all_text(_none18i)
+        check("P18i nhà chưa đăng nhập không bị ẩn đi và không bị mượn email nhà khác: vẫn là khối riêng, "
+              "tự nói 'chưa có token đăng nhập ở home này'",
+              len(_none18i["accounts"]) == 2 and "chưa có token đăng nhập ở home này" in _ntxt18i
+              and _ntxt18i.count(_P18I_MASK) == 1)
+        shutil.rmtree(_p18i_home_empty, ignore_errors=True)
+    finally:
+        prov._codex_rate_limits_live = _REAL_LIVE_P18I
+
+    check("P18i danh tính chỉ phục vụ màn XEM: grid / grid_actions / steps + HTML component không đọc "
+          "auth.json, không biết codex_identity là gì — không có ngả nào cho browser lấy email của anh",
+          all(("codex_identity" not in (Path(__file__).resolve().parent / f).read_text(encoding="utf-8")
+               and "auth.json" not in (Path(__file__).resolve().parent / f).read_text(encoding="utf-8"))
+              for f in ("grid.py", "grid_actions.py", "steps.py"))
+          and "auth.json" not in (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+          and "codex_identity" not in (Path(__file__).resolve().parent / "app.py").read_text(encoding="utf-8"))
+finally:
+    for _k18i, _v18i in _P18I_ENV_OLD.items():
+        if _v18i is None:
+            os.environ.pop(_k18i, None)
+        else:
+            os.environ[_k18i] = _v18i
+    for _d18i in (_P18I_H1, _P18I_H2, _P18I_DIR):
+        shutil.rmtree(_d18i, ignore_errors=True)
+# --- hết P18i ---
 
 
 # cleanup test rows

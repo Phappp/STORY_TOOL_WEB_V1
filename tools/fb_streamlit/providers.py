@@ -588,6 +588,57 @@ def _epoch_local(raw) -> str:
         return ""
 
 
+def _mask_email(raw) -> str:
+    """Email đã che: giữ tối đa 2 ký tự đầu hộp thư — đủ để phân biệt hai tài khoản, không lộ nguyên văn."""
+    local, sep, domain = str(raw or "").partition("@")
+    if not sep or not local:
+        return ""
+    return f"{local[:2] if len(local) >= 3 else local[:1]}***@{domain}"
+
+
+def _jwt_claims(token) -> dict:
+    """Payload giữa của một JWT — chỉ để đọc các claim mô tả tài khoản, KHÔNG ký tên hay xác minh."""
+    parts = str(token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    try:
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        obj = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8", "replace"))
+    except (ValueError, TypeError, UnicodeError):
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def codex_identity(home=None) -> dict:
+    """Nhà này là AI — đọc `auth.json` của CHÍNH CLI trong home đó, không gọi mạng, không gửi prompt.
+
+    Lý do có mặt: `accountId` mà app-server trả chỉ là một chuỗi hex vô nghĩa với người đọc, còn
+    P18f thì CACHED (session log) không kèm id nào cả — nên hai nhà cùng một tài khoản không phân
+    biệt nổi. email đã che + account id + gói nằm trong `id_token` mà CLI tự lưu, đọc offline là đủ.
+    File đó cũng chứa token đăng nhập, nhưng hàm này KHÔNG chạm vào chúng: chỉ lấy các claim mô tả
+    tài khoản, và email luôn qua _mask_email trước khi ra màn hình.
+    """
+    path = (Path(home) if home else codex_home()) / "auth.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {"auth_mode": str(data.get("auth_mode") or "")}
+    tokens = data.get("tokens")
+    claims = _jwt_claims(tokens.get("id_token") if isinstance(tokens, dict) else "")
+    prof = claims.get("https://api.openai.com/auth")
+    prof = prof if isinstance(prof, dict) else {}
+    email = _mask_email(claims.get("email"))
+    account_id = str(prof.get("chatgpt_account_id") or "")
+    if not account_id and isinstance(tokens, dict):
+        account_id = str(tokens.get("account_id") or "")
+    out.update({"email": email, "account_id": account_id,
+                "plan": str(prof.get("chatgpt_plan_type") or "")})
+    return {k: v for k, v in out.items() if v}
+
+
 def _usage_result(obj, source: str, stamp: str = "", reason: str = "") -> dict:
     reached, allowed = _usage_reached(obj)
     credits = {}
@@ -835,8 +886,8 @@ def codex_usage_all(providers, timeout: int = USAGE_TIMEOUT, budget: int = USAGE
 
     Tuần tự là có lý do: mỗi nhà là một process `app-server` (~2-3.2 s đo thật), mở hết cùng lúc thì
     chỉ thêm nguy cơ. Quá ngân sách thì nhà còn lại báo UNKNOWN kèm lý do thật, chứ không treo trang.
-    Hai nhà khác thư mục nhưng CLI báo cùng `accountId` được gộp thành MỘT tài khoản — đó chính là
-    câu trả lời cho 'thêm nhiều provider codex có tăng dung lượng không'.
+    Hai nhà khác thư mục nhưng báo CÙNG tài khoản được gộp thành MỘT khối — đó chính là câu trả lời
+    cho 'thêm nhiều provider codex có tăng dung lượng không'.
     """
     accounts = codex_accounts(providers)
     records, by_id = [], {}
@@ -850,6 +901,12 @@ def codex_usage_all(providers, timeout: int = USAGE_TIMEOUT, budget: int = USAGE
         rec = dict(usage)
         rec.update({"providers": list(acc["providers"]), "home": acc["home"], "var": acc["var"],
                     "declared": acc["declared"], "runs_here": acc["runs_here"]})
+        rec["identity"] = codex_identity(Path(acc["home"]))
+        identity = rec["identity"]
+        # CACHED không kèm id nào cả — lấy id trong token của chính home đó để hai nhà trùng
+        # tài khoản vẫn gộp được, và để màn hình gọi tên được tài khoản thay vì một chuỗi hex.
+        rec["account_id"] = rec.get("account_id") or identity.get("account_id", "")
+        rec["plan"] = rec.get("plan") or identity.get("plan", "")
         aid = rec.get("account_id") or ""
         first = by_id.get(aid) if aid else None
         if first is not None:
@@ -864,6 +921,22 @@ def codex_usage_all(providers, timeout: int = USAGE_TIMEOUT, budget: int = USAGE
             "n_providers": sum(len(a["providers"]) for a in accounts)}
 
 
+def _usage_account_tag(rec: dict) -> str:
+    """Nhãn đứng sau tên bộ: email ĐÃ CHE là thứ người đọc nhận ra, id hex chỉ là phương án cuối.
+
+    Hai nhà cùng một email che thì rõ ràng là một tài khoản hơn nhiều so với hai chuỗi `acct-1`,
+    `acct-2` mà không ai đoán được là ai. Home chưa đăng nhập thì nói thẳng là không có token.
+    """
+    identity = rec.get("identity") or {}
+    email = str(identity.get("email") or "")
+    if email:
+        return f" — {email}"
+    aid = str(rec.get("account_id") or "")
+    if aid:
+        return f" — id {aid[:8]}"
+    return " — chưa có token đăng nhập ở home này nên không gọi được tên tài khoản"
+
+
 def codex_usage_all_text(result: dict) -> str:
     """Chữ hiển thị cho LƯỢT XEM TẤT CẢ: một khối mỗi tài khoản thật, kèm số bộ codex_cli đứng sau nó."""
     accounts = result.get("accounts") or []
@@ -872,11 +945,12 @@ def codex_usage_all_text(result: dict) -> str:
         return ("Chưa có bộ nào loại 'Codex CLI (local)' trong Cấu hình ▸ Providers, nên không có tài "
                 "khoản Codex nào để xem hạn mức.")
     lines = [f"Hạn mức Codex — {len(accounts)} tài khoản CLI thật, đọc từ máy cho {n_providers} bộ codex_cli "
-             "(chỉ đọc: không gửi prompt, không đổi tài khoản, không API tính phí nào được gọi):"]
+             "(chỉ đọc: không gửi prompt, không đổi tài khoản, không API tính phí nào được gọi). Email che "
+             "ở đầu mỗi khối là email trong token đăng nhập của chính home đó:"]
     for i, rec in enumerate(accounts, start=1):
         names = " · ".join(rec.get("providers") or [])
         lines.append("")
-        lines.append(f"▸ [{i}] {names}" + (f" — {rec['account_id'][:8]}" if rec.get("account_id") else ""))
+        lines.append(f"▸ [{i}] {names}{_usage_account_tag(rec)}")
         if rec.get("source") == "UNKNOWN":
             lines.append(f"· không đọc được tài khoản này: {rec.get('reason') or 'CLI không trả lời'} "
                          "— session log của nhà này cũng không có số còn tin được.")
@@ -887,8 +961,8 @@ def codex_usage_all_text(result: dict) -> str:
         declared = f"khai báo ở biến {rec['var']}" if rec.get("declared") else "không khai báo home riêng"
         lines.append(f"· home: {rec['home']} ({declared}) — {home_note}")
         if len(rec.get("homes") or []) > 1:
-            lines.append(f"· {len(rec['homes'])} home khác nhau nhưng CLI báo cùng một accountId "
-                         "→ chỉ MỘT tài khoản, dung lượng không cộng dồn.")
+            lines.append(f"· {len(rec['homes'])} home khác nhau nhưng CLI báo cùng MỘT tài khoản "
+                         f"({_usage_account_tag(rec).strip(' —')}) → dung lượng không cộng dồn.")
         lines.extend(_usage_body_lines(rec))
     if n_providers > len(accounts):
         lines.append("")
