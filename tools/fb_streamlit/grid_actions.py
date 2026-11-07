@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from hashlib import sha1
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 import db
 import fb_import
@@ -730,17 +730,36 @@ _FB_ID_RES = (
     re.compile(r"/photos/[^/]+/(\d{5,})"),
     re.compile(r"/photos/(\d{5,})"),
     re.compile(r"/p/(\d{5,})"),
-    re.compile(r"[?&](?:story_fbid|media_id|fb_action_ids)=(\d{5,}|pfbid[0-9A-Za-z_-]{5,})"),
+    re.compile(r"[?&](?:story_fbid|media_id|fb_action_ids|fbid|action_id)=(\d{5,}|pfbid[0-9A-Za-z_-]{5,})"),
     re.compile(r"fb\.watch/([A-Za-z0-9_-]{4,})", re.IGNORECASE),
 )
+# Chỉ dùng khi KHÔNG trích được id: mấy tham số này đổi theo từng lượt chia sẻ/đếm quảng cáo, giữ
+# nguyên thì hai link cùng MỘT trang ra hai khóa khác nhau. Viết theo ĐẦU TỪ khóa để `utm_source`,
+# `utm_medium`… khỏi phải liệt kê từng cái; `id`/`fbid` không dính đầu nào nên vẫn còn nguyên.
+_DUP_TRACK_PREFIXES = ("utm_", "fbclid", "sfcid", "_ga", "_gl", "_rdc", "_rdr", "_nc_", "_tn_",
+                       "__", "ref", "pnref", "hc_ref", "awre", "medium", "campaign", "source",
+                       "is_from", "sharing", "sfnsn", "wsh")
+
+
+def _clean_query(query: str) -> str:
+    """Query chuẩn hóa cho khóa: bỏ tham số theo dõi, sắp theo tên khóa để thứ tự không thành khác biệt."""
+    kept = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True)
+            if not k.lower().startswith(_DUP_TRACK_PREFIXES)]
+    return urlencode(sorted(kept)) if kept else ""
 
 
 def dup_key(url) -> str:
     """KHÓA SO TRÙNG của một link FB: id bài nếu trích được, ngược lại link đã chuẩn hóa.
 
-    Query CHỈ bị bỏ khi path không chứa id: ở `photo.php?id=…` chính query mới là id bài, bỏ nó thì
+    Query CHỈ bị bỏ khi path không chứa id: ở `photo.php?fbid=…` chính query mới là id bài, bỏ nó thì
     hai bài khác nhau thành một. id theo đúng mẫu link FB thật (posts/videos/reels/photos/fb.watch),
     không đoán bừa — khóa sai còn tệ hơn khóa chặt vì nó báo trùng cho bài không liên quan.
+    Link không có id (trang, nhóm, sự kiện) thì khóa là host+path+query còn lại SAU khi đã vặt tham số
+    theo dõi và xếp thứ tự: cùng một trang dán hai lần với `?utm_…` khác nhau phải ra MỘT khóa.
+
+    `fb.watch/<code>` là link RÚT GỌN — khóa của nó (`watch:code`) không bao giờ khớp permalink của
+    cùng một video vì muốn biết code trỏ đi đâu phải xin máy chủ FB trả lời, tức là phải gọi mạng.
+    Ở đây chỉ so chữ nên chấp nhận bỏ qua, và modal nói thẳng điều đó cho anh hay.
     """
     value = str(url or "").strip()
     if not value:
@@ -755,7 +774,8 @@ def dup_key(url) -> str:
     parts = urlparse(low)
     host = re.sub(r"^(www|m|web)\.", "", parts.netloc.split(":")[0])
     host = "facebook.com" if host in ("fb.com", "fb.me") else host
-    tail = f"?{parts.query}" if parts.query else ""
+    tail = _clean_query(parts.query)
+    tail = f"?{tail}" if tail else ""
     return f"url:{host}{parts.path.rstrip('/') or '/'}{tail}"
 
 
@@ -916,6 +936,8 @@ def io_preview(name, data, done: str = "", ctx: Ctx | None = None, full: bool = 
     `full` bật "xem hết danh sách": liệt kê MỌI dòng hợp lệ chứ không chỉ PREVIEW_ROWS dòng đầu —
     mỗi thẻ vẫn gọn (link + caption cắt ngắn + đếm ảnh), nội dung đầy đủ của một dòng xin qua `io_detail`.
     Mỗi item mang `i` (số thứ tự dòng) để lưới gắn đúng cờ trùng vào đúng thẻ.
+    Trả kèm `trashed` = số bài đang nằm trong .trash: chống trùng KHÔNG đếm chúng, nên lưới phải
+    nói bao nhiêu bài thay vì để anh đoán vì sao dán lại một bài từng xóa mà không có cờ nào.
     """
     out = {"kind": "preview", "name": str(name or "(không tên)")[:120]}
     try:
@@ -940,9 +962,11 @@ def io_preview(name, data, done: str = "", ctx: Ctx | None = None, full: bool = 
     dupes = {"checked": False, "rows": 0, "total": len(kept),
              "by_rule": dict.fromkeys(DUP_RULE_LABELS, 0), "line": ""}
     dup_items: list[dict] = []
+    trashed = 0
     if ctx is not None:
         dup_items, dupes = import_dupes(ctx, kept)
         dupes["checked"] = True
+        trashed = len(stories.list_archived_ids(ctx.root))
     out.update({
         "digest": digest,
         "again": bool(done) and digest == done,
@@ -957,6 +981,7 @@ def io_preview(name, data, done: str = "", ctx: Ctx | None = None, full: bool = 
         "items": items,
         "dupes": dupes,
         "dup_items": dup_items,
+        "trashed": trashed,
         "line": (f"Nhận {len(kept)} bài · bỏ {len(skipped)} dòng"
                  + (f" · {with_caption} bài có caption sẵn trong file (B0 chỉ tải ảnh)" if with_caption else "")
                  + (f" · {capped} dòng cuối vượt trần {MAX_IMPORT}/lần, chưa import" if capped else "")

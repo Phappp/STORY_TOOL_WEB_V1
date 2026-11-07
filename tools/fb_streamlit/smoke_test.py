@@ -5521,10 +5521,13 @@ check("P23a dup_key nhận cả pfbid… trong story_fbid — hai host cùng m�
       == "id:pfbid0AAAA"
       and ga.dup_key("https://www.facebook.com/permalink.php?story_fbid=pfbid0BBBB") != "id:pfbid0AAAA")
 check("P23a dup_key GIỮ query khi path không có id — ở trang chỉ khác nhau ở query thì chưa đủ can "
-      "ở nói hai bài là MỘT; link rỗng không có khóa",
+      "ở nói hai bài là MỘT; link rỗng không có khóa. P23d: query GIỮ theo nghĩa NỘI DUNG, còn tham số "
+      "theo dõi (utm_/ref/fbclid/…) thì vặt hết",
       ga.dup_key("https://www.facebook.com/photo.php?fbid=111111111")
       != ga.dup_key("https://www.facebook.com/photo.php?fbid=222222222")
-      and ga.dup_key("") == "")
+      and ga.dup_key("") == ""
+      and ga.dup_key("https://facebook.com/pg/x/photos/?tab=album&album_id=999")
+      != ga.dup_key("https://facebook.com/pg/x/photos/?tab=album&album_id=888"))
 check("P23a norm_caption: khác khoảng trắng/xuống dòng/hoa-thường vẫn ra MỘT bản để so (không đụng dấu câu)",
       ga.norm_caption("  Bún  chả\nHà\tNỘI ") == ga.norm_caption("bún chả hà nội ") == "bún chả hà nội")
 
@@ -5790,6 +5793,65 @@ if _p23c_node:
     shutil.rmtree(_p23c_tmp.parent, ignore_errors=True)
 else:
     print("(bỏ qua check node --check: không có node trong PATH)")
+
+# --- P23d: ba lỗ hổng của khóa so trùng (fbid, query theo dõi, chữ nói thật trong modal) ---
+check("P23d khóa id nhận `fbid`/`action_id`: cùng MỘT bài dán dưới ba dáng (photo.php?fbid= · "
+      "story.php?story_fbid= · /posts/) giờ ra MỘT khóa — P23a chỉ nhận story_fbid nên hai dáng đầu "
+      "so không thấy nhau, dù chính link ?fbid= là dáng Facebook bấm-chia-sẻ trả về",
+      ga.dup_key("https://www.facebook.com/photo.php?fbid=1234567890&set=a.111&type=3")
+      == ga.dup_key("https://m.facebook.com/story.php?story_fbid=1234567890&id=6155")
+      == ga.dup_key("facebook.com/groups/4444/posts/1234567890")
+      == "id:1234567890"
+      and ga.dup_key("https://www.facebook.com/photo.php?fbid=pfbid0CCCC&set=a.1") == "id:pfbid0CCCC")
+check("P23d khóa `url:` (link không có id bài) vặt tham số theo dõi + xếp theo tên khóa: hai lần chia "
+      "sẻ cùng một trang ra MỘT khóa, nhưng tham số NỘI DUNG (album_id/tab) vẫn phân biệt hai trang",
+      ga.dup_key("https://www.facebook.com/somepage/photos/?ref=page_internal&utm_source=share"
+                 "&__a=1&tab=album&album_id=999")
+      == ga.dup_key("https://m.facebook.com/somepage/photos/?album_id=999&tab=album&fbclid=abc")
+      and ga.dup_key("https://facebook.com/somepage/photos/?tab=album&album_id=999")
+      != ga.dup_key("https://facebook.com/somepage/photos/?tab=booking&album_id=999"))
+_p23d_root = stories.validate_root(_p23a_box / "ws_p23d")
+_p23d_ctx = ga.build_ctx(db.connect(), _p23d_root)
+_p23d_sid = stories.create_story(_p23d_root, topic="P23d")["id"]
+stories.update_story(_p23d_root, _p23d_sid,
+                     source="https://www.facebook.com/somepage/photos/?tab=album&album_id=999&ref=x")
+_p23d_items, _p23d_sum = ga.import_dupes(_p23d_ctx, [
+    {"url": "https://www.facebook.com/somepage/photos/?album_id=999&tab=album&utm_source=share",
+     "caption": "", "images": []},                                    # 0: cùng trang, chỉ đổi query -> link
+    {"url": "https://www.facebook.com/somepage/photos/?tab=booking&album_id=999",
+     "caption": "", "images": []},                                    # 1: trang khác -> sạch
+])
+_p23d_flag = {it["i"]: it["rules"] for it in _p23d_items}
+check("P23d hai lỗ trên chạy THẬT trong import_dupes: dòng chỉ khác query theo dõi bị cờ `link`, "
+      "dòng khác nội dung query vẫn sạch",
+      _p23d_flag.get(0) == ["link"] and 1 not in _p23d_flag)
+stories.archive_story(_p23d_root, _p23d_sid)  # bài nguồn vào .trash
+_p23d_after, _ = ga.import_dupes(_p23d_ctx, [
+    {"url": "https://www.facebook.com/somepage/photos/?tab=album&album_id=999", "caption": "", "images": []}])
+check("P23d .trash KHÔNG được coi là bài đã có (đúng như chữ trong modal nói): xóa bài nguồn xong thì "
+      "dán lại link y hệt không còn cờ nào — lưới báo trước chứ không âm thầm tạo lại bài đã xóa",
+      _p23d_after == [])
+check("P23d list_archived_ids đọc được bài trong .trash (bỏ dấu mộc thời gian) trong khi "
+      "list_story_ids vẫn không thấy nó — hai danh sách ĐÚNG RA khác nhau, đó là lý do có cờ nhầm",
+      stories.list_archived_ids(_p23d_root) == [_p23d_sid]
+      and _p23d_sid not in stories.list_story_ids(_p23d_root))
+_p23d_pv = ga.io_preview("d.json", base64.b64encode(json.dumps(
+    [{"url": "https://www.facebook.com/somepage/photos/?tab=album&album_id=999", "text": ""}],
+    ensure_ascii=False).encode("utf-8")).decode("ascii"), "", _p23d_ctx)
+check("P23d io_preview ĐẾM bài trong .trash (`trashed`) — modal cần con số thật chứ không phải một câu "
+      "giải thích chung chung: 1 bài đã xóa, 1 dòng vào, 0 cờ",
+      _p23d_pv["trashed"] == 1 and _p23d_pv["rows"] == 1 and not _p23d_pv["dup_items"])
+check("P23d modal nói THẲNG hai giới hạn của khóa so trùng (fb.watch không so được với permalink, "
+      "bài trong .trash không đếm) — chữ nằm trong help của ô Import nên hover dấu ? thấy, "
+      "kèm dòng 🗑 chỉ hiện khi workspace THẬT SỰ có bài đã xóa (st.trashed)",
+      "fb.watch/" in _p23c_fe and ".trash" in _p23c_fe
+      and "KHÔNG bao giờ dính cờ với link thường" in _p23c_fe
+      and "KHÔNG được đếm là bài" in _p23c_fe
+      and "Number(st.trashed || 0)" in _p23c_fe and "bài trong workspace này đã bị xóa" in _p23c_fe)
+check("P23d docstring của dup_key phải nói đủ ba chuyện (id nào nhận · query vặt gì · fb.watch vì sao "
+      "bó tay) — khóa so trùng là chỗ người sau dễ 'sửa cho thông minh hơn' nhất",
+      "fbid" in ga.dup_key.__doc__ and "watch:" in ga.dup_key.__doc__
+      and "_DUP_TRACK_PREFIXES" in (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8"))
 shutil.rmtree(_p23a_box, ignore_errors=True)
 # --- hết P23a ---
 

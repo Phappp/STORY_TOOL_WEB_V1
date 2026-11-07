@@ -2187,6 +2187,11 @@ function ioImportCard() {
     if (dups > 0)
       body.push(ioNote("🔎 " + dups + "/" + kept + " dòng nghi trùng — xem cờ 🔎 trên từng thẻ ở ô Xem trước."
         + " Lưới KHÔNG tự chặn: hai nút dưới là hai lựa chọn của anh.", "warn"));
+    const trashed = Number(st.trashed || 0);
+    if (trashed > 0)
+      body.push(ioNote("🗑 " + trashed + " bài trong workspace này đã bị xóa (folder nằm ở .trash) — "
+        + "chúng KHÔNG được đếm là bài đã có, nên dán lại link của một bài từng xóa thì không có cờ 🔎 nào."
+        + " Bấm Tạo là mở bài mới từ đầu."));
     if (dups > 0 && clean > 0) {
       const bSkip = button((st.again ? "✓ Đã tạo " : "➕ Tạo ") + clean + " bài (bỏ " + dups + " nghi trùng)",
         "Tạo " + clean + " folder cho " + clean + " dòng SẠCH, GIỮ LẠI " + dups + " dòng nghi trùng ngoài —"
@@ -2237,6 +2242,10 @@ function ioImportCard() {
       "Chọn file và dán chữ là hai nguồn của cùng một lần tạo: nguồn nào bấm Xem trước SAU thì nguồn đó sẽ được tạo.",
       "Trần " + ioCap() + " MB và " + Number(ioModel().max_rows || 200) + " bài một lần; dòng vượt trần hiện ở ô Xem trước.",
       "Chống trùng P23a: dòng trùng link/caption/ảnh bị GẮN CỜ 🔎 chứ KHÔNG tự bỏ — anh bấm nút nào mới quyết tạo hay bỏ.",
+      "Hai giới hạn của chống trùng, nói thẳng để đừng tin tưởng mù quáng: link rút gọn fb.watch/… "
+        + "KHÔNG bao giờ dính cờ với link thường của cùng một video (muốn biết nó trỏ đi đâu phải hỏi "
+        + "máy chủ Facebook, còn đây chỉ so chữ), và bài đã xóa nằm trong .trash KHÔNG được đếm là bài "
+        + "đã có — dán lại link của bài đã xóa thì lưới im lặng tạo bài mới.",
       "Bấm “➕ Tạo N bài mới” là tạo thật N folder + hẹn B0 — chưa bấm thì chưa có gì thay đổi.",
       "Import xong mà bài vẫn thiếu caption (link riêng tư) → dùng thẻ “🔁 B0 còn thiếu” bên dưới."] });
 }

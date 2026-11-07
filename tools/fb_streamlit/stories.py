@@ -26,6 +26,7 @@ SEO_FILE = "seo.md"
 IMAGE_FILE = "image.png"
 VIDEO_BASE = "video"  # B4: giữ đúng 1 video, đuôi theo file anh tải lên -> video.mp4 / video.mov / …
 REFS_DIR = "refs"
+TRASH_DIR = ".trash"  # bài đã xóa (archive) nằm đây, khôi phục được — xem list_archived_ids
 
 STEPS = ("b1", "b2", "b3")
 STEP_FILE = {"b1": CAPTION_FILE, "b3": SEO_FILE, "b2": IMAGE_FILE}
@@ -178,6 +179,25 @@ def list_story_ids(root: Path) -> list[str]:
     except OSError:
         return []
     return sorted(e.name for e in entries if e.is_dir() and not e.is_symlink() and STORY_ID_RE.fullmatch(e.name))
+
+
+def list_archived_ids(root: Path) -> list[str]:
+    """id các bài đã xóa (folder trong `.trash`, tên dạng `story_123__20261107-102030`).
+
+    Chống trùng KHÔNG tính mấy bài này — anh đã bấm Xóa thì lần import lại chính bài đó phải là
+    việc bình thường, không bị báo "đã có bài". Lưới vẫn ĐẾM chúng để nói thẳng trong modal:
+    "N bài đang nằm trong .trash nên không bị coi là trùng".
+    """
+    try:
+        entries = list(os.scandir(root / TRASH_DIR))
+    except OSError:
+        return []
+    ids = []
+    for e in entries:
+        base = e.name.split("__", 1)[0]  # bỏ dấu mộc thời gian mà archive_story gắn thêm
+        if e.is_dir() and STORY_ID_RE.fullmatch(base):
+            ids.append(base)
+    return sorted(ids)
 
 
 # ---------- đọc/ghi file ----------
@@ -582,7 +602,7 @@ def image_of(root: Path, sid: str) -> Path | None:
 def archive_story(root: Path, sid: str) -> Path:
     """Xóa bài = dời folder vào .trash trong workspace (không xóa vĩnh viễn, khôi phục được)."""
     folder = story_dir(root, sid)
-    trash = root / ".trash"
+    trash = root / TRASH_DIR
     trash.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dest = trash / f"{sid}__{stamp}"
