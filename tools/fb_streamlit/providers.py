@@ -288,6 +288,39 @@ def _codex_child_env(home=None) -> dict:
     return env
 
 
+def _codex_version(binary: str) -> str:
+    try:
+        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise ProviderError(f"Codex CLI không chạy được: {exc}") from exc
+    return ((proc.stdout or "") + (proc.stderr or "")).strip()
+
+
+def _login_verdict(rc: int, text: str) -> tuple:
+    """Heuristic DUY NHẤT cho 'home này đã đăng nhập chưa': CLI phải exit 0 và tự nói không phản.
+
+    Text rỗng là CHƯA (đó chính là cái làm 'Test kết nối' cũ báo OK cho bộ chưa login). Đo thật: home
+    mới tinh trả rc=1 kèm 'Not logged in', home đã login trả rc=0 'Logged in using ChatGPT'.
+    """
+    logged = rc == 0 and bool(text) and "not logged" not in text.lower()
+    return logged, text
+
+
+def _codex_login_state(home=None) -> tuple:
+    """(đã đăng nhập chưa, lời của CLI) cho ĐÚNG nhà này — một heuristic duy nhất cho mọi màn.
+
+    Trước P18j chỗ này nằm trong `codex_login_status`, nên 'Test kết nối' đi đường khác và báo OK cho
+    cả bộ chưa login lần nào.
+    """
+    binary = _codex_bin()
+    try:
+        proc = subprocess.run([binary, "login", "status"], capture_output=True, text=True, timeout=60,
+                              env=_codex_child_env(home))
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise ProviderError(f"Không chạy được codex login status: {exc}") from exc
+    return _login_verdict(proc.returncode, ((proc.stdout or "") + (proc.stderr or "")).strip())
+
+
 def _codex_chat(prompt: str, system: str) -> str:
     full_prompt = prompt if not system else f"{system}\n\n{prompt}"
     binary = _codex_bin()
@@ -368,14 +401,8 @@ def codex_generate_image(prompt_text: str, ref_files=(), timeout: int = 900) -> 
 
 
 def codex_login_status(home=None) -> str:
-    binary = _codex_bin()
-    try:
-        proc = subprocess.run([binary, "login", "status"], capture_output=True, text=True, timeout=60,
-                              env=_codex_child_env(home))
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        raise ProviderError(f"Không chạy được codex login status: {exc}") from exc
-    text = ((proc.stdout or "") + (proc.stderr or "")).strip()
-    if proc.returncode == 0 and text and "not logged" not in text.lower():
+    logged_in, text = _codex_login_state(home)
+    if logged_in:
         return f"Đã đăng nhập: {text}"
     return f"CHƯA ĐĂNG NHẬP — {text or 'codex login status trả về rỗng'}"
 
@@ -980,9 +1007,36 @@ def codex_usage_all_text(result: dict) -> str:
 
 def test_connection(provider) -> str:
     if provider["kind"] == "codex_cli":
-        binary = _codex_bin()
-        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=60)
-        return f"Codex CLI OK: {(proc.stdout or proc.stderr).strip()}"
+        # P18j: "kết nối" với Codex KHÔNG phải là "CLI có trên máy" — cái đó luôn đúng nên một bộ vừa
+        # thêm, chưa login lần nào cũng từng báo OK. Bước chạy cần login, nên nút này phải đo login,
+        # và đo ở NHÀ CỦA CHÍNH BỘ ĐÓ (`<TÊN>_CODEX_HOME`), vì đăng nhập là chuyện của home chứ không
+        # phải của dòng DB.
+        version = _codex_version(_codex_bin())
+        name = _field(provider, "name")
+        home = codex_home_for(name)
+        var = codex_home_var(name)
+        declared = f"khai báo ở biến {var}" if os.getenv(var, "").strip() else "không khai báo home riêng"
+        runs_here = str(home).casefold() == str(codex_home()).casefold()
+        ident = codex_identity(home)
+        if ident.get("email"):
+            who = ident["email"]
+        elif ident.get("account_id"):
+            who = f"id {ident['account_id'][:8]}"
+        elif ident.get("auth_mode"):
+            who = f"CLI báo auth_mode '{ident['auth_mode']}' nhưng home này không có id_token"
+        else:
+            who = "không đọc được auth.json ở home này"
+        where = f"home {home} ({declared})"
+        run_note = "" if runs_here else (" — ⚠ nhà riêng: ⚡/▶ vẫn chạy bằng home mặc định, "
+                                         "chưa nối nhà này vào đường chạy")
+        logged, text = _codex_login_state(home)
+        if not logged:
+            raise ProviderError(
+                f"CHƯA ĐĂNG NHẬP ở {where} ({who}) — CLI nói: «{(text or 'codex login status trả về rỗng')[-240:]}». "
+                f"Bấm '🔑 Đăng nhập Codex (mở browser)' để mở browser cho home này rồi test lại; muốn tài "
+                f"khoản riêng cho bộ '{name}' thì đặt {var} trong .env trỏ tới home khác." + run_note)
+        return (f"Codex CLI OK ({version}) · ĐÃ ĐĂNG NHẬP tại {where} — {who} · CLI nói: «{text[-160:]}»"
+                + (f" · gói theo CLI báo: {ident['plan']}" if ident.get("plan") else "") + run_note)
     base_url = (provider["base_url"] or "").strip().rstrip("/")
     if not base_url:
         raise ProviderError("Provider chưa có Base URL.")

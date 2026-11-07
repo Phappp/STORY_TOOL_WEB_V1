@@ -5217,6 +5217,164 @@ finally:
         shutil.rmtree(_d18i, ignore_errors=True)
 # --- hết P18i ---
 
+# --- P18j: 'Test kết nối' của bộ Codex phải đo CÁI THỨ NÓ NHÂN — đăng nhập, không phải 'CLI có trên máy' ---
+# Lý do thật mà block này có mặt (câu hỏi của anh 2026-11-07): xóa provider codex rồi thêm bộ mới, CHƯA
+# login lần nào, bấm Test vẫn báo OK — vì đường cũ chỉ chạy `codex --version` (luôn đúng trên máy đã cài
+# CLI). Đăng nhập là chuyện của HOME, không phải của dòng DB, nên nút phải hỏi `codex login status` ở
+# ĐÚNG home của bộ đó và nói CHƯA khi chưa có.
+_P18J_H1 = Path(tempfile.mkdtemp(prefix="fbcodex_j1_"))   # home MẶC ĐỊNH của test: đã login
+_P18J_H2 = Path(tempfile.mkdtemp(prefix="fbcodex_j2_"))   # nhà riêng của JJ: chưa login
+_P18J_H3 = Path(tempfile.mkdtemp(prefix="fbcodex_j3_"))   # nhà riêng của KK: login bằng API key
+_P18J_ENV_OLD = {v: os.environ.get(v) for v in ("CODEX_HOME", "JJ_CODEX_HOME", "KK_CODEX_HOME")}
+os.environ["CODEX_HOME"] = str(_P18J_H1)
+os.environ["JJ_CODEX_HOME"] = str(_P18J_H2)
+os.environ["KK_CODEX_HOME"] = str(_P18J_H3)
+_P18J_APIKEY = "sk-khong-phai-cua-anh-khong-duoc-in-ra"
+_P18J_CALLS = []
+_P18J_STATE = {}
+_P18J_ROW_NAME = "JJ"          # row DB thật cho bộ codex (home JJ chưa login → phải ra lỗi)
+_err_text_18j = None
+_catch_18j = None
+_p18j_row_id = None
+_REAL_STATE_P18J = prov._codex_login_state
+_REAL_VER_P18J = prov._codex_version
+_REAL_BIN_P18J = prov._codex_bin
+
+
+def _p18j_state(home=None):
+    """Thay đúng HAI lời gọi CLI (`login status`) bằng bảng kịch bản theo home — suite không spawn CLI."""
+    h = str(Path(home) if home else prov.codex_home())
+    _P18J_CALLS.append(h)
+    return _P18J_STATE.get(h, (False, "Not logged in"))
+
+
+prov._codex_login_state = _p18j_state
+prov._codex_version = lambda binary: "codex-cli 0.0.0-test"
+prov._codex_bin = lambda: "codex-test"
+try:
+    _p18i_write(_P18J_H1, _p18i_auth())
+    _p18i_write(_P18J_H3, json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": _P18J_APIKEY}))
+    _P18J_STATE = {str(_P18J_H1): (True, "Logged in using ChatGPT"),
+                   str(_P18J_H3): (True, "Logged in using an API key")}
+
+    check("P18j THAY thật cái nó hứa: `test_connection` nhánh codex_cli không còn chỉ chạy `--version` "
+          "rồi 'Codex CLI OK' — đường đó phải gọi `login status` qua _codex_login_state và không còn "
+          "dòng cũ",
+          "Codex CLI OK: {(proc.stdout or proc.stderr).strip()}" not in _p18f_src
+          and "_codex_login_state(home)" in _p18f_src[_p18f_src.index("def test_connection(provider)"):]
+          and '"--version"' not in _p18f_src[_p18f_src.index("def test_connection(provider)"):
+                                             _p18f_src.index("base_url = (provider[")]
+          and "_codex_version(_codex_bin())" in _p18f_src)
+    check("P18j một heuristic DUY NHẤT cho hai nút (Test · Kiểm tra trạng thái): `codex_login_status` "
+          "không còn tự so returncode riêng — để hai chỗ không bao giờ trả lời lệch nhau",
+          "proc.returncode" not in _p18f_src[_p18f_src.index("def codex_login_status("):
+                                             _p18f_src.index("def codex_login(home=None)")]
+          and "_login_verdict(proc.returncode," in _p18f_src)
+    check("P18j bảng phán đăng nhập đúng cả bốn kiểu CLI có thể trả: rc0+kèm chữ → ĐÃ; rc1 → CHƯA; "
+          "rc0 nhưng text RỖNG → CHƯA (cái bẫy cũ); rc0 mà tự báo 'not logged' → CHƯA",
+          prov._login_verdict(0, "Logged in using ChatGPT") == (True, "Logged in using ChatGPT")
+          and prov._login_verdict(1, "Not logged in")[0] is False
+          and prov._login_verdict(0, "")[0] is False
+          and prov._login_verdict(1, "Logged in using ChatGPT")[0] is False
+          and prov._login_verdict(0, "Please run `codex login`; you are NOT LOGGED IN")[0] is False)
+
+    _P18J_CALLS.clear()
+    try:
+        prov.test_connection({"name": "JJ", "kind": "codex_cli", "base_url": "", "key_env": ""})
+    except prov.ProviderError as exc:
+        _err_text_18j = str(exc)
+    check("P18j hỏi ĐÚNG home của bộ đang test (không phải home mặc định của máy): 'JJ' có JJ_CODEX_HOME "
+          "thì lệnh login status phải mang home của JJ",
+          _P18J_CALLS == [str(_P18J_H2)])
+    check("P18j bộ CHƯA login thì nút Test phải BÁO LỖI chứ không được in chữ OK: throw ProviderError để "
+          "app.py đổ đỏ, nói rõ home nào + biến nào + chưa có token ở home đó + bấm gì để sửa",
+          _P18J_STATE.get(str(_P18J_H2), (False,))[0] is False and _err_text_18j is not None
+          and "CHƯA ĐĂNG NHẬP" in _err_text_18j and str(_P18J_H2) in _err_text_18j
+          and "JJ_CODEX_HOME" in _err_text_18j and "🔑 Đăng nhập Codex" in _err_text_18j
+          and "không đọc được auth.json ở home này" in _err_text_18j)
+    check("P18j lỗi nói thật cả giới hạn chưa sửa: nhà riêng thì phải kèm 'chưa nối nhà này vào đường "
+          "chạy' — đừng để anh tưởng bộ JJ đã chạy bằng chính nhà JJ (P18h chưa làm)",
+          _err_text_18j is not None and "chưa nối nhà này vào đường chạy" in _err_text_18j)
+
+    _ok18j = prov.test_connection({"name": "GJ", "kind": "codex_cli", "base_url": "", "key_env": ""})
+    check("P18j bộ dùng home mặc định (đã login) thì OK và OK ấy CÓ bằng chứng: version + home + 'không "
+          "khai báo home riêng' + email đã che + gói + nguyên văn lời CLI",
+          _ok18j.startswith("Codex CLI OK (codex-cli 0.0.0-test)") and "ĐÃ ĐĂNG NHẬP" in _ok18j
+          and str(_P18J_H1) in _ok18j and "(không khai báo home riêng)" in _ok18j
+          and _P18I_MASK in _ok18j and "gói theo CLI báo: plus" in _ok18j
+          and "Logged in using ChatGPT" in _ok18j
+          and "chưa nối nhà này vào đường chạy" not in _ok18j)
+    check("P18j chữ OK không được lộ bí mật: auth.json của home API-key vẫn được mô tả nhưng "
+          "`OPENAI_API_KEY` trong file đó không bao giờ xuất hiện, và auth_mode được nói thẳng thay vì "
+          "bịa email",
+          _P18J_APIKEY not in _ok18j and _P18J_APIKEY not in (_err_text_18j or ""))
+    _kk18j = prov.test_connection({"name": "KK", "kind": "codex_cli", "base_url": "", "key_env": ""})
+    _who18j = _kk18j.split(" — ", 1)[1].split(" · CLI nói")[0]
+    check("P18j home đăng nhập bằng API key (auth.json không có tokens) vẫn được công nhận là đã login, "
+          "nhưng tên tài khoản phải là 'auth_mode apikey … không có id_token' chứ không phải email rỗng",
+          "ĐÃ ĐĂNG NHẬP" in _kk18j and "auth_mode 'apikey'" in _who18j and "@" not in _who18j
+          and "không có id_token" in _who18j
+          and _P18J_APIKEY not in _kk18j and str(_P18J_H3) in _kk18j)
+
+    _P18J_STATE[str(_P18J_H1)] = (True, "X" * 5000 + "  Logged in using ChatGPT")
+    _long18j = prov.test_connection({"name": "GJ", "kind": "codex_cli", "base_url": "", "key_env": ""})
+    check("P18j lời CLI vào màn hình phải CÓ TRẦN (160 ký tự cuối): CLI nói dài vẫn thấy câu kết luận mà "
+          "không nở cái hộp đỏ thành cả trang",
+          len(_long18j) < 900 and "Logged in using ChatGPT" in _long18j and "X" * 400 not in _long18j)
+    _P18J_STATE[str(_P18J_H1)] = (True, "Logged in using ChatGPT")
+
+    _P18J_STATE[str(_P18J_H2)] = (True, "Logged in using ChatGPT")
+    _P18J_STATE[str(_P18J_H1)] = (False, "Not logged in")
+    _flip18j = None
+    try:
+        prov.test_connection({"name": "GJ", "kind": "codex_cli", "base_url": "", "key_env": ""})
+    except prov.ProviderError as exc:
+        _flip18j = str(exc)
+    check("P18j chiều ngược lại cũng đúng: home mặc định MẤT login thì bộ GJ phải CHƯA, không được ăn "
+          "kết quả của nhà khác — từng nhà một câu trả lời riêng",
+          _flip18j is not None and "CHƯA ĐĂNG NHẬP" in _flip18j and str(_P18J_H1) in _flip18j)
+    _P18J_STATE[str(_P18J_H1)] = (True, "Logged in using ChatGPT")
+    _P18J_STATE[str(_P18J_H2)] = (False, "Not logged in")
+
+    _st18j = prov.codex_login_status(_P18J_H2)
+    check("P18j nút 'Kiểm tra trạng thái đăng nhập' giữ nguyên chữ như P18g đo (CHƯA ĐĂNG NHẬP — …) và "
+          "phải cùng phán quyết với nút Test cho cùng một home",
+          _st18j.startswith("CHƯA ĐĂNG NHẬP — Not logged in")
+          and prov.codex_login_status(_P18J_H1).startswith("Đã đăng nhập: Logged in using ChatGPT"))
+
+    db.add_provider(conn, _P18J_ROW_NAME, "codex_cli", "", "", "")
+    _p18j_row_id = next(x["id"] for x in db.list_providers(conn) if x["name"] == _P18J_ROW_NAME)
+    _row18j = next(r for r in db.list_providers(conn) if r["id"] == _p18j_row_id)
+    _rowerr18j = None
+    try:
+        prov.test_connection(_row18j)          # sqlite3.Row THẬT, không dict
+    except prov.ProviderError as exc:
+        _rowerr18j = str(exc)
+    check("P18j chạy được bằng đúng row sqlite3.Row từ DB (không chỉ dict test): tên bộ lấy qua _field "
+          "nên Row không có .get() vẫn không AttributeError, và home RIÊNG của bộ trong DB được áp đúng",
+          _rowerr18j is not None and _P18J_ROW_NAME in _rowerr18j and str(_P18J_H2) in _rowerr18j
+          and "JJ_CODEX_HOME" in _rowerr18j)
+    try:
+        prov.test_connection({"name": "P18jHTTP", "kind": "openai", "base_url": "", "key_env": ""})
+    except prov.ProviderError as exc:
+        _catch_18j = exc
+    check("P18j nhánh provider HTTP KHÔNG bị lấn: kind openai chưa Base URL vẫn báo đúng câu cũ",
+          "Provider chưa có Base URL." in str(_catch_18j))
+finally:
+    if _p18j_row_id is not None:
+        db.delete_provider(conn, _p18j_row_id)
+    prov._codex_login_state = _REAL_STATE_P18J
+    prov._codex_version = _REAL_VER_P18J
+    prov._codex_bin = _REAL_BIN_P18J
+    for _k18j, _v18j in _P18J_ENV_OLD.items():
+        if _v18j is None:
+            os.environ.pop(_k18j, None)
+        else:
+            os.environ[_k18j] = _v18j
+    for _d18j in (_P18J_H1, _P18J_H2, _P18J_H3):
+        shutil.rmtree(_d18j, ignore_errors=True)
+# --- hết P18j ---
+
 
 # cleanup test rows
 c = db.connect()
