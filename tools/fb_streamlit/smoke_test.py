@@ -6329,10 +6329,10 @@ try:
           not any(line.strip().startswith(("import streamlit", "from streamlit"))
                   for line in _p25a_audio_src.splitlines())
           and "import paths" in _p25a_audio_src)
-    check("P25a chưa có đường nào từ browser tới ffmpeg: `grid_actions.py` không nhắc ffmpeg tí nào — "
-          "lưới chưa nhận event nào chạy lệnh. P25b thêm nút GHÉP thì phải giữ luật 'đường dẫn do server "
-          "chọn từ prefs, browser chỉ gửi id bài'",
-          "ffmpeg" not in _p25a_ga_src)
+    check("P25a ffmpeg chỉ là chữ trong lưới CHỨ KHÔNG phải đường dẫn: `grid_actions.py` không hề gọi "
+          "`set_ffmpeg_path`/`save_settings` — browser không cất được cái ô nào xuống settings. "
+          "P25b có thêm nhánh `b4_merge` thì vẫn chỉ ĐỌC ffmpeg_info do server tự dò (check P25b dưới)",
+          "set_ffmpeg_path" not in _p25a_ga_src and "save_settings" not in _p25a_ga_src)
     check("P25a caption Cấu hình liệt kê AUDIO trong DATA — anh tìm file tiếng bằng đường dẫn thật in "
           "trên màn hình, không phải bằng trí nhớ",
           "{paths.DATA}/{audio.AUDIO_DIR}" in _p25a_app_src)
@@ -6342,6 +6342,394 @@ finally:
     audio._durations.clear()
     shutil.rmtree(_p25a_box, ignore_errors=True)
 # --- hết P25a ---
+
+
+# --- P25b: ghép ẢNH B2 của bài + MỘT file tiếng của workspace thành `video.mp4` (ffmpeg) ---
+_p25b_box = Path(tempfile.mkdtemp(prefix="fbsmoke_p25b_"))
+_p25b_dd, _p25b_rec = paths.data_dir, stories._recents_path
+_p25b_ffinfo_real = audio.ffmpeg_info
+paths.data_dir = lambda: _p25b_box / "DATA"
+stories._recents_path = lambda: _p25b_box / "workspaces.json"
+_p25b_root = stories.set_current(stories.validate_root(_p25b_box / "ws_p25b"))
+_p25b_ctx = ga.Ctx(root=_p25b_root, providers={}, presets={}, defaults={})
+_p25b_ff = shutil.which("ffmpeg") or ""
+_p25b_probe = shutil.which("ffprobe") or (str(Path(_p25b_ff).with_name("ffprobe.exe")) if _p25b_ff else "")
+_p25b_probe = _p25b_probe if _p25b_probe and Path(_p25b_probe).is_file() else ""
+_p25b_tool_dir = str(Path(__file__).resolve().parent)
+_p25b_ga_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p25b_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+
+
+def _p25b_stub(found: bool) -> None:
+    """Chặn SAI THỨ TỰ là anh sửa nhầm chỗ: nút bảo "thiếu ffmpeg" trong khi thật ra thiếu bộ sưu tập.
+    Stub để thứ tự chặn kiểm chứng được trên máy KHÔNG có ffmpeg, và E2E thì dùng bản thật."""
+    audio.ffmpeg_info = lambda: {"ffmpeg": ((_p25b_ff or r"C:\fake\ffmpeg.exe") if found else ""),
+                                 "ffprobe": "", "source": "PATH" if found else "",
+                                 "stored": "", "found": found}
+
+
+def _p25b_clear_prefs() -> None:
+    (_p25b_root / ga.PREFS_FILE).unlink(missing_ok=True)
+
+
+def _p25b_story(with_image: bool, topic: str = "bai ghep") -> str:
+    s = stories.create_story(_p25b_root, topic=topic)
+    if with_image:
+        # Bytes rác là đủ: các check chặn không chạy ffmpeg, còn E2E tự ghi ảnh THẬT đè lên.
+        (s["folder"] / "image.png").write_bytes(b"png gia dinh, khong chay ffmpeg o day")
+    return s["id"]
+
+
+def _p25b_raises(fn, *args) -> bool:
+    try:
+        fn(*args)
+    except audio.AudioError:
+        return True
+    return False
+
+
+def _p25b_video_count(sid: str) -> int:
+    return len(list((_p25b_root / sid).glob("video.*")))
+
+
+try:
+    _p25b_seedvals = []
+    for _p25b_seed in ("0", "91234"):
+        _p25b_proc = subprocess.run(
+            [sys.executable, "-X", "utf8", "-c",
+             f"import sys; sys.path.insert(0, r'{_p25b_tool_dir}'); import audio; "
+             "print(audio.pick_index('story_018', 7))"],
+            capture_output=True, text=True, timeout=120,
+            env=dict(os.environ, PYTHONHASHSEED=_p25b_seed))
+        _p25b_seedvals.append((_p25b_proc.stdout or "").strip())
+    check("P25b file tiếng của một bài PHẢI tất định qua cả lần khởi động lại: `pick_index('story_018', 7)` "
+          "chạy trong HAI tiến trình với PYTHONHASHSEED khác nhau cho cùng một số. Luật cũ của module nói "
+          "rõ vì sao không được dùng `hash()` — hash chuỗi đổi theo tiến trình nên restart là cả workspace "
+          "đổi tiếng sang file khác mà không ai bấm gì",
+          len(_p25b_seedvals) == 2 and _p25b_seedvals[0] == _p25b_seedvals[1]
+          and _p25b_seedvals[0] == str(audio.pick_index("story_018", 7))
+          and "random" not in (Path(__file__).resolve().parent / "audio.py").read_text(encoding="utf-8"))
+
+    _p25b_dist = [audio.pick_index(f"story_{i:03d}", 4) for i in range(200)]
+    check("P25b chia theo id phải TRẢI ĐỀU chứ không dồn một file: 200 id liên tiếp qua 4 file thì mỗi vị trí "
+          "phải có mặt (≥15 bài, kỳ vọng 50) và mọi kết quả nằm trong [0, n) kể cả n=1 và n=0 (bộ rỗng vẫn "
+          "được `audio_label` gọi tới trước khi có file) — dồn hết vào một bài hát thì cả workspace nghe "
+          "trùng một tiếng",
+          all(c >= 15 for c in (_p25b_dist.count(i) for i in range(4)))
+          and all(0 <= i < 4 for i in _p25b_dist)
+          and audio.pick_index("story_001", 1) == 0 and audio.pick_index("story_001", 0) == 0)
+
+    _p25b_col = audio.create("Nhac ghep")
+    _p25b_stub(True)
+    _p25b_args = audio.merge_args(_p25b_box / "image.png", audio.root() / "mot.mp3",
+                                  _p25b_box / "out.mp4", 45)
+    check("P25b câu lệnh ffmpeg dựng đúng BA quyết định đã chốt: `-t 45` là trần giây anh nhập (tiếng dài "
+          "hơn bị CẮT), bộ lọc chỉ `scale` chẵn hóa hai cạnh chứ KHÔNG có `crop` nào (video theo khổ ảnh "
+          "B2, không cắt), `yuv420p` + `+faststart` để trình duyệt xem được ngay, và ảnh đứng trước tiếng "
+          "đứng sau, file ra CUỐI cùng",
+          _p25b_args[_p25b_args.index("-t") + 1] == "45"
+          and all("crop" not in a for a in _p25b_args)
+          and "scale='trunc(iw/2)*2':'trunc(ih/2)*2'" in _p25b_args
+          and _p25b_args[_p25b_args.index("-pix_fmt") + 1] == "yuv420p"
+          and "+faststart" in _p25b_args and _p25b_args[-1] == str(_p25b_box / "out.mp4")
+          and _p25b_args.count("-i") == 2
+          and _p25b_args[_p25b_args.index("-i") + 1].endswith("image.png")
+          and _p25b_args[_p25b_args.index("-i") + 3].endswith("mot.mp3"))
+
+    _p25b_stub(False)
+    _p25b_msg = ""
+    try:
+        audio.merge_args(_p25b_box / "i.png", _p25b_box / "a.mp3", _p25b_box / "o.mp4", 30)
+    except audio.AudioError as _p25b_exc:
+        _p25b_msg = str(_p25b_exc)
+    _p25b_stub(True)
+    check("P25b thiếu ffmpeg thì `merge_args` từ chối TRƯỚC khi kịp spawn tiến trình, và lời báo nói "
+          "NGUỒN đã dò (PATH / cấu hình / chưa dò thấy) + trỏ về Cấu hình ▸ Âm thanh — `FileNotFoundError` "
+          "ném giữa lượt bấm là lưới chết mà không chỉ chỗ sửa",
+          "ffmpeg" in _p25b_msg and "Âm thanh" in _p25b_msg and "chưa dò thấy" in _p25b_msg)
+
+    _p25b_tmp = audio.merge_tmp_dir()
+    _p25b_bad = _p25b_raises(audio.merge, _p25b_box / "khong-ton-tai.png", _p25b_box / "a.mp3",
+                             _p25b_tmp / "hong.mp4", 5)
+    check("P25b ffmpeg hỏng giữa chừng KHÔNG để lại file dở: AudioError + folder tạm sạch — `.merge-tmp` "
+          "mà phình sau mỗi lần lỗi thì một tuần dùng là cả GB rác, và `pick` có thể vớ phải file dở",
+          _p25b_bad and not (_p25b_tmp / "hong.mp4").exists() and not list(_p25b_tmp.iterdir()))
+
+    # ---- chặn từng lý do MỘT, theo ĐÚNG thứ tự, lời báo chỉ thẳng chỗ sửa ----
+    _p25b_sid = _p25b_story(True)
+    _p25b_sid_noimg = _p25b_story(False, topic="khong anh")
+    _p25b_clear_prefs()
+    _p25b_stub(False)
+    _p25b_l0 = ga.merge_b4(_p25b_ctx, _p25b_sid)[0]      # 1. thiếu ffmpeg
+    _p25b_stub(True)
+    _p25b_l1 = ga.merge_b4(_p25b_ctx, _p25b_sid)[0]      # 2. workspace chưa chọn bộ
+    ga.set_pref_audio(_p25b_root, collection="Nhac ghep", seconds=45)
+    _p25b_l2 = ga.merge_b4(_p25b_ctx, _p25b_sid)[0]      # 3. bộ đang chọn nhưng RỖNG
+    audio.rename("Nhac ghep", "Nhac ghep 2")             # bộ biến mất khỏi cái tên trong prefs
+    _p25b_l3 = ga.merge_b4(_p25b_ctx, _p25b_sid)[0]      # 4. folder không còn
+    audio.rename("Nhac ghep 2", "Nhac ghep")
+    audio.add_file("Nhac ghep", _P25aUp(b"RIFFfake"), "mot.mp3")
+    _p25b_l4 = ga.merge_b4(_p25b_ctx, _p25b_sid_noimg)[0]  # 5. bài chưa có ảnh
+    check("P25b năm lý do chặn là NĂM lời khác nhau theo đúng thứ tự, mỗi lời chỉ đúng chỗ sửa: ffmpeg → "
+          "Cấu hình ▸ Âm thanh, chưa chọn bộ → nói tên ô, bộ biến mất → nói ĐÚNG TÊN ĐÃ MẤT (không im lặng "
+          "nhảy sang bộ khác vì video làm ra phải giải thích được bằng cái anh đã chọn), bộ rỗng → 'chưa có "
+          "file', bài chưa có ảnh → 'chưa có ảnh B2'. Không lời nào tạo video, và cả bài có ảnh lẫn bài "
+          "không ảnh đều không có file mới",
+          "ffmpeg" in _p25b_l0 and "Âm thanh" in _p25b_l0
+          and "chưa chọn bộ sưu tập" in _p25b_l1
+          and "Nhac ghep" in _p25b_l2 and "chưa có file" in _p25b_l2
+          and "Nhac ghep" in _p25b_l3 and "không còn folder" in _p25b_l3
+          and "chưa có ảnh B2" in _p25b_l4
+          and all(_p25b_video_count(s) == 0 for s in (_p25b_sid, _p25b_sid_noimg)))
+
+    _p25b_setup = ga.audio_setup(_p25b_root)
+    _p25b_lbl_none = dict(_p25b_setup, collection="", files=[], missing=False)
+    _p25b_lbl_empty = dict(_p25b_setup, files=[], missing=False)
+    _p25b_lbl_gone = dict(_p25b_setup, files=[], missing=True)
+    _p25b_lbl_files = [audio.root() / "Nhac ghep" / "mot.mp3", audio.root() / "Nhac ghep" / "hai.mp3"]
+    _p25b_lbl_full = dict(_p25b_setup, files=_p25b_lbl_files, missing=False)
+    # Nhãn phải hiện ĐÚNG file mà `pick` sẽ chọn cho bài này (không phải file đầu danh sách).
+    _p25b_expect = audio.pick("Nhac ghep", _p25b_sid, _p25b_lbl_files).name
+    check("P25b nhãn nút 🎬 (`audio_label`) nói cùng NĂM lý do đó KÈM cờ 'chưa chạy được' — cái nút hiện "
+          "trên lưới không được hứa một việc mà bấm vào sẽ bị từ chối; đủ điều kiện thì nhãn phải đọc được "
+          "TÊN FILE sẽ dùng thật (theo id bài, không phải file đầu danh sách) + số giây đã chọn",
+          ga.audio_label(_p25b_lbl_none, _p25b_sid, True) == ("workspace chưa chọn bộ sưu tập", False)
+          and ga.audio_label(_p25b_lbl_none, _p25b_sid, False) == ("workspace chưa chọn bộ sưu tập", False)
+          and ga.audio_label(_p25b_lbl_empty, _p25b_sid, True) == ('bộ “Nhac ghep” chưa có file tiếng', False)
+          and ga.audio_label(_p25b_lbl_gone, _p25b_sid, True) == ('bộ “Nhac ghep” không còn folder', False)
+          and ga.audio_label(_p25b_lbl_full, _p25b_sid, False) == ("bài này chưa có ảnh B2", False)
+          and ga.audio_label(_p25b_lbl_full, _p25b_sid, True) == (f"{_p25b_expect} · 45 s", True)
+          and _p25b_expect in {"mot.mp3", "hai.mp3"})
+
+    # ---- cửa xác nhận ghi đè ----
+    _p25b_manual = _p25b_box / "manual.mp4"
+    _p25b_manual.write_bytes(b"VIDEO ANH TAI TAY - khong duoc mat")
+    with open(_p25b_manual, "rb") as fh:
+        stories.save_video(_p25b_root, _p25b_sid, fh, suffix=".mp4", method=ga.MANUAL_METHOD)
+    _p25b_before = (_p25b_root / _p25b_sid / "video.mp4").read_bytes()
+    _p25b_gate = ga.merge_b4(_p25b_ctx, _p25b_sid)[0]
+    check("P25b video ANH TẢI TAY phải bấm HAI lần: cú thứ nhất CHỈ báo (đường dẫn + cách xác nhận), "
+          "file cũ còn nguyên từng byte. Video tải tay là thứ không suy ra lại được, bản ghép thì làm lại "
+          "trong vài giây — nên cái chết của nó phải là một cú bấm có chủ ý",
+          "Bấm lại lần nữa" in _p25b_gate and "video ANH TẢI TAY" in _p25b_gate
+          and _p25b_gate.startswith(f"{_p25b_sid}:")
+          and (_p25b_root / _p25b_sid / "video.mp4").read_bytes() == _p25b_before)
+
+    _p25b_js_merge = _p25b_fe.split("function mergeBox")[1].split("function videoCard")[0]
+    check("P25b JS giữ LUẬT HAI CÚ BẤM ở tại nút (arm bằng `dataset.arm`, KHÔNG gửi gì cú đầu) và chỉ gửi "
+          "`force` khi hàng có `b4over` — cái chốt nằm ở server chứ không ở JS: JS có quên thì `merge_b4` "
+          "vẫn từ chối, và repaint giữa hai cú bấm là mất arm (thà bắt bấm lại còn hơn đè)",
+          'source: "b4_merge"' in _p25b_js_merge and "dataset.arm" in _p25b_js_merge
+          and "force: over" in _p25b_js_merge and "row.b4over" in _p25b_js_merge
+          and "send(" not in _p25b_js_merge.split("dataset.arm")[1].split("return;")[0])
+
+    _p25b_auto = _p25b_box / "auto.mp4"
+    _p25b_auto.write_bytes(b"ban ghep truoc do")
+    with open(_p25b_auto, "rb") as fh:
+        stories.save_video(_p25b_root, _p25b_sid_noimg, fh, suffix=".mp4", method=audio.MERGE_METHOD)
+    check("P25b bản do CHÍNH nút này ghép thì một cú bấm là đủ — không tra hỏi người dùng về thứ anh vừa "
+          "tạo ra mươi giây trước; `merge_b4` phân biệt hai loại bằng `b4.method` chứ không bằng tên file",
+          ga.merge_b4(_p25b_ctx, _p25b_sid_noimg)[0].startswith(f"{_p25b_sid_noimg}: chưa ghép được")
+          and "Bấm lại lần nữa" not in ga.merge_b4(_p25b_ctx, _p25b_sid_noimg)[0]
+          and (_p25b_root / _p25b_sid_noimg / "video.mp4").read_bytes() == b"ban ghep truoc do")
+
+    # ---- hàng lưới mang đủ trạng thái ghép ----
+    _p25b_stub(True)
+    ga.set_pref_audio(_p25b_root, collection="Nhac ghep", seconds=45)
+    _p25b_rows = {r["id"]: r for r in fbgrid.rows_for(_p25b_ctx)}
+    check("P25b `rows_for` gửi `b4audio` + `b4ready` cho TỪNG hàng nhưng chỉ ĐỌC prefs + dò ffmpeg MỘT "
+          "lần cho cả lượt (hàng trăm bài không thành trăm lần spawn): hàng đủ điều kiện hiện tên file + "
+          "giây, hàng chưa có ảnh B2 hiện đúng lý do và ready False — JS không tự đoán được gì từ prefs",
+          _p25b_rows[_p25b_sid]["b4ready"] is True
+          and _p25b_rows[_p25b_sid]["b4audio"].endswith(" · 45 s")
+          and _p25b_rows[_p25b_sid_noimg]["b4ready"] is False
+          and _p25b_rows[_p25b_sid_noimg]["b4audio"] == "bài này chưa có ảnh B2")
+    check("P25b `b4over` = cờ 'CÓ GÌ ĐỂ GHI ĐÈ' do Python quyết, JS không tự suy: video TẢI TAY = True; "
+          "video do chính nút này ghép = False dù folder vẫn còn file (một cú bấm là đủ); và anh XÓA file "
+          "ngoài ổ thì phải về False — để True khi không còn file là hỏi oan người dùng",
+          _p25b_rows[_p25b_sid]["b4over"] is True
+          and _p25b_rows[_p25b_sid_noimg]["b4over"] is False
+          and _p25b_rows[_p25b_sid_noimg]["b4meta"] != ""
+          and (_p25b_root / _p25b_sid / "video.mp4").unlink() is None
+          and {r["id"]: r for r in fbgrid.rows_for(_p25b_ctx)}[_p25b_sid]["b4over"] is False
+          and {r["id"]: r for r in fbgrid.rows_for(_p25b_ctx)}[_p25b_sid]["b4meta"] == "")
+
+    _p25b_out = ga.apply_event(_p25b_ctx, {"source": "b4_merge", "id": _p25b_sid_noimg, "force": False})
+    _p25b_branch = _p25b_ga_src.split('elif source == "b4_merge":')[1].split('elif source ==')[0]
+    check("P25b event `b4_merge` qua dispatcher CHỈ mang id (+ force): branch không đọc `path`/`file`/"
+          "`audio`/`collection`/`seconds` từ event và không ghi prefs — đường dẫn ffmpeg do server dò, bộ "
+          "sưu tập + số giây do server đọc từ prefs workspace. Browser không có cửa chọn file tiếng cho bài",
+          _p25b_out.lines and _p25b_out.touched == [_p25b_sid_noimg]
+          and 'event.get("force")' in _p25b_branch and '"' not in _p25b_branch.split("merge_b4")[0]
+          and not any(k in _p25b_branch for k in ('event.get("path")', 'event.get("file")',
+                                                  'event.get("audio")', 'event.get("collection")',
+                                                  'event.get("seconds")'))
+          and "set_pref_audio" not in _p25b_branch and "set_ffmpeg_path" not in _p25b_branch)
+
+    check("P25b modal B4 nói lại ĐỦ hai đường ra video — dòng chữ cũ 'B4 là bước tải tay, không có AI, "
+          "không vào hàng đợi' giờ chỉ còn đúng một nửa nên đã viết lại, và thẻ có nút ghép đứng giữa trình "
+          "xem và ô tải",
+          "Ghép ảnh + tiếng" in _p25b_fe and "body.push(vidPlayer(row), mergeBox(row), vidBox(row))"
+          in _p25b_fe.split("function videoCard")[1].split("function linkCard")[0]
+          and "B4 là bước tải tay — không có AI" not in _p25b_fe
+          and "Ghép chạy NGAY khi bấm" in _p25b_fe)
+
+    # ---- chạy THẬT mergeBox bằng node: cửa hai cú bấm là logic, không phải chữ trong file ----
+    _p25b_js_fn = re.search(r"(function mergeBox\(row\).*?)\nfunction videoCard", _p25b_fe, re.S).group(1)
+    _p25b_node = shutil.which("node")
+    if _p25b_node:
+        _p25b_nodejs = """
+const SENT = [];
+function send(e) { SENT.push(e); }
+function el(tag, cls, text) {
+  return {tag: tag, cls: cls, text: text, kids: [], appendChild: function (k) { this.kids.push(k); }};
+}
+function button(label, title, fn, cls) {
+  const b = {label: label, title: title, cls: cls, dataset: {}, disabled: false, textContent: label,
+             click: function () { fn(b); }};
+  return b;
+}
+%s
+const out = [];
+const R = o => Object.assign({id: "story_005", b4audio: "mot.mp3 · 45 s", b4ready: true,
+                              b4over: false, b4meta: ""}, o);
+let box = mergeBox(R({}));
+let b = box.kids[0];
+out.push([" nhãn nút lấy THẲNG `row.b4audio` (tên file + giây do Python quyết), JS không tự ghép chữ nào " +
+          "và cũng không tự đoán bộ nào — hàng đủ điều kiện thì nút bật",
+          b.label === "🎬 Ghép ảnh + tiếng · mot.mp3 · 45 s" && b.disabled === false]);
+b.click();
+out.push(["bấm MỘT lần là việc đi ngay khi bài KHÔNG có video tải tay: event đúng {source, id} và force False",
+          SENT.length === 1 && SENT[0].source === "b4_merge" && SENT[0].id === "story_005"
+          && SENT[0].force === false]);
+SENT.length = 0;
+b = mergeBox(R({b4over: true, b4meta: "video.mp4 · 1.0 MB"})).kids[0];
+b.click();
+out.push(["cú thứ nhất trên bài có video TẢI TAY KHÔNG gửi gì xuống server: chỉ arm tại chỗ và đổi nhãn " +
+          "thành lời xác nhận — anh đọc thấy mình sắp đè cái gì TRƯỚC khi nó chết",
+          SENT.length === 0 && b.dataset.arm === "1" && b.textContent !== b.label
+          && b.textContent.includes("ghi đè")]);
+b.click();
+out.push(["cú thứ HAI mới gửi force:true, vẫn đúng bài (id không đổi)",
+          SENT.length === 1 && SENT[0].force === true && SENT[0].id === "story_005"]);
+SENT.length = 0;
+mergeBox(R({b4over: true})).kids[0].click();
+const fresh = mergeBox(R({b4over: true})).kids[0];
+fresh.click();
+out.push(["fragment 2 s vẽ lại lưới giữa hai cú bấm thì nút MỚI mất arm, cú đầu của nó lại chỉ arm — " +
+          "mất trạng thái ở đây là MẤT QUYỀN đè, không phải mất lượt",
+          SENT.length === 0 && fresh.dataset.arm === "1"]);
+SENT.length = 0;
+b = mergeBox(R({b4ready: false, b4audio: "workspace chưa chọn bộ sưu tập"})).kids[0];
+out.push(["Python nói chưa đủ điều kiện thì nút TẮT sẵn và title nói đúng lý do trong `b4audio` — " +
+          "không để anh bấm rồi mới đọc lỗi",
+          b.disabled === true && b.title.includes("workspace chưa chọn bộ sưu tập")]);
+console.log(JSON.stringify(out));
+""" % _p25b_js_fn
+        _p25b_tmp_js = Path(tempfile.mkdtemp(prefix="fbjs25b_")) / "mergebox.js"
+        _p25b_tmp_js.write_text(_p25b_nodejs, encoding="utf-8")
+        _p25b_nproc = subprocess.run([_p25b_node, str(_p25b_tmp_js)], capture_output=True,
+                                     text=True, encoding="utf-8")
+        _p25b_jsrows = []
+        if _p25b_nproc.returncode == 0:
+            try:
+                _p25b_jsrows = json.loads(_p25b_nproc.stdout.strip().splitlines()[-1])
+            except Exception:
+                _p25b_jsrows = []
+        for _p25b_jsname, _p25b_jsok in _p25b_jsrows:
+            check("P25b mergeBox (node) " + _p25b_jsname, _p25b_jsok)
+        check("P25b harness node phải chạy được và trả đủ SÁU nhận định — `mergeBox` gọi `el`/`button`/`send` "
+              "của lưới, thiếu một cái là cả khối chết im lặng trong khi suite soi chữ vẫn PASS (bài học "
+              "P24a/P23c: lưới hỏng cả trang, không phải hỏng một thẻ)",
+              len(_p25b_jsrows) == 6 and _p25b_nproc.returncode == 0)
+        shutil.rmtree(_p25b_tmp_js.parent, ignore_errors=True)
+    else:
+        print("(bỏ qua harness mergeBox: không có node trong PATH)")
+
+    # ---- E2E bằng ffmpeg THẬT trên máy này ----
+    if _p25b_ff:
+        audio.ffmpeg_info = _p25b_ffinfo_real
+        _p25b_png = _p25b_box / "src.png"
+        _p25b_mp3 = _p25b_box / "tone.mp3"
+        _p25b_mk = [
+            subprocess.run([_p25b_ff, "-hide_banner", "-v", "error", "-y", "-f", "lavfi",
+                            "-i", "color=c=0x3366cc:s=320x240", "-frames:v", "1", str(_p25b_png)],
+                           capture_output=True, text=True, timeout=120),
+            subprocess.run([_p25b_ff, "-hide_banner", "-v", "error", "-y", "-f", "lavfi",
+                            "-i", "sine=frequency=440:duration=8", "-c:a", "libmp3lame", str(_p25b_mp3)],
+                           capture_output=True, text=True, timeout=120),
+        ]
+        _p25b_col3 = audio.create("Nhac that")
+        audio.add_file(_p25b_col3, _P25aUp(_p25b_mp3.read_bytes()), "Nhac 8 giay.mp3")
+        _p25b_e2e = _p25b_story(True, topic="e2e ghep")
+        shutil.copyfile(_p25b_png, _p25b_root / _p25b_e2e / "image.png")
+        ga.set_pref_audio(_p25b_root, collection=_p25b_col3, seconds=3)
+        _p25b_t0 = time.monotonic()
+        _p25b_line = ga.merge_b4(_p25b_ctx, _p25b_e2e)[0]
+        _p25b_wall = round(time.monotonic() - _p25b_t0, 1)
+        _p25b_vfile = stories.video_file(_p25b_root / _p25b_e2e)
+        _p25b_secs = audio.duration(_p25b_vfile) if _p25b_vfile and _p25b_probe else None
+        _p25b_streams = ""
+        if _p25b_vfile and _p25b_probe:
+            _p25b_sp = subprocess.run([_p25b_probe, "-v", "error", "-show_entries", "stream=codec_type",
+                                       "-of", "default=nw=1:nk=1", str(_p25b_vfile)],
+                                      capture_output=True, text=True, timeout=60)
+            _p25b_streams = (_p25b_sp.stdout or "").strip()
+        _p25b_b4 = (stories.load_story(_p25b_root, _p25b_e2e).get("b4") or {})
+        check("P25b ĐO THẬT trên máy này: ảnh 320x240 + tiếng 8 s, giây=3 → folder bài có `video.mp4` "
+              f"probe được ({_p25b_secs} s, phải ≈3 chứ không 8 = tiếng bị CẮT theo ô nhập), đủ cả stream "
+              "video + audio, và toàn bộ việc chạy mất "
+              f"{_p25b_wall} s — con số này là căn cứ quyết định P25c có phải đưa vào hàng đợi không",
+              _p25b_line.startswith(f"{_p25b_e2e}: 🎬 đã ghép") and _p25b_vfile is not None
+              and all(p.returncode == 0 for p in _p25b_mk)
+              and _p25b_vfile.suffix == ".mp4" and _p25b_vfile.stat().st_size > 10000
+              and (_p25b_secs is None or abs(_p25b_secs - 3) <= 0.8)
+              and "video" in _p25b_streams and "audio" in _p25b_streams
+              and f"{_p25b_e2e}:" in _p25b_line and "ffmpeg" in _p25b_line)
+        check("P25b video dựng từ gì PHẢI đọc lại được sau đó: `b4` mang method='ghép ffmpeg' + tên file "
+              "tiếng + bộ sưu tập + số giây + ảnh nguồn. `pick` đổi khi bộ THÊM/BỚT file nên không ghi lại "
+              "thì lần sau không giải thích nổi vì sao bài này nghe bài kia",
+              _p25b_b4.get("method") == audio.MERGE_METHOD
+              and _p25b_b4.get("audio") == "Nhac 8 giay.mp3"
+              and _p25b_b4.get("audio_collection") == _p25b_col3
+              and _p25b_b4.get("audio_seconds") == 3 and _p25b_b4.get("audio_from") == "image.png"
+              and _p25b_b4.get("state") == stories.DONE and _p25b_b4.get("file") == "video.mp4")
+        check("P25b không để rác ở hai nơi: folder bài chỉ có `video.mp4` (+ `image.png`, `story.json`), "
+              "KHÔNG có file ẩn nào; `.merge-tmp` đã dọn; và folder tạm starting bằng dấu chấm KHÔNG hiện "
+              "ra như một bộ sưu tập — chọn nhầm nó là ghép từ rác",
+              sorted(p.name for p in (_p25b_root / _p25b_e2e).iterdir()) == ["image.png", "story.json", "video.mp4"]
+              and not [p for p in audio.merge_tmp_dir().iterdir()]
+              and audio.MERGE_TMP not in audio.collection_names()
+              and _p25b_col3 in audio.collection_names())
+        _p25b_second = ga.merge_b4(_p25b_ctx, _p25b_e2e)[0]
+        check("P25b bấm lại bài vừa ghép = MỘT cú, file mới đè file cũ và vẫn đúng MỘT video trong folder "
+              "— vòng lặp 'sửa giây → ghép lại' phải rẻ, không phải màn xác nhận",
+              _p25b_second.startswith(f"{_p25b_e2e}: 🎬 đã ghép") and "Bấm lại" not in _p25b_second
+              and _p25b_video_count(_p25b_e2e) == 1)
+        # Dựng lại nguyên hiện trường "video tải tay" trên một bài có ảnh THẬT (check `rows` ở trên đã
+        # xóa file video của bài này để đo trạng thái "bị xóa ngoài ổ").
+        shutil.copyfile(_p25b_png, _p25b_root / _p25b_sid / "image.png")
+        with open(_p25b_manual, "rb") as fh:
+            stories.save_video(_p25b_root, _p25b_sid, fh, suffix=".mp4", method=ga.MANUAL_METHOD)
+        _p25b_confirm = ga.merge_b4(_p25b_ctx, _p25b_sid)[0]
+        _p25b_forced = ga.merge_b4(_p25b_ctx, _p25b_sid, force=True)[0]
+        check("P25b cú bấm THỨ HAI (force) mới thật sự đè video tải tay: dòng báo nói rõ đã ghi đè, folder "
+              "bài còn đúng MỘT file video (không có `video-2.mp4`), và method đổi sang 'ghép ffmpeg' — từ "
+              "lúc đó mỗi lần ghép lại chỉ còn một cú bấm",
+              "Bấm lại lần nữa" in _p25b_confirm and "đã ghi đè video tải tay" in _p25b_forced
+              and _p25b_video_count(_p25b_sid) == 1
+              and (_p25b_root / _p25b_sid / "video.mp4").read_bytes() != _p25b_before
+              and (stories.load_story(_p25b_root, _p25b_sid).get("b4") or {}).get("method") == audio.MERGE_METHOD)
+        audio.ffmpeg_info = _p25b_ffinfo_real
+    else:
+        print("(bỏ qua E2E ghép thật: máy này không có ffmpeg trong PATH)")
+finally:
+    paths.data_dir = _p25b_dd
+    stories._recents_path = _p25b_rec
+    audio.ffmpeg_info = _p25b_ffinfo_real
+    audio._durations.clear()
+    shutil.rmtree(_p25b_box, ignore_errors=True)
+# --- hết P25b ---
 
 
 # cleanup test rows

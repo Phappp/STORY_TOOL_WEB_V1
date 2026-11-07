@@ -1596,6 +1596,37 @@ function vidPlayer(row) {
   return box;
 }
 
+// P25b: một cú bấm = ffmpeg ghép ẢNH B2 của chính bài này với MỘT file tiếng của bộ sưu tập
+// workspace, ra `video.mp4`. Bộ nào / bao nhiêu giây / file nào — Python tra từ prefs + id bài;
+// event CHỈ mang id, không có chỗ nào để trình duyệt gửi một đường dẫn xuống server.
+function mergeBox(row) {
+  const box = el("div", "vidrow");
+  const label = String(row.b4audio || "—");
+  const ready = !!row.b4ready;
+  const over = !!row.b4over;
+  const b = button("🎬 Ghép ảnh + tiếng · " + label,
+    ready ? ("Làm `video.mp4` từ `image.png` của " + row.id + " + “" + label
+      + "” (file do id bài quyết định, tiếng dài hơn thì cắt bớt, ảnh giữ nguyên khổ)"
+      + (over ? " — bài này ĐANG có video bạn tải tay nên phải bấm HAI lần" : "")
+      + " · chạy ngay tại chỗ, không vào hàng đợi")
+      : "Không ghép được: " + label + " — xem Cấu hình ▸ Âm thanh",
+    bb => {
+      if (over && bb.dataset.arm !== "1") {
+        // Cú thứ nhất CHỈ arms: video tải tay là thứ không suy ra lại được nên nó phải chết vì một
+        // cú bấm CÓ CHỦ Ý. Arm tại chỗ, không xin Python làm gì — và repaint là mất arm (an toàn).
+        bb.dataset.arm = "1";
+        bb.textContent = "⚠ Bấm lần nữa để ghi đè video bạn đã tải tay";
+        bb.title = "Bài này đã có “" + String(row.b4meta) + "” do bạn tải lên. Bấm lại để xác nhận ghi đè.";
+        return;
+      }
+      bb.disabled = true;  // nút trong modal không bị markSent khóa -> tự khóa tới khi vẽ lại
+      send({ source: "b4_merge", id: row.id, force: over });
+    }, "act");
+  if (!ready) b.disabled = true;
+  box.appendChild(b);
+  return box;
+}
+
 function videoCard(row) {
   const state = stateOf(row, "b4");
   const detail = String((row.detail || {}).b4 || "");
@@ -1603,7 +1634,7 @@ function videoCard(row) {
   // thêm khi THẬT SỰ có file — không có file mà still hai dòng cùng nghĩa là chữ thừa trong thẻ.
   const body = [];
   if (row.b4meta) body.push(el("div", null, "Video đang có: " + row.b4meta));
-  body.push(vidPlayer(row), vidBox(row));
+  body.push(vidPlayer(row), mergeBox(row), vidBox(row));
   if (detail) body.push(el("div", "muted", "Ghi chú: " + detail));
   const key = contentKey(row, "Video");
   const played = VIDEOS.get(key);
@@ -1612,7 +1643,16 @@ function videoCard(row) {
     warn: SQ_WARN.indexOf(state) >= 0 ? state : "",
     actions: played && played.url ? [openIcon(played.url, "Mở " + String(played.name || "video")
       + " bằng trình duyệt (tab mới, xem toàn màn hình)")] : [],
-    help: ["B4 là bước tải tay — không có AI, không vào hàng đợi, không ảnh hưởng ⚡",
+    help: ["B4 không có bước AI nào: hoặc bạn TẢI tay một file video, hoặc bấm “🎬 Ghép ảnh + tiếng” "
+      + "để tool dựng video từ ảnh B2 của chính bài này. Cả hai đều không vào hàng đợi, không ảnh hưởng ⚡.",
+      "Nút GHÉP lấy: ảnh `image.png` của bài + MỘT file tiếng trong bộ sưu tập của workspace "
+      + "(Cấu hình ▸ Âm thanh) + số giây đã nhập. Nhãn ngay trên nút nói đủ ba thứ đó; tiếng dài hơn "
+      + "số giây thì bị CẮT, video dựng theo đúng KHỔ ảnh B2, không cắt ảnh.",
+      "Bài nào cũng lấy file tiếng theo id của nó, không xoay vòng: chạy lại cùng một bài ra cùng một tiếng. "
+      + "Bộ sưu tập THÊM hay BỚT file thì bài có thể đổi sang file khác.",
+      "Ghép chạy NGAY khi bấm (ffmpeg trên máy), lưới chờ tới lúc xong: video 60 s khổ 1024 hết ~10 giây, "
+      + "30 s hết ~5 giây — một bài thì chịu được, cả loạt thì phải chờ P25c đưa vào hàng đợi. "
+      + "Bài đã có video do bạn tải tay phải bấm HAI lần để ghi đè; video do chính nút này ghép thì bấm một lần.",
       "Chọn file rồi bấm “🚀 Tải lên”: file đi từng mẩu " + vidMb(vidChunkBytes()) + " MB qua lưới, "
         + "mẩu cuối về tới nơi mới ghi `video.<đuôi>` vào folder — đang tải mà hủy thì folder còn nguyên.",
       "Trần của ô TẢI là " + vidMb(vidModalMax()) + " MB vì bytes đi qua message component. Lớn hơn thì dùng mục "

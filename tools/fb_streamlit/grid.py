@@ -215,6 +215,9 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
     out = []
     # kind theo TÊN bộ — đủ để nói refs của bài đi đường nào mà khỏi đọc prefs cho từng hàng
     kinds = {str(r["name"]): str(r["kind"]) for r in ctx.providers.values()}
+    # P25b: bộ tiếng + số giây là của CẢ workspace, danh sách file cũng vậy — đọc MỘT lần cho cả
+    # lượt dựng hàng trăm hàng, từng hàng chỉ việc tra id bài ra tên file sẽ dùng.
+    aud = ga.audio_setup(ctx.root)
     for sid in stories.list_story_ids(ctx.root):
         story = stories.load_story(ctx.root, sid)
         summary = stories.story_summary(ctx.root, sid, story=story)
@@ -229,6 +232,13 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
         if corrupt:
             detail["b0"] = "story.json hỏng, đọc không được — coi như bài chưa chạy gì; lần lưu tới sẽ dời file cũ sang story.bad-…"
         pre = ga.preset_for(ctx, story)  # sqlite3.Row hoặc None — hàng lưới chỉ cần tên để JS keyed cache prompt
+        # P25b: nhãn nút 🎬 Ghép — TÍNH MỘT LẦN cho cả chữ lẫn cờ, hai thứ lệch nhau là nút hứa một
+        # việc mà bấm vào sẽ bị từ chối
+        aud_label, aud_ready = ga.audio_label(aud, sid, bool(summary["image"]))
+        # P25b: "có gì để ghi đè" = folder THẬT SỰ còn file video VÀ nó do anh tải tay.
+        # `video_meta` rỗng đúng khi file không còn nên dùng nó làm cờ — đừng bắt JS thuộc lại chữ
+        # "thủ công" hay đoán trạng thái file; Python gate vẫn y hệt, JS chỉ hiển thị.
+        b4meta = video_meta(story, folder)
         out.append({
             "id": sid,
             "topic": summary["topic"],
@@ -244,8 +254,12 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             "b0": ga.b0_state(ctx.root, sid, story=story),  # B0 có state riêng, không nằm trong states/bucket
             "b0meta": ga.b0_meta(story),
             "b4": b4,  # B4 cũng riêng: không có bước AI nào chạy video nên nó không vào states/bucket/hàng đợi
-            "b4meta": video_meta(story, folder),
+            "b4meta": b4meta,
             "b4link": str((story.get("b4") or {}).get("link") or ""),  # P18d: link video nhập trong modal, chỉ chữ không phải file
+            # P25b: chữ trên nút 🎬 Ghép + nó có chạy được thật không (nhãn nói thẳng lý do khi không)
+            "b4audio": aud_label,
+            "b4ready": aud_ready,
+            "b4over": bool(b4meta) and str((story.get("b4") or {}).get("method") or "") == ga.MANUAL_METHOD,
             # một dòng cho tab B2: ảnh refs của bài đi vào prompt bằng đường nào (P19a) — xem notes
             "b2ref": ga.b2_ref_hint(story, kinds),
             "bucket": "error" if corrupt else ga.bucket(states),  # bài không đọc được story.json là việc phải xử lý, không phải "chờ"

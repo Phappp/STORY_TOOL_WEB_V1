@@ -7,6 +7,7 @@ Xóa bộ sưu tập hay file không mất dữ liệu — mọi thứ dời và
 Module này không import streamlit: mọi hàm chạy được ngoài app nên test được thẳng.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -25,6 +26,13 @@ COL_NAME_MAX = 60
 FILE_NAME_MAX = 120
 PROBE_TIMEOUT = 20  # ffprobe lâu hơn mức này coi như không biết độ dài — tab vẽ lại mỗi 2 giây
 VERSION_TIMEOUT = 30
+# ---------- ghép video (P25b) ----------
+MERGE_METHOD = "ghép ffmpeg"  # phân biệt với "thủ công" của video tải tay — quyết định phải xác nhận đè
+MERGE_TMP = ".merge-tmp"  # ffmpeg ghi ở ĐÂY rồi mới dời vào bài: folder bài không bao giờ có video dở
+MERGE_TIMEOUT = 600  # một lượt ghép lâu hơn thế là có gì đó sai, đừng treo cả lượt vẽ
+MERGE_FPS = 25
+MERGE_VIDEO_KBPS = 2500  # ảnh tĩnh chuyển động chậm: bitrate cao hơn chỉ tổ phình file, không đẹp hơn
+MERGE_AUDIO_KBPS = 128
 
 _durations: dict[str, float | None] = {}  # "đường dẫn:kích thước:mtime" -> giây (None = đã hỏi mà không biết)
 
@@ -371,3 +379,80 @@ def label_seconds(seconds, complete: bool) -> str:
     total = int(round(seconds))
     text = f"{total // 60}:{total % 60:02d}" if total >= 60 else f"0:{total % 60:02d}"
     return text if complete else f"≈ {text} (chưa đo hết được)"
+
+
+# ---------- chọn file cho một bài ----------
+
+def pick_index(sid, n: int) -> int:
+    """Vị trí file tiếng của một bài — TẤT ĐỊNH theo id.
+
+    Phải là sha1 chứ không phải `hash()`: hash chuỗi của Python đổi theo từng tiến trình
+    (PYTHONHASHSEED), nên dùng hash() thì restart là toàn bộ video đổi tiếng sang file khác
+    mà không ai bấm gì.
+    """
+    digest = hashlib.sha1(str(sid).encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) % max(n, 1)
+
+
+def pick(name, sid, rows=None) -> Path:
+    """File tiếng mà bài này sẽ dùng; AudioError khi bộ không có file nào để chọn."""
+    files = list(rows) if rows is not None else files(name)
+    if not files:
+        raise AudioError(f"Bộ sưu tập “{safe_col_name(name)}” không có file âm thanh nào.")
+    return files[pick_index(sid, len(files))]
+
+
+# ---------- ghép ảnh + tiếng ----------
+
+def merge_tmp_dir() -> Path:
+    d = root() / MERGE_TMP
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def merge_args(image, audio_file, out: Path, seconds: int) -> list[str]:
+    """Câu lệnh ffmpeg thật — tách riêng để test đọc được chứ không chỉ đoán qua kết quả.
+
+    Ảnh giữ NGUYÊN khổ (quyết định của anh: không cắt), chỉ chẵn hóa hai cạnh vì libx264+yuv420p
+    từ chối kích thước lẻ; `-t` là trần thời gian anh nhập, tiếng dài hơn bị cắt, ngắn hơn thì
+    phần còn lại im lặng chứ không lặp tiếng.
+    """
+    ff = ffmpeg_info()
+    if not ff["found"]:
+        raise AudioError("Chưa có ffmpeg chạy được (nguồn: "
+                         + (ff["source"] or "chưa dò thấy gì")
+                         + (f" · {ff['ffmpeg']}" if ff["ffmpeg"] else "")
+                         + ") — xem Cấu hình ▸ Âm thanh.")
+    return [ff["ffmpeg"], "-hide_banner", "-v", "error", "-y",
+            "-loop", "1", "-framerate", str(MERGE_FPS), "-i", str(Path(image)),
+            "-i", str(Path(audio_file)),
+            "-t", str(int(seconds)),
+            "-vf", "scale='trunc(iw/2)*2':'trunc(ih/2)*2'",
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-b:v", f"{MERGE_VIDEO_KBPS}k", "-r", str(MERGE_FPS),
+            "-c:a", "aac", "-b:a", f"{MERGE_AUDIO_KBPS}k",
+            "-movflags", "+faststart",
+            str(out)]
+
+
+def merge(image, audio_file, out: Path, seconds: int) -> float:
+    """Chạy ffmpeg tới `out`, trả số giây ĐÃ DÙNG. Không xóa gì của bài — bài gọi `save_video` sau."""
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cmd = merge_args(image, audio_file, out, seconds)
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=MERGE_TIMEOUT,
+                              encoding="utf-8", errors="replace", **_no_window())
+    except OSError as exc:
+        raise AudioError(f"Không chạy được ffmpeg: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        out.unlink(missing_ok=True)
+        raise AudioError(f"ffmpeg không xong trong {MERGE_TIMEOUT} giây — đã bỏ file tạm.") from exc
+    elapsed = time.monotonic() - started
+    if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
+        if out.exists():
+            out.unlink(missing_ok=True)
+        tail = str((proc.stderr or proc.stdout or "").strip()).splitlines()[-3:]
+        raise AudioError(f"ffmpeg exit {proc.returncode}: " + (" | ".join(tail) or "không nói gì"))
+    return elapsed

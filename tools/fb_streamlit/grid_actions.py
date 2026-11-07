@@ -20,6 +20,7 @@ from hashlib import sha1
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse
 
+import audio
 import db
 import fb_import
 import formats
@@ -292,6 +293,98 @@ def set_pref_audio(root: Path, collection=None, seconds=None) -> str:
     else:
         prefs.pop("audio", None)
     return save_prefs(root, prefs)
+
+
+# ---------- P25b: ghép ảnh B2 + tiếng -> video B4 ----------
+
+def audio_setup(root: Path) -> dict:
+    """Mọi thứ việc ghép cần biết, ĐỌC MỘT LẦN cho cả lưới chứ không phải cho từng hàng.
+
+    Folder bộ sưu tập có thể bị đổi tên/xóa ở ngoài tool — giữ nguyên tên đã mất trong prefs và
+    báo đúng tên đó, không âm thầm nhảy sang bộ khác: video làm ra phải giải thích được bằng
+    cái anh đã chọn.
+    """
+    stored = pref_audio(root)
+    files, missing = [], False
+    if stored["collection"]:
+        try:
+            files = audio.files(stored["collection"])
+        except audio.AudioError:
+            missing = True
+    return {"ffmpeg": audio.ffmpeg_info(), "collection": stored["collection"],
+            "seconds": stored["seconds"], "files": files, "missing": missing}
+
+
+def audio_label(setup: dict, sid: str, has_image: bool) -> tuple[str, bool]:
+    """Chữ trên nút 🎬 + nó CÓ chạy được không — nhãn phải đọc đúng trạng thái thật, không hứa suông."""
+    if not setup["ffmpeg"]["found"]:
+        return "thiếu ffmpeg", False
+    if not setup["collection"]:
+        return "workspace chưa chọn bộ sưu tập", False
+    if setup["missing"]:
+        return f"bộ “{setup['collection']}” không còn folder", False
+    if not setup["files"]:
+        return f"bộ “{setup['collection']}” chưa có file tiếng", False
+    if not has_image:
+        return "bài này chưa có ảnh B2", False
+    return f"{audio.pick(setup['collection'], sid, setup['files']).name} · {setup['seconds']} s", True
+
+
+def merge_b4(ctx: Ctx, sid: str, force: bool = False) -> list[str]:
+    """Ghép `image.png` của chính bài này + một file tiếng trong bộ của workspace thành `video.mp4`.
+
+    Event CHỈ mang id bài: bộ nào + bao nhiêu giây lấy từ prefs workspace, file nào trong bộ lấy
+    theo id bài (`audio.pick`, tất định), đường dẫn ffmpeg lấy từ PATH hoặc Cấu hình ▸ Âm thanh.
+    Không có chỗ nào để trình duyệt gửi một đường dẫn xuống đây.
+    """
+    setup = audio_setup(ctx.root)
+    info = setup["ffmpeg"]
+    if not info["found"]:
+        return [f"{sid}: chưa ghép được — không có ffmpeg chạy được (nguồn: {info['source'] or 'chưa dò thấy'}). "
+                "Xem Cấu hình ▸ Âm thanh."]
+    if not setup["collection"]:
+        return [f"{sid}: chưa ghép được — workspace này chưa chọn bộ sưu tập tiếng "
+                "(Cấu hình ▸ Âm thanh ▸ “Bộ sưu tập cho CẢ workspace”)."]
+    if setup["missing"]:
+        return [f"{sid}: chưa ghép được — bộ “{setup['collection']}” không còn folder trong `DATA\\AUDIO` "
+                "(đổi tên hay xóa ở ngoài tool thì chọn lại bộ)."]
+    if not setup["files"]:
+        return [f"{sid}: chưa ghép được — bộ “{setup['collection']}” chưa có file âm thanh nào."]
+    image = stories.image_of(ctx.root, sid)
+    if image is None:
+        return [f"{sid}: chưa ghép được — bài này chưa có ảnh B2 (`image.png` trong folder bài)."]
+    clip = audio.pick(setup["collection"], sid, setup["files"])
+    story = stories.load_story(ctx.root, sid)
+    old = stories.video_file(_folder(story, ctx.root, sid))
+    method = str((story.get("b4") or {}).get("method") or "")
+    if old is not None and method == MANUAL_METHOD and not force:
+        # Video anh TẢI TAY là thứ không suy ra lại được, còn bản ghép thì làm lại được trong 5 giây:
+        # nên đè nó phải là một cú bấm có chủ ý, không phải cái click đơn tình cờ.
+        return [f"{sid}: đã có video ANH TẢI TAY (`{old.name}`, "
+                f"{round(old.stat().st_size / 1048576, 1)} MB) — bản ghép sẽ GHI ĐÉ. Bấm lại lần nữa để xác nhận."]
+    tmp = audio.merge_tmp_dir() / f"{Path(str(sid)).name}-{int(time.time())}.mp4"
+    try:
+        spent = audio.merge(image, clip, tmp, setup["seconds"])
+        with open(tmp, "rb") as fh:
+            stories.save_video(ctx.root, sid, fh, suffix=".mp4", method=audio.MERGE_METHOD)
+    except (audio.AudioError, OSError, stories.WorkspaceError) as exc:
+        return [f"{sid}: ghép hỏng — {exc}"]
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    block = dict(stories.load_story(ctx.root, sid).get("b4") or {})
+    # Dấu vết để lần sau biết video này dựng từ gì — `pick` tất định nên chỉ cần id bài, mà ghi lại
+    # vẫn cần khi bộ sưu tập có thêm/bớt file (tổng số file đổi là file chọn đổi theo).
+    block.update({"audio": clip.name, "audio_collection": setup["collection"],
+                  "audio_seconds": int(setup["seconds"]), "audio_from": str(image.name)})
+    stories.update_story(ctx.root, sid, b4=block)
+    over = f" · đã ghi đè video tải tay `{old.name}`" if old is not None and force else ""
+    return [f"{sid}: 🎬 đã ghép `{image.name}` + “{clip.name}” ({setup['seconds']} s, bộ "
+            f"“{setup['collection']}”) → `{block.get('file')}` · "
+            f"{round(float(block.get('bytes') or 0) / 1048576, 1)} MB · ffmpeg {round(spent, 1)} s{over}"]
 
 
 def provider_pool(ctx: Ctx, story: dict, step: str) -> list[str]:
@@ -1838,6 +1931,10 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             url = clean_url(event.get("value"))
             stories.update_story(ctx.root, sid, source=url)
             out.lines, out.touched = [f"{sid}: Nguồn = {url or '(trống)'}."], [sid]
+        elif source == "b4_merge":
+            # P25b: một cú bấm = ghép ĐÚNG MỘT bài (ảnh của bài đó + file tiếng bộ sưu tập của workspace).
+            # `force` là cú bấm THỨ HAI khi bài đã có video tải tay — không có nó thì không đè.
+            out.lines, out.touched = merge_b4(ctx, sid, force=bool(event.get("force"))), [sid]
         elif source == "b4_link_save":
             # P18d: tab B4 trong modal chỉ NHẬP LINK — bytes video vẫn đi widget native, không qua iframe.
             url = clean_url(event.get("value"))
