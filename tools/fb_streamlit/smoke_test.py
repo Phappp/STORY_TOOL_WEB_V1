@@ -145,7 +145,7 @@ old_case = Path(tempfile.mkdtemp(prefix="fbcase_"))
 paths._prepare(old_case)
 live = {p.name for p in old_case.iterdir() if p.is_dir()}
 check("prepare uppercases existing folders", live == {"DATA", "LOGS"})
-check("prepare uppercases subfolders", {p.name for p in (old_case / "DATA").iterdir() if p.is_dir()} == {"REFS", "IMAGES"})
+check("prepare uppercases subfolders", {p.name for p in (old_case / "DATA").iterdir() if p.is_dir()} == {"REFS", "IMAGES", "AUDIO"})
 check("rename keeps files", (old_case / "DATA" / "fb_tool.db").read_bytes() == b"KEEP")
 check("no temp case folders", not any(".__case__" in p.name for p in old_case.rglob("*")))
 check("prepare is idempotent", paths._prepare(old_case) == old_case and (old_case / "DATA" / "fb_tool.db").exists())
@@ -6081,7 +6081,267 @@ check("P24b `visible()` đảo bằng `.slice().reverse()` chứ không `rows().
 check("P24b cửa sổ lấy ĐẦU bằng `list.slice(0, SHOWN)` — còn `list.length - SHOWN` là tiền đề ĐÃ SANG "
       "TRANG của P24a (bài mới ở đáy); hai thứ phải đi cặp, lệch một là lưới hiện sai phần bài",
       "return list.slice(0, SHOWN);" in _p24a_src and "list.length - SHOWN" not in _p24a_src)
-# --- hết P24a ---
+# --- P25a: tab "Âm thanh" — bộ sưu tập tiếng + ffmpeg + prefs workspace ---
+import audio
+
+
+class _P25aUp(io.BytesIO):
+    """Giống vật st.file_uploader trao cho add_file: stream đang mở + `.size` khai báo."""
+
+    def __init__(self, data: bytes, size: int | None = None):
+        super().__init__(data)
+        self.size = len(data) if size is None else size
+
+
+def _p25a_raises(fn, *args) -> bool:
+    try:
+        fn(*args)
+    except audio.AudioError:
+        return True
+    return False
+
+
+_p25a_box = Path(tempfile.mkdtemp(prefix="fbsmoke_p25a_"))
+_p25a_dd_real, _p25a_rec_real = paths.data_dir, stories._recents_path
+paths.data_dir = lambda: _p25a_box / "DATA"
+stories._recents_path = lambda: _p25a_box / "workspaces.json"
+_p25a_root = stories.set_current(stories.validate_root(_p25a_box / "ws_p25a"))
+try:
+    _p25a_boot = Path(tempfile.mkdtemp(prefix="fbsmoke_p25a_boot_"))
+    paths._prepare(_p25a_boot)
+    check("P25a tiếng nằm ở `DATA/AUDIO` của home chứ KHÔNG trong folder bài — một bộ dùng cho cả "
+          "workspace nên không có lý do gì nó đi theo từng story; SUBDIRS phải chứa nó để boot tạo sẵn "
+          "folder hoa (không thì lần lưu đầu mới mkdir, và tên dễ thành chữ thường)",
+          audio.root() == _p25a_box / "DATA" / paths.AUDIO and audio.root().is_dir()
+          and f"{paths.DATA}/{paths.AUDIO}" in paths.SUBDIRS
+          and (_p25a_boot / paths.DATA / paths.AUDIO).is_dir())
+
+    check("P25a tên bộ sưu tập KHÔNG phải một đường dẫn: `..`, `.trash`, `a/b`, `C:\\x`, tên trống đều "
+          "bị từ chối và tên dài bị cắt — để lọt là thư mục ngoài AUDIO hoặc chồng lên .trash",
+          all(_p25a_raises(audio.safe_col_name, bad)
+              for bad in ("..", ".trash", "a/b", "\\", "..\\x", "", "   ", "C:\\x", ".", "./x"))
+          and len(audio.safe_col_name("x" * 200)) == audio.COL_NAME_MAX)
+
+    _p25a_col = audio.create("Nhac chung")
+    _p25a_evil = r"..\..\evil\Nhac 1.mp3"
+    _p25a_first = audio.add_file(_p25a_col, _P25aUp(b"RIFFfake"), _p25a_evil)
+    check("P25a tên file từ trình duyệt CHỈ để lấy basename: `..\\..\\evil\\Nhac 1.mp3` ghi vào trong "
+          "folder bộ sưu tập, không tạo được file ngoài đó — server ghép đường dẫn, browser không quyết "
+          "định được file nào bị ghi",
+          _p25a_first.parent == audio.collection_dir(_p25a_col) and _p25a_first.name == "Nhac 1.mp3"
+          and not (_p25a_box / "evil").exists()
+          and not (_p25a_box / "DATA" / "evil").exists())
+
+    _p25a_second = audio.add_file(_p25a_col, _P25aUp(b"second"), "Nhac 1.mp3")
+    check("P25a trùng tên KHÔNG đè: bản thứ hai thành `Nhac 1-2.mp3` và bản đầu còn nguyên chữ — tải "
+          "hai lần cùng một bài là thấy hai file, không phải một file mất tích âm thầm",
+          _p25a_second.name == "Nhac 1-2.mp3" and _p25a_first.read_bytes() == b"RIFFfake"
+          and len(audio.files(_p25a_col)) == 2)
+
+    check("P25a chặn TRƯỚC khi ghi: sai đuôi / 0 byte / vượt trần đều AudioError và số file vẫn nguyên; "
+          "kích thước lấy từ khai báo của uploader nên không cần đọc hết 200 MB mới biết quá trần",
+          _p25a_raises(audio.add_file, _p25a_col, _P25aUp(b"data"), "ke.txt")
+          and _p25a_raises(audio.add_file, _p25a_col, _P25aUp(b""), "empty.mp3")
+          and _p25a_raises(audio.add_file, _p25a_col, _P25aUp(b"tiny", audio.MAX_FILE_BYTES + 1), "big.mp3")
+          and len(audio.files(_p25a_col)) == 2
+          and all(s == s.lower() for s in audio.SUFFIXES))
+
+    check("P25a ghi qua file tạm rồi rename: không để lại `.audio.tmp` trong folder — lần ghép sau mà "
+          "chọn nhằm một file ghi dở là video hỏng không giải thích được",
+          not (audio.collection_dir(_p25a_col) / ".audio.tmp").exists()
+          and not [p.name for p in audio.collection_dir(_p25a_col).iterdir() if p.name.startswith(".")])
+
+    # không có ffprobe: phải nói "không biết" chứ không nói 0 giây, và cái "không biết" phải được cache
+    _p25a_calls: list[int] = []
+    _p25a_info_real = audio.ffmpeg_info
+    audio.ffmpeg_info = lambda: (_p25a_calls.append(1) or
+                                 {"ffmpeg": "", "ffprobe": "", "source": "", "stored": "", "found": False})
+    _p25a_list_ok = True
+    try:
+        audio.list_collections()
+        audio.collection_names()
+        audio.files(_p25a_col)
+    except Exception:
+        _p25a_list_ok = False
+    _p25a_calls_list = len(_p25a_calls)  # phải đo TRƯỚC khi duration() dưới đây bumped counter
+    audio._durations.clear()
+    _p25a_none = audio.duration(_p25a_first)
+    _p25a_again = audio.duration(_p25a_first)
+    _p25a_tot = audio.total_seconds([_p25a_first])
+    _p25a_calls_probe = len(_p25a_calls)
+    audio.ffmpeg_info = _p25a_info_real
+    check("P25a danh sách bộ sưu tập KHÔNG gọi ffprobe: `list_collections()`/`files()` chạy mà "
+          "`ffmpeg_info` bị stub hóa vẫn không nổ — chỗ này vẽ lại MỖI LƯỢT bấm, probe cả 200 file là "
+          "treo trang; độ dài chỉ tính cho bộ ĐANG xem",
+          _p25a_list_ok and _p25a_calls_list == 0)
+    check("P25a thiếu ffprobe thì trả None (KHÔNG BIẾT) chứ không trả 0 giây: `total_seconds()` báo "
+          "(0.0, chưa đủ) và nhãn ra '(không đo được độ dài)' — bảng độ dài mà in 0:00 là nói dối",
+          _p25a_none is None and _p25a_again is None and _p25a_tot == (0.0, False)
+          and audio.label_seconds(*_p25a_tot) == "(không đo được độ dài)")
+    check("P25a cái 'không biết' cũng được CACHE theo path+size+mtime: 3 lời gọi probe mà chỉ 1 lần "
+          "hỏi đường dẫn — tab này vẽ lại liên tục, không cache là subprocess chạy mãi",
+          _p25a_calls_probe == 1)
+    check("P25a nhãn độ dài nói rõ mức chắc chắn: đã đo hết thì `0:45`/`3:20` sạch, chưa biết hết thì "
+          "phải có dấu ≈ và chữ 'chưa đo hết được'",
+          audio.label_seconds(45.4, True) == "0:45" and audio.label_seconds(200.0, True) == "3:20"
+          and audio.label_seconds(200.0, False) == "≈ 3:20 (chưa đo hết được)")
+
+    _p25a_which_real = audio._which
+    audio._which = lambda name: ""
+    audio.save_settings(ffmpeg=str(_p25a_box / "ffmpeg-da-bay.exe"))
+    _p25a_cfg = audio.ffmpeg_info()
+    _p25a_err = ""
+    try:
+        audio.check_ffmpeg()
+    except audio.AudioError as exc:
+        _p25a_err = str(exc)
+    audio._which = _p25a_which_real
+    check("P25a đường dẫn anh dán tay là nguồn 'cấu hình' và `found` là KẾT QUẢ THỬ chứ không phải 'có "
+          "chữ trong ô': folder tự dò trắng ra mà file đã lưu không còn thì báo ĐỎ đúng tên file đó, "
+          "không âm thầm giả là tìm thấy",
+          _p25a_cfg["source"] == "cấu hình" and _p25a_cfg["found"] is False
+          and str(_p25a_box / "ffmpeg-da-bay.exe") in _p25a_cfg["ffmpeg"]
+          and "không còn file" in _p25a_err)
+    check("P25a `set_ffmpeg_path` từ chối lưu một chỗ chết (file không tồn tại) và `clear_ffmpeg_path` "
+          "đưa tool về chế độ tự dò — bấm lần hai thì nói 'chưa có gì để xóa' chứ không báo thành công "
+          "giả",
+          _p25a_raises(audio.set_ffmpeg_path, str(_p25a_box / "khong-co.exe"))
+          and audio.clear_ffmpeg_path().startswith("Đã xóa")
+          and "ffmpeg" not in audio.load_settings()
+          and audio.clear_ffmpeg_path().startswith("Chưa có"))
+    (audio.settings_path()).write_text("{rác", encoding="utf-8")
+    check("P25a `load_settings` chịu được file hỏng: JSON rác trong audio_settings.json trả {} chứ không "
+          "nổ cả tab — đây là file anh có thể sửa bằng tay ngoài tool",
+          audio.load_settings() == {} and audio.ffmpeg_info()["stored"] == "")
+
+    if shutil.which("ffmpeg"):
+        _p25a_tone = _p25a_box / "tone.mp3"
+        subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y",
+                        "-f", "lavfi", "-i", "sine=frequency=440:duration=7", str(_p25a_tone)],
+                       capture_output=True, text=True, timeout=120)
+        _p25a_d = audio.duration(_p25a_tone)
+        _p25a_mix = audio.total_seconds([_p25a_tone, _p25a_first])
+        check("P25a đo THẬT trên máy này: ffmpeg -version đọc được từ PATH, file 7 giây sinh ra bằng "
+              "ffmpeg thật probe ra ≈7 s (`%s`) — không phải luật chỉ chạy trong head-test"
+              % (_p25a_d,),
+              _p25a_d is not None and abs(_p25a_d - 7) < 1
+              and audio.ffmpeg_info()["source"] == "PATH" and audio.ffmpeg_info()["found"])
+        check("P25a tổng độ dài trộn file đo được + file không đo được: số là CẬN DƯỚI và "
+              "`complete=False`, nhãn phải có ≈ — in '0:07' như đã biết hết là nói dối trên giao diện",
+              abs(_p25a_mix[0] - 7) < 1 and _p25a_mix[1] is False
+              and audio.label_seconds(*_p25a_mix).startswith("≈"))
+    else:
+        print("(bỏ qua đo ffprobe thật: không có ffmpeg trong PATH)")
+
+    check("P25a ✏ đổi tên bộ là đổi folder, file đi theo; nhằm tên đã có thì bị chặn chứ không gộp hai "
+          "bộ vào nhau (gộp là mất một bộ trong im lặng)",
+          audio.rename("Nhac chung", "Nhac dia") == "Nhac dia" and "Nhac chung" not in audio.collection_names()
+          and len(audio.files("Nhac dia")) == 2
+          and audio.create("Nhac ket") == "Nhac ket"
+          and _p25a_raises(audio.rename, "Nhac dia", "Nhac ket"))
+
+    _p25a_rmed = audio.remove_file("Nhac dia", "Nhac 1-2.mp3")
+    check("P25a 🗑 một file = dời vào `AUDIO/.trash` kèm dấu mộc tên + giờ, nội dung còn đọc được — "
+          "sai tay là kéo ngược ra, không mất bài hát",
+          _p25a_rmed.parent == audio.trash_dir() and _p25a_rmed.read_bytes() == b"second"
+          and [p.name for p in audio.files("Nhac dia")] == ["Nhac 1.mp3"])
+    _p25a_col_dir = audio.collection_dir("Nhac dia")
+    _p25a_trashed = audio.delete("Nhac dia")
+    check("P25a 🗑 cả bộ sưu tập cũng chỉ là dời folder: tên biến mất khỏi danh sách nhưng folder trong "
+          ".trash còn đủ file bên trong — tab này không có nút xóa vĩnh viễn",
+          not _p25a_col_dir.exists() and "Nhac dia" not in audio.collection_names()
+          and len(list(_p25a_trashed.iterdir())) == 1 and _p25a_trashed.name.startswith("col__Nhac"))
+
+    # ---------- prefs của workspace ----------
+    check("P25a chưa chọn gì thì `pref_audio` trả ĐÚNG cái ô sẽ hiện (60 s, chưa có bộ) — mặc định trong "
+          "file và mặc định trên giao diện phải là MỘT con số, lệch nhau là anh lưu nhầm giá trị mình "
+          "không thấy",
+          ga.pref_audio(_p25a_root) == {"collection": "", "seconds": ga.AUDIO_SECONDS_DEFAULT})
+    ga.set_pref_audio(_p25a_root, collection="Nhac ket", seconds=25)
+    ga.set_pref_audio(_p25a_root, seconds=99999)
+    check("P25a đổi MỘT nửa vẫn giữ nửa kia, số giây bị ÉP về trần 600: cái lưu xuống file phải là giá "
+          "trị thật sự dùng, không phải chữ anh vừa gõ nhầm",
+          ga.pref_audio(_p25a_root) == {"collection": "Nhac ket", "seconds": ga.AUDIO_SECONDS_MAX})
+    check("P25a số giây KHÔNG phải số thì trả lời rõ và KHÔNG sửa file — im lặng đổi thành 0 hay 60 là "
+          "đánh mất cái anh đang có",
+          ga.set_pref_audio(_p25a_root, seconds="abc").startswith("Số giây không phải số")
+          and ga.pref_audio(_p25a_root) == {"collection": "Nhac ket", "seconds": ga.AUDIO_SECONDS_MAX})
+    ga.set_pref_audio(_p25a_root, collection="")
+    check("P25a chọn '— không ghép tiếng —' là XÓA khóa collection chứ không để chuỗi rỗng, số giây vẫn "
+          "còn cho lần bật lại",
+          ga.pref_audio(_p25a_root) == {"collection": "", "seconds": ga.AUDIO_SECONDS_MAX}
+          and "collection" not in (ga.load_prefs(_p25a_root).get("audio") or {}))
+    _p25a_prefs_file = _p25a_root / ga.PREFS_FILE
+    _p25a_prefs_backup = _p25a_prefs_file.read_text(encoding="utf-8")
+    _p25a_prefs_file.write_text("{rác", encoding="utf-8")
+    check("P25a prefs hỏng thì coi như chưa chọn gì, tab không chết — file prefs là thứ anh có thể sửa "
+          "bằng tay ngoài tool",
+          ga.pref_audio(_p25a_root) == {"collection": "", "seconds": ga.AUDIO_SECONDS_DEFAULT})
+    _p25a_prefs_file.write_text(_p25a_prefs_backup, encoding="utf-8")
+
+    # ---------- giao diện tab Âm thanh ----------
+    _p25a_view = "Nhac ket"  # bộ còn sống: bộ kia đã đổi tên rồi vào .trash, bộ này tạo ra để chặn rename
+    audio.add_file(_p25a_view, _P25aUp(b"RIFFfake"), "mot-bai.mp3")
+    ga.set_pref_audio(_p25a_root, collection="Nhac ket", seconds=25)
+    at_a = AppTest.from_file(str(Path(__file__).parent / "app.py"), default_timeout=40)
+    at_a.session_state["nav_page"] = "Cấu hình"
+    at_a.run()
+    check("P25a tab thứ 4 của Cấu hình là 'Âm thanh (ghép video B4)' và NAV vẫn 3 trang — đây là TAB CON "
+          "của Cấu hình, không phải một trang mới trong sidebar",
+          not at_a.exception
+          and {t.label for t in at_a.tabs} >= {"Workspace (chứa story)", "Providers", "Presets theo chủ đề",
+                                               "Âm thanh (ghép video B4)"}
+          and len(fbapp.NAV) == 3)
+    _p25a_col_w = next((w for w in at_a.selectbox if w.key == "aud_ws_col"), None)
+    _p25a_secs_w = next((w for w in at_a.number_input if w.key == "aud_ws_secs"), None)
+    check("P25a hai ô workspace seeded TỪ FILE trước khi widget sinh ra (luật P9b): option đầu là "
+          "'— không ghép tiếng —' (None), giá trị hiện ra đúng prefs của workspace ĐANG MỞ chứ không "
+          "phải của workspace trước",
+          _p25a_col_w is not None and _p25a_secs_w is not None
+          and _p25a_col_w.options[0] in (None, "— không ghép tiếng —")
+          and _p25a_col_w.value == "Nhac ket"
+          and float(_p25a_secs_w.value) == 25)
+    check("P25a tab có ô ffmpeg + 3 nút ffmpeg + ô tạo bộ + bảng file thật, và nói thẳng P25a chưa ghép "
+          "được (cảnh báo trên đầu tab) — nhãn phải đọc được trạng thái thật, không hứa việc chưa làm",
+          any(w.key == "aud_ff_path" for w in at_a.text_input)
+          and {"aud_ff_save", "aud_ff_test", "aud_ff_clear"} <= {b.key for b in at_a.button}
+          and any(b.key == "aud_del_col" for b in at_a.button)
+          and any(w.key == "aud_new_name" for w in at_a.text_input)
+          and len(at_a.file_uploader) >= 1
+          and any("P25b" in (w.value or "") for w in at_a.warning))
+    if _p25a_secs_w is not None:
+        _p25a_secs_w.set_value(30).run()
+    check("P25a kéo ô số rồi BỎ ĐÓ thì file prefs chưa đổi (còn 25) — một nút một việc: chỉ 💾 Lưu mới "
+          "ghi, không có chuyện widget tự ghi mỗi lần anh trượt",
+        not at_a.exception and ga.pref_audio(_p25a_root)["seconds"] == 25)
+    _p25a_save = next((b for b in at_a.button if b.key == "aud_ws_save"), None)
+    if _p25a_save is not None:
+        _p25a_save.click().run()
+    check("P25a bấm 💾 Lưu cho workspace này thì xuống đúng 30 s và giữ nguyên bộ đang chọn; không phải "
+          "một trang chỉ hiện đẹp rồi mất",
+          not at_a.exception and ga.pref_audio(_p25a_root) == {"collection": "Nhac ket", "seconds": 30})
+
+    _p25a_ga_src = (Path(__file__).parent / "grid_actions.py").read_text(encoding="utf-8")
+    _p25a_audio_src = (Path(__file__).parent / "audio.py").read_text(encoding="utf-8")
+    _p25a_app_src = (Path(__file__).parent / "app.py").read_text(encoding="utf-8")
+    check("P25a audio.py không import streamlit: mọi luật tên/de-ghi/probe nằm ngoài app nên test được "
+          "thẳng như khối này, app chỉ việc gọi",
+          not any(line.strip().startswith(("import streamlit", "from streamlit"))
+                  for line in _p25a_audio_src.splitlines())
+          and "import paths" in _p25a_audio_src)
+    check("P25a chưa có đường nào từ browser tới ffmpeg: `grid_actions.py` không nhắc ffmpeg tí nào — "
+          "lưới chưa nhận event nào chạy lệnh. P25b thêm nút GHÉP thì phải giữ luật 'đường dẫn do server "
+          "chọn từ prefs, browser chỉ gửi id bài'",
+          "ffmpeg" not in _p25a_ga_src)
+    check("P25a caption Cấu hình liệt kê AUDIO trong DATA — anh tìm file tiếng bằng đường dẫn thật in "
+          "trên màn hình, không phải bằng trí nhớ",
+          "{paths.DATA}/{audio.AUDIO_DIR}" in _p25a_app_src)
+finally:
+    paths.data_dir = _p25a_dd_real
+    stories._recents_path = _p25a_rec_real
+    audio._durations.clear()
+    shutil.rmtree(_p25a_box, ignore_errors=True)
+# --- hết P25a ---
 
 
 # cleanup test rows

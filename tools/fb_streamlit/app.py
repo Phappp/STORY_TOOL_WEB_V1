@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 # KHÔNG inject truststore: nó đùn TLS sang CryptoAPI — ngả bị Avast chặn (PermissionError \\.\aswMonFltProxy). providers.tls_verify() thế chỗ.
 
+import audio
 import db
 import fb_import
 import formats
@@ -788,6 +789,181 @@ def page_workspace(c):
             st.info("Workspace đang mở chưa có story nào — sang **Tạo bài** dán nội dung rồi chạy B1.")
 
 
+# ---------- page: Âm thanh ----------
+
+def _audio_try(fn, *args) -> None:
+    """Một cú bấm = một dòng kết quả ngay dưới nút. Lỗi chỉ báo, không làm hỏng cả trang."""
+    try:
+        st.success(fn(*args))
+    except (audio.AudioError, OSError) as exc:
+        st.error(str(exc))
+
+
+def _audio_ffmpeg() -> None:
+    status = st.container()  # tô SAU khi các nút đã chạy, để dòng này luôn nói đúng cái sẽ dùng
+    raw = st.text_input("Đường dẫn `ffmpeg.exe` (nếu tool tự dò không thấy)", key="aud_ff_path",
+                        placeholder=r"vd F:\libraries\ffmpeg\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe",
+                        help=f"Chỉ đường dẫn tới file chạy, không phải thư mục. Lưu trong "
+                             f"`{audio.settings_path()}` — để trống thì tool chỉ tin PATH.")
+    t1, t2, t3 = st.columns(3)
+    if t1.button("💾 Lưu + thử chạy", key="aud_ff_save", disabled=not raw.strip(),
+                 help="Không lưu một chỗ chết: file phải tồn tại và `-version` phải trả lời thì mới ghi."):
+        _audio_try(audio.set_ffmpeg_path, raw)
+    if t2.button("🧪 Thử ffmpeg đang dùng", key="aud_ff_test",
+                 help="Chạy `ffmpeg -version` bằng đúng đường dẫn việc ghép sẽ dùng, và nói nó tới từ PATH "
+                      "hay từ ô vừa nhập."):
+        _audio_try(audio.check_ffmpeg)
+    if t3.button("🧹 Bỏ đường dẫn đã lưu", key="aud_ff_clear",
+                 disabled=not str(audio.load_settings().get("ffmpeg") or ""),
+                 help="Quay lại chế độ tự dò trong PATH."):
+        _audio_try(audio.clear_ffmpeg_path)
+    info = audio.ffmpeg_info()
+    with status:
+        st.markdown("**ffmpeg — chương trình thật sự ghép ảnh + tiếng**")
+        if info["found"]:
+            st.success(f"Sẽ dùng `{info['ffmpeg']}` (nguồn: {info['source']}) · ffprobe: "
+                       + (f"`{info['ffprobe']}`" if info["ffprobe"]
+                          else "KHÔNG thấy — chưa đo được độ dài file, việc ghép vẫn chạy"))
+        elif info["ffmpeg"]:
+            st.error(f"`{info['ffmpeg']}` (nguồn: {info['source']}) không còn là file chạy được — "
+                     "dán lại đường dẫn mới hoặc bấm Bỏ đường dẫn đã lưu.")
+        else:
+            st.error("Chưa có ffmpeg nào: PATH không có và chưa nhập đường dẫn — chưa ghép được video. "
+                     "Giải nén một bản ffmpeg rồi dán đường dẫn `bin\\ffmpeg.exe` vào ô trên.")
+
+
+def _audio_collections() -> None:
+    listing = st.container()  # bảng file tô sau cùng: vừa lưu/xóa là thấy đúng số file ngay
+    with st.form("audio_new_form", clear_on_submit=True):
+        n1, n2 = st.columns([3, 1])
+        new_name = n1.text_input("Tên bộ sưu tập mới", key="aud_new_name",
+                                 placeholder="vd Nhạc nền 2026",
+                                 help=f"Mỗi bộ là một folder trong `{audio.root()}` — dùng chung cho cả workspace, "
+                                      "không nằm trong folder bài.")
+        if n2.form_submit_button("➕ Tạo bộ sưu tập"):
+            _audio_try(audio.create, new_name)
+    names = audio.collection_names()
+    if not names:
+        with listing:
+            st.info("Chưa có bộ sưu tập nào — tạo ở ô trên rồi tải file âm thanh vào đó.")
+        return
+    # seed TRƯỚC khi widget sinh ra (luật P9b): bộ vừa bị xóa/đổi tên ở nút dưới vẫn còn trong
+    # session_state lượt này, để nguyên là selectbox nhận một giá trị không còn trong options.
+    if st.session_state.get("aud_view") not in names:
+        st.session_state["aud_view"] = names[0]
+    view = st.selectbox("Bộ sưu tập đang xem", names, key="aud_view",
+                        help="Chỉ là chỗ để bấm tới từng bộ. Bộ CẢ WORKSPACE dùng chọn ở mục dưới.")
+    up = st.file_uploader("Tải file âm thanh vào bộ sưu tập này", key="aud_up",
+                          type=[s.lstrip(".") for s in audio.SUFFIXES], accept_multiple_files=True,
+                          help=f"Chấp nhận {'/'.join(audio.SUFFIXES)} tới {audio.MAX_FILE_BYTES // 1048576} MB "
+                               "mỗi file. Trùng tên thì bản mới thành `tên-2.mp3`, không đè file cũ.")
+    a1, a2 = st.columns(2)
+    if up and a1.button(f"⬇ Lưu {len(up)} file vào “{view}”", key="aud_save",
+                        help="Chưa bấm nút này thì file mới chỉ nằm trong trình duyệt, chưa vào thư mục tiếng."):
+        done, failed = 0, []
+        for item in up:
+            try:
+                audio.add_file(view, item, str(item.name))
+                done += 1
+            except (audio.AudioError, OSError) as exc:
+                failed.append(f"{item.name}: {exc}")
+        line = f"Đã lưu {done}/{len(up)} file vào “{view}”."
+        (st.error(line + " · Hỏng: " + " | ".join(failed[:5])) if failed else st.success(line))
+    stored_files = audio.files(view)
+    picks = [f_.name for f_ in stored_files]
+    if picks:
+        if st.session_state.get(f"aud_file_pick_{view}") not in picks:
+            st.session_state[f"aud_file_pick_{view}"] = picks[0]
+        pick_file = a2.selectbox("File chọn để xóa", picks, key=f"aud_file_pick_{view}")
+        if a2.button("🗑 Xóa file này", key="aud_del_file",
+                     help=f"Không xóa vĩnh viễn — file dời vào `{audio.TRASH_DIR}` của thư mục tiếng."):
+            _audio_try(audio.remove_file, view, pick_file)
+    else:
+        a2.caption("Bộ sưu tập này chưa có file nào để xóa.")
+    with st.form(f"audio_edit_form_{view}"):
+        r1, r2 = st.columns([3, 1])
+        rename_to = r1.text_input(f"Đổi tên “{view}” thành", key=f"aud_rename_{view}", placeholder=view)
+        if r2.form_submit_button("✏ Đổi tên"):
+            _audio_try(audio.rename, view, rename_to)
+    if st.button(f"🗑 Xóa cả bộ sưu tập “{view}”", key="aud_del_col",
+                 help="Dời cả folder vào .trash trong thư mục tiếng, KHÔNG xóa vĩnh viễn — "
+                      "kéo ngược ra là còn đủ file."):
+        _audio_try(audio.delete, view)
+    rows = audio.files(view)
+    seconds, complete = audio.total_seconds(rows)
+    with listing:
+        st.markdown(f"**{view}** · {len(rows)} file âm thanh · tổng {audio.label_seconds(seconds, complete)}")
+        if not rows:
+            st.caption("Chưa có file nào trong bộ này — tải vào ô trên rồi bấm ⬇ Lưu.")
+        else:
+            st.dataframe(
+                [{"File": f_.name,
+                  "MB": round(f_.stat().st_size / 1048576, 2),
+                  "Độ dài": (f"{audio.duration(f_):.1f} s" if audio.duration(f_) is not None
+                             else "? (thiếu ffprobe)")}
+                 for f_ in rows],
+                width="stretch", hide_index=True,
+            )
+        st.caption(f"Folder thật của bộ này: `{audio.collection_dir(view)}`.")
+
+
+def _audio_workspace() -> None:
+    st.markdown("#### Dùng cho workspace đang mở")
+    root = stories.current()
+    if root is None:
+        st.info("Chưa chọn workspace — sang tab **Workspace** chọn folder chứa story trước đã, "
+                "vì bộ sưu tập tiếng lưu theo workspace.")
+        return
+    stored = ga.pref_audio(root)
+    known = audio.collection_names()
+    options = [None] + known
+    if stored["collection"] and stored["collection"] not in options:
+        options.append(stored["collection"])  # folder đổi tên ở ngoài: hiện nguyên tên, không âm thầm mất chọn
+    # P9b: seed TRƯỚC khi widget sinh ra và chỉ khi đổi workspace. Không seed thì ô hiện giá trị của
+    # workspace khác, còn nút Lưu thì ghi đúng cái đang hiện — tức đổi workspace là ghi nhầm prefs.
+    if st.session_state.get("aud_ws_root") != str(root):
+        st.session_state["aud_ws_root"] = str(root)
+        st.session_state["aud_ws_col"] = stored["collection"] if stored["collection"] in options else None
+        st.session_state["aud_ws_secs"] = stored["seconds"]
+    w1, w2 = st.columns([2, 1])
+    col = w1.selectbox("Bộ sưu tập cho CẢ workspace", options, key="aud_ws_col",
+                       format_func=lambda v: "— không ghép tiếng —" if v is None
+                       else (v if v in known else f"{v} (folder không còn tồn tại)"),
+                       help="Mọi bài trong workspace này lấy tiếng từ một bộ. Ghép bài nào thì bấm trong "
+                            "modal B4 của bài đó.")
+    secs = w2.number_input("Số giây mỗi video", min_value=ga.AUDIO_SECONDS_MIN, max_value=ga.AUDIO_SECONDS_MAX,
+                           step=5, key="aud_ws_secs",
+                           help=f"Video cắt đúng số giây này; tiếng dài hơn thì bị cắt, tiếng ngắn hơn thì phần sau "
+                                f"im lặng. Nhận từ {ga.AUDIO_SECONDS_MIN} tới {ga.AUDIO_SECONDS_MAX} s.")
+    if st.button("💾 Lưu cho workspace này", key="aud_ws_save",
+                 help=f"Ghi vào `{ga.PREFS_FILE}` của workspace đang mở — chỉ đổi khi bấm, "
+                      "kéo ô số rồi bỏ đó thì chưa ghi gì."):
+        note = ga.set_pref_audio(root, collection=col or "", seconds=secs)
+        if note:
+            st.error(note)
+        else:
+            st.success(f"Đã lưu cho `{root}`: " + (f"“{col}”" if col else "không ghép tiếng")
+                       + f" · {secs} giây mỗi video.")
+    st.caption("Đang lưu cho workspace này: "
+               + (f"“{stored['collection']}”" if stored["collection"] else "chưa chọn bộ sưu tập")
+               + f" · {stored['seconds']} giây — hai ô trên chưa bấm Lưu thì chưa đổi.")
+
+
+def page_audio(c):
+    st.subheader("Âm thanh — ghép với ảnh B2 thành video B4")
+    st.caption(
+        f"Mỗi bộ sưu tập là một folder chứa các file âm thanh trong `{audio.root()}`. "
+        "B4 ghép ảnh `image.png` của chính bài đó với một file tiếng trong bộ sưu tập của workspace "
+        "thành `video.mp4` — vẫn một video mỗi bài, ghi đè đúng luật video cũ. "
+        f"Xóa gì ở đây cũng chỉ dời vào `{audio.TRASH_DIR}` của thư mục tiếng, không mất file."
+    )
+    st.warning("P25a mới tới việc quản lý tiếng. Nút GHÉP thật sự sẽ nằm trong modal B4 của lưới ở P25b — "
+               "lúc đó hai giá trị dưới đây mới thật sự được dùng.")
+    _audio_ffmpeg()
+    _audio_collections()
+    _audio_workspace()
+
+
 # ---------- page: Cấu hình (Workspace + Providers + Presets) ----------
 
 def page_config(c):
@@ -795,17 +971,20 @@ def page_config(c):
     st.caption(
         f"Mọi cấu hình nằm ngoài thư mục code, trong `{paths.home()}` — "
         f"`{paths.DATA}/fb_tool.db` (Providers, Presets), `{paths.DATA}/workspaces.json` (folder data đã dùng), "
-        f"`{paths.DATA}/{paths.REFS}` (ảnh đang stage), `.env` (API key), `{paths.LOGS}`. "
+        f"`{paths.DATA}/{paths.REFS}` (ảnh đang stage), `{paths.DATA}/{audio.AUDIO_DIR}` (bộ sưu tập tiếng), `.env` (API key), `{paths.LOGS}`. "
         "Bài viết thì nằm trong **workspace** do bạn chọn (tab Workspace). "
         "Đổi chỗ lưu bằng biến môi trường Windows `FB_TOOL_HOME` (không đặt trong .env)."
     )
-    tab_workspace, tab_providers, tab_presets = st.tabs(["Workspace (chứa story)", "Providers", "Presets theo chủ đề"])
+    tab_workspace, tab_providers, tab_presets, tab_audio = st.tabs(
+        ["Workspace (chứa story)", "Providers", "Presets theo chủ đề", "Âm thanh (ghép video B4)"])
     with tab_workspace:
         page_workspace(c)
     with tab_providers:
         page_providers(c)
     with tab_presets:
         page_presets(c)
+    with tab_audio:
+        page_audio(c)
 
 
 # ---------- page: Grid ----------

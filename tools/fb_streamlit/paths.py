@@ -18,7 +18,8 @@ DATA = "DATA"
 LOGS = "LOGS"
 REFS = "REFS"
 IMAGES = "IMAGES"
-SUBDIRS = (DATA, f"{DATA}/{REFS}", f"{DATA}/{IMAGES}", LOGS)
+AUDIO = "AUDIO"
+SUBDIRS = (DATA, f"{DATA}/{REFS}", f"{DATA}/{IMAGES}", f"{DATA}/{AUDIO}", LOGS)
 
 _home: Path | None = None
 

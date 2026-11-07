@@ -250,6 +250,50 @@ def set_pref_preset(root: Path, pid) -> str:
     return save_prefs(root, prefs)
 
 
+AUDIO_SECONDS_MIN = 1
+AUDIO_SECONDS_MAX = 600  # trần một video ngắn đăng feed — gõ 1000000 là nhầm phím, không phải ý đồ
+AUDIO_SECONDS_DEFAULT = 60
+
+
+def pref_audio(root: Path) -> dict:
+    """Bộ sưu tập tiếng + số giây video B4 ghép của workspace này — chưa chọn gì thì trả mặc định."""
+    stored = load_prefs(root).get("audio")
+    stored = stored if isinstance(stored, dict) else {}
+    try:
+        secs = int(stored.get("seconds"))
+    except (TypeError, ValueError):
+        secs = AUDIO_SECONDS_DEFAULT
+    secs = min(AUDIO_SECONDS_MAX, max(AUDIO_SECONDS_MIN, secs))
+    return {"collection": str(stored.get("collection") or ""), "seconds": secs}
+
+
+def set_pref_audio(root: Path, collection=None, seconds=None) -> str:
+    """Đổi MỘT nửa vẫn giữ nửa kia; `collection` rỗng = thôi không ghép. Số giây ngoài khoảng bị ép về trần.
+
+    Tên bộ sưu tập lưu NGUYÊN VĂN: thư mục có thể bị đổi tên ở ngoài tool, và lần ghép tới phải
+    báo đúng cái tên đã mất đó chứ không im lặng nhảy sang một bộ khác.
+    """
+    prefs = load_prefs(root)
+    stored = dict(prefs.get("audio")) if isinstance(prefs.get("audio"), dict) else {}
+    if collection is not None:
+        name = str(collection).strip()
+        if name:
+            stored["collection"] = name
+        else:
+            stored.pop("collection", None)
+    if seconds is not None:
+        try:
+            secs = int(round(float(seconds)))
+        except (TypeError, ValueError):
+            return "Số giây không phải số — chưa đổi gì."
+        stored["seconds"] = min(AUDIO_SECONDS_MAX, max(AUDIO_SECONDS_MIN, secs))
+    if stored:
+        prefs["audio"] = stored
+    else:
+        prefs.pop("audio", None)
+    return save_prefs(root, prefs)
+
+
 def provider_pool(ctx: Ctx, story: dict, step: str) -> list[str]:
     """Thứ tự provider bước này CÓ THỂ dùng — rỗng nghĩa là để steps tự theo preset/default.
 
