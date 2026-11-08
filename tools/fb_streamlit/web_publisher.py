@@ -644,6 +644,33 @@ def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: boo
     return url
 
 
+def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE) -> str:
+    """Đăng lại một bài đã có link: giữ link cũ trong history, xóa link hiện tại,
+    tạo bài mới trên website và ghi link mới.
+
+    `web_publish` history được append 1 entry để truy vết lần đăng cũ.
+    Trạng thái chuyển: done -> saving -> done (link mới).
+    """
+    root = Path(root)
+    site = normalized_site(site)
+    story = stories.load_story(root, sid)
+    old_link = story.get('link') or ''
+    if not old_link:
+        raise PublishError(f'{sid}: chưa có link nào để đăng lại — dùng Đăng mới (webpub_start).')
+    pub = dict(story.get('web_publish') or {})
+    history = list(story.get('web_publish_history') or [])
+    history.append({'state': pub.get('state', 'done'), 'url': old_link,
+                    'site': pub.get('site', site), 'at': pub.get('at', 0),
+                    'action': 'republish_requested'})
+    # Xóa link + state để publish_one coi đây là bài mới
+    stories.update_story(root, sid, link='',
+                         web_publish={'state': 'ready', 'site': site, 'at': time.time(),
+                                      'previous_link': old_link, 'republishing': True},
+                         web_publish_history=history[-30:])
+    url = publish_one(root, sid, site=site)
+    return url
+
+
 def reset_needs_review_for_new_post(root: Path, sid: str, *, site: str) -> None:
     """Explicit operator-requested NEW publication for an unresolved SID.
 
@@ -678,7 +705,9 @@ def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAU
     story = stories.load_story(root, sid)
     pub = story.get('web_publish') or {}
     if pub.get('state') in ('saving', 'needs_review', 'done'):
-        raise PublishError(f'{sid}: trạng thái xuất bản {pub["state"]}; cần đối soát trước khi thử lại.')
+        # republishing=True được set bởi republish() ngay trước khi gọi publish_one
+        if not pub.get('republishing'):
+            raise PublishError(f'{sid}: trạng thái xuất bản {pub["state"]}; cần đối soát trước khi thử lại.')
     item = materials(root, sid)
     sel = load_selectors(root)
     try:

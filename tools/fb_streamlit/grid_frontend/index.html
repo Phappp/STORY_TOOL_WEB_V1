@@ -77,6 +77,9 @@
   .newsitem .nstate.idle    { background:var(--field); color:var(--muted);     border:1px solid var(--border); }
   .newsitem .nurl { color:var(--accent); text-decoration:underline; font-size:11px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .newsitem .nrebtn { margin-top:4px; font-size:10.5px; padding:2px 8px; border-radius:4px;
+    background:var(--btn); color:var(--text); border:1px solid var(--border); cursor:pointer; }
+  .newsitem .nrebtn:hover { background:var(--btn-h); }
   .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
   .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }
@@ -3096,9 +3099,8 @@ const NEWS_RESULTS = {};  // sid -> {ok, url, err} — sống qua repaint, xóa 
 function closeNews() { NEWS_OPEN = false; NEWS_TARGET_IDS = []; paintNews(); }
 
 function _newsPubIds() {
-  // Mọi bài trong hàng đợi, trừ đã có link (đã đăng xong) hoặc B1/B2/B3 đang lỗi.
-  // Bài đang chạy (B1/B2/B3 = running/pending) vẫn hiện trong modal với state "Xử lý…"
-  // để anh theo dõi tiến trình mà không cần mở modal B riêng.
+  // Mọi bài trong hàng đợi: chưa có link (đăng mới) HOẶC đã có link (đăng lại).
+  // Chỉ loại bài B1/B2/B3 đang lỗi (không đủ điều kiện đăng).
   const qids = queueIds();
   const idSet = new Set(qids);
   const all = rows();
@@ -3106,7 +3108,6 @@ function _newsPubIds() {
   for (const row of all) {
     const id = String(row.id);
     if (!idSet.has(id)) continue;
-    if (row.link) continue;  // đã đăng rồi thì không vào modal
     const st = row.states || {};
     // Loại bài B1/B2/B3 lỗi (không thể đăng được)
     if (st.b1 === "error" || st.b2 === "error" || st.b3 === "error") continue;
@@ -3191,14 +3192,22 @@ function newsModalNode() {
     "act");
   left.appendChild(loginBtn);
 
-  // Publish button
-  const pubBtn = button("🚀 Đăng " + ids.length + " bài",
-    "Đăng tuần tự từng bài đủ B1+B2+B3 (cột phải) lên website chọn ở trên",
-    function() {
-      NEWS_TARGET_IDS = ids.slice();
-      send({ source: "webpub_start", site: siteSel.value, ids: ids });
-    }, "act");
-  left.appendChild(pubBtn);
+  // Publish button — chỉ gửi bài CHƯA có link (bài đã có link dùng nút "Đăng lại" riêng)
+  const rowByIdForPub = {};
+  rows().forEach(r2 => { rowByIdForPub[String(r2.id)] = r2; });
+  const publishableIds = ids.filter(sid => {
+    const r2 = rowByIdForPub[String(sid)];
+    return r2 && !r2.link;
+  });
+  if (publishableIds.length) {
+    const pubBtn = button("🚀 Đăng " + publishableIds.length + " bài",
+      "Đăng tuần tự từng bài CHƯA CÓ LINK lên website — bài đã có link dùng nút ↻ Đăng lại",
+      function() {
+        NEWS_TARGET_IDS = ids.slice();
+        send({ source: "webpub_start", site: siteSel.value, ids: publishableIds });
+      }, "act");
+    left.appendChild(pubBtn);
+  }
 
   // Progress label (từ response, nếu có)
   const prog = newsResp.progress;
@@ -3227,10 +3236,11 @@ function newsModalNode() {
     const topic = String(row.topic || "");
     const r = respResults[sid];
     const anyRunning = st.b1 === "running" || st.b2 === "running" || st.b3 === "running";
+    const hasLink = !!(row.link || (wp.state === "done" && wp.url));
     let cls, stateTxt;
     if (wp.state === "saving")            { cls="saving"; stateTxt="Đang lưu…";      saving++; }
     else if (wp.state === "needs_review"){ cls="review"; stateTxt="Cần đối soát";    review++; }
-    else if (wp.state === "done")        { cls="done";   stateTxt="Đã đăng ✓";      done++; }
+    else if (wp.state === "done" || hasLink) { cls="done"; stateTxt="Đã đăng ✓";    done++; }
     else if (wp.state === "error")       { cls="fail";   stateTxt="Lỗi";             fail++; }
     else if (r && !r.ok)                 { cls="fail";   stateTxt="Lỗi (lượt này)";  fail++; }
     else if (r && r.ok && r.url)         { cls="done";   stateTxt="Đã đăng ✓";       done++; }
@@ -3254,6 +3264,18 @@ function newsModalNode() {
       a.textContent = String(url).replace(/^https?:\/\//, "").slice(0, 70);
       a.title = String(url);
       box.appendChild(a);
+      // Nút "Đăng lại" cho bài đã có link (wp.done hoặc row.link)
+      if (wp.state === "done" || row.link) {
+        const site = siteSel ? siteSel.value : "";
+        const rb = document.createElement("button");
+        rb.className = "nrebtn";
+        rb.textContent = "↻ Đăng lại";
+        rb.title = "Tạo bài MỚI trên website — link cũ được lưu vào history";
+        rb.onclick = function() {
+          send({ source: "webpub_republish", id: sid, site: site });
+        };
+        box.appendChild(rb);
+      }
     } else if (errTxt && (wp.state === "needs_review" || cls === "fail")) {
       box.appendChild(el("span", "ioline bad", String(errTxt).slice(0, 160)));
     } else if (wp.state === "saving") {

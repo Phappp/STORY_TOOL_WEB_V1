@@ -7320,6 +7320,20 @@ try:
           and 'def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAULT_SITE) -> str:' in _p32a_wp
           and 'def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = False) -> str:' in _p32a_wp
           and 'def login(root: Path, *, site: str = DEFAULT_SITE, headed: bool = True) -> None:' in _p32a_wp)
+    _p32b_wp = (Path(__file__).resolve().parent / "web_publisher.py").read_text(encoding="utf-8")
+    _p32b_ga = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+    check("P32b modal News 'Đăng lại' — bài đã có link: web_publisher có republish() "
+          "lưu link cũ vào history rồi xóa link + gọi publish_one; "
+          "grid_actions có event webpub_republish; frontend có nút .nrebtn + send webpub_republish",
+          "def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE)" in _p32b_wp
+          and "'previous_link': old_link" in _p32b_wp
+          and "republishing': True" in _p32b_wp
+          and "pub.get('republishing')" in _p32b_wp
+          and 'elif source == "webpub_republish":' in _p32b_ga
+          and "nrebtn" in _p27a_fe
+          and "webpub_republish" in _p27a_fe
+          and "↻ Đăng lại" in _p27a_fe
+          and "publishableIds" in _p27a_fe)
 finally:
     paths.data_dir = _p27a_dd
     stories._recents_path = _p27a_rec

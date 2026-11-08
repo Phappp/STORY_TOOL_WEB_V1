@@ -2146,6 +2146,21 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             out.lines.append(f"Đã đăng {done}/{len(results)} bài lên website.")
             out.touched = [r["sid"] for r in results]
             out.news = {"results": results, "progress": f"{done}/{len(results)} bài"}
+        elif source == "webpub_republish":
+            # P32a: modal News — đăng lại bài ĐÃ CÓ LINK (link cũ lưu trong history, link mới ghi story.json)
+            import web_publisher as wp
+            site = str(event.get("site") or wp.DEFAULT_SITE)
+            pub_id = str(event.get("id") or sid)
+            try:
+                url = wp.republish(ctx.root, pub_id, site=site)
+                out.lines = [f"{pub_id}: đã đăng lại — link cũ đã lưu history, link mới: {url}"]
+                out.touched = [pub_id]
+                out.news = {"results": [{"sid": pub_id, "ok": True, "url": url}],
+                            "progress": f"1/1 bài"}
+            except Exception as exc:
+                out.lines = [f"{pub_id}: {exc}"]
+                out.news = {"results": [{"sid": pub_id, "ok": False, "err": str(exc)}],
+                            "progress": f"0/1 bài"}
         else:
             out.lines = [f"Event không hợp lệ: {source or '(trống)'}"]
     except (stories.WorkspaceError, prov.ProviderError) as exc:
