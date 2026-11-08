@@ -460,6 +460,20 @@ def media_url(path: str, sid: str, slot: str = "b2") -> str:
     return str(mgr.add(path, mimetypes.guess_type(path)[0] or fallback, f"fbgrid:{sid}:{slot}"))
 
 
+def _build_audio_payload(audio_setup: dict) -> dict:
+    """P27a-UI: payload audio cho modal Audio — collection/seconds/files + urls (HTTP) cho preview.
+
+    urls: mỗi file trong collection được đăng ký với media manager (slot "audio") để
+    modal nghe thử trước khi ghi. Không có runtime thì urls = [] (modal ẩn preview).
+    """
+    files = audio_setup.get("files") or []
+    urls = [media_url(str(f), "audio", "audio") for f in files]
+    return {"collection": str(audio_setup.get("collection") or ""),
+            "seconds": int(audio_setup.get("seconds") or 0),
+            "files": [f.name for f in files],
+            "urls": urls}
+
+
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     _push(out.lines)
@@ -660,9 +674,8 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     video_response=vid_resp,
                     # P26c: modal B4 chọn riêng file tiếng + số giây cho TỪNG bài — danh sách file chỉ là
                     # TÊN (server ghép đường dẫn), giây mặc định của workspace để ô hiện sẵn số thật.
-                    audio={"collection": str(audio_setup.get("collection") or ""),
-                           "seconds": int(audio_setup.get("seconds") or 0),
-                           "files": [f.name for f in audio_setup.get("files") or []]},
+                    # P27a-UI: thêm `urls` — đường dẫn HTTP của từng file tiếng để modal preview (audio controls).
+                    audio=_build_audio_payload(audio_setup),
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
         st.session_state["grid_component_error"] = f"{type(exc).__name__}: {exc}"

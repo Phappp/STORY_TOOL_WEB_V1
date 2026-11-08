@@ -2907,8 +2907,8 @@ check("P13b viên pill B0-B3 không còn gán title — hết tooltip mặc đ�
 check("P13b thẻ hover mang đủ dữ liệu legacy-style: trạng thái + ghi chú + provider/model/cách/lúc + cách dùng",
       'Luồng nền: ' in js_p13 and 'Ghi chú: ' in js_p13 and "(row.hint || {})[step]" in js_p13
       and 'Cách dùng: ' in js_p13)
-check("P13b sig ô steps tính cả hint — sửa pill là nội dung thẻ đổi theo, không phải đợi dựng lại lưới",
-      "row.detail, row.b0meta, row.b4meta, row.flow, row.hint]);" in js_p13)
+check("P13b sig ô steps tính cả hint + b4rec — sửa pill là nội dung thẻ đổi theo, không phải đợi dựng lại lưới",
+      "row.detail, row.b0meta, row.b4meta, row.flow, row.hint, row.b4rec]);" in js_p13)
 check("P13b thẻ là một node pointer-events:none, z-index cao, ẩn hiện theo con trỏ (không rerender lưới)",
       ".sqtip { position:fixed; z-index:2147483500; pointer-events:none;" in js_p13
       and 'document.addEventListener("pointerover"' in js_p13
@@ -7103,10 +7103,10 @@ try:
           "🎧 Chọn file + giây" in _p26c_fe and "MODEL.audio.files" in _p26c_fe
           and "b4rec" in _p26c_fe and "audio: sel.value" in _p26c_fe
           and "seconds: (Number.isFinite(n) && n > 0) ? Math.round(n) : 0" in _p26c_fe)
-    check("P26c phía Python: grid gửi `audio={collection, seconds, files}` cho JS và `b4rec` "
+    check("P26c phía Python: grid gửi audio payload (collection/seconds/files) cho JS và `b4rec` "
           "từng hàng; grid_actions nhận `audio_name`/`seconds`; trang Cấu hình ▸ Âm thanh nói rõ "
           "chuyện chọn riêng này",
-          'audio={"collection"' in _p26c_gd_src and '"b4rec"' in _p26c_gd_src
+          "_build_audio_payload" in _p26c_gd_src and '"b4rec"' in _p26c_gd_src
           and "audio_name" in _p26c_ga_src and "không còn trong bộ" in _p26c_ga_src
           and "🎧 Chọn file + giây" in _p26c_app_src)
 finally:
@@ -7237,10 +7237,15 @@ try:
           and "audio" not in _p27a_b4(_p27a_q1))
 
     # phía lưới
-    check("P27a phía lưới: nút '🎧 Chọn file + giây' đứng cạnh ô tìm (trước ioButton), "
-          "mở panel chọn file + giây cho hàng đợi, đọc MODEL.audio.files, gửi event b4_queue_audio",
-          "🎧 Chọn file + giây" in _p27a_fe and "b4_queue_audio" in _p27a_fe
-          and "queueButton()" in _p27a_fe and "b4queueaudio" in _p27a_fe)
+    check("P27a-UI phía lưới: nút '🎧 Audio' đứng cạnh ô tìm (trước ioButton), "
+          "mở modal (overlay.audmodal) chọn file + giây cho hàng đợi, đọc MODEL.audio.files, "
+          "modal có audio preview (audio.preview) + helpChip, gửi event b4_queue_audio",
+          "🎧 Audio" in _p27a_fe and "b4_queue_audio" in _p27a_fe
+          and "queueButton()" in _p27a_fe and "b4queueaudio" in _p27a_fe
+          and "audmodal" in _p27a_fe and "audioModalNode" in _p27a_fe
+          and "MODEL.audio.urls" in _p27a_fe)
+    check("P27a-UI phía CSS: modal Audio + B4 animated border (button.sq.b4aud + @keyframes b4audpulse)",
+          ".modal.audmodal" in _p27a_fe and "b4aud" in _p27a_fe and "@keyframes b4audpulse" in _p27a_fe)
     check("P27a phía Python: grid_actions có b4_queue_audio + clear_b4_queue_audio + _queued_ids, "
           "dispatch có b4_queue_audio + b4_queue_audio_clear",
           "def b4_queue_audio(" in _p27a_ga_src and "def clear_b4_queue_audio(" in _p27a_ga_src

@@ -37,6 +37,16 @@
   .audqpick { display:flex; flex-direction:column; gap:4px; padding:6px 10px; margin-left:4px;
     border:1px solid var(--border); border-radius:6px; background:var(--bg); min-width:260px; }
   .audrow { display:flex; gap:6px; align-items:center; }
+  /* P27a-UI: modal Audio — cùng khuôn .overlay/.modal, rộng vừa đủ một ô chọn file + preview */
+  .modal.audmodal { width:min(420px, 100%); }
+  .modal.audmodal .mbody { padding:12px 14px; display:flex; flex-direction:column; gap:10px; }
+  .audmodal .audbody { display:flex; flex-direction:column; gap:9px; }
+  .audmodal .audbody .k { color:var(--muted); font-size:12px; }
+  .audmodal .audbody select.prov { width:100%; max-width:none; }
+  .audmodal audio.preview { width:100%; height:36px; border-radius:6px; }
+  .audmodal .audrow { margin:0; }
+  .audmodal .audactions { display:flex; gap:6px; margin-top:4px; }
+  .audmodal .audactions button { flex:1; }
   .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
   .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }
@@ -248,6 +258,12 @@
      ô sáng-tối 1,15 giây một lần trông đúng như lỗi, mà mỗi lần lưới vẽ lại nó còn nhảy về đầu pha. */
   button.sq.flow-waiting { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); border-style:dashed; }
   button.sq.flow-running { background:var(--running); color:var(--running-t); border-color:var(--running-b); font-weight:750; }
+  /* P27a-UI: viền phát sáng tím nhẹ nhàng cho ô B4 khi bài queued đã áp file audio riêng */
+  button.sq.b4aud { animation: b4audpulse 2.4s ease-in-out infinite; }
+  @keyframes b4audpulse {
+    0%, 100% { box-shadow:0 0 3px 1px rgba(107,87,200,.3); }
+    50%      { box-shadow:0 0 10px 2px rgba(107,87,200,.65); }
+  }
   /* Thẻ hover của ô B0-B3 (đồ họa legacy FX114311): rê chuột là thấy ngay trạng thái chi tiết,
      không chờ mở modal. pointer-events:none nên nó không cướp click; position:fixed trong iframe
      nên nó chỉ quanh quẩn trong vùng lưới — đủ vì ô nào cũng nằm trong lưới. */
@@ -867,16 +883,20 @@ function flowNote(row, step) {
 
 function stepsCell(row) {
   const td = el("td", "steps");
+  const b4rec = row.b4rec || {};
   GRID_STEPS.forEach(step => {
     const state = stateOf(row, step);
     const detail = String((row.detail || {})[step] || "");
     const flow = flowNote(row, step);
-    const b = el("button", "b sq " + state + (flow ? " flow-" + ((row.flow || {})[step]) : ""));
+    const b4aud = step === "b4" && row.queued && String(b4rec.audio || "") !== "";
+    const b = el("button", "b sq " + state + (flow ? " flow-" + ((row.flow || {})[step]) : "")
+      + (b4aud ? " b4aud" : ""));
     b.type = "button";
     b.textContent = step.toUpperCase();
     b.dataset.id = String(row.id);
     b.dataset.step = step;
     b.dataset.flash = "sq:" + row.id + ":" + step;
+    if (b4aud) b.title = "B4 audio: " + String(b4rec.audio);
     const preview = step === "b0" || step === "b2" || step === "b4";  // mấy bước này không có gì để copy — bấm là mở modal xem
     const how = preview ? "bấm để mở modal xem " + (step === "b0" ? "caption + ảnh trích được, sửa caption hoặc thêm ảnh tay ở đó"
       : step === "b4" ? "video đang nằm trong folder và tải file mới ngay trong modal" : "ảnh")
@@ -2108,7 +2128,7 @@ function cellSig(row, key) {
     case "q": return (row.queued ? "1" : "0") + String(row.queue_pos || "");
     case "id": return String(row.topic || "");
     case "src": return String(row.source || "");
-    case "steps": return JSON.stringify([row.b0, row.b4, row.states, row.detail, row.b0meta, row.b4meta, row.flow, row.hint]);
+    case "steps": return JSON.stringify([row.b0, row.b4, row.states, row.detail, row.b0meta, row.b4meta, row.flow, row.hint, row.b4rec]);
     case "img": return String(row.image || "");
     case "status": return String(row.status || "");
     case "link": return String(row.link || "") + (EDITING && String(EDITING.id) === String(row.id) ? "|#" + EDITING.value : "");
@@ -2907,59 +2927,103 @@ function refreshButton() {
   return b;
 }
 
-// P27a: nút "🎧 Chọn file + giây" cạnh ô tìm — chọn file tiếng + giây cho MỌI bài trong hàng đợi.
-// Ghi vào story.json từng bài (P26c), nền ⚡/▶ tự theo. Nút "Bỏ chọn" xóa để về mặc định workspace.
+// P27a-UI: nút "🎧 Audio" cạnh ô tìm — mở modal chọn file + giây cho MỌI bài trong hàng đợi.
+// Mô tả đưa vào icon ? (helpChip), modal có audio preview, ô B4 có viền phát sáng khi áp audio.
+let AUDIO_OPEN = false;
+function closeAudio() { AUDIO_OPEN = false; paintAudio(); }
+
+function paintAudio() {
+  const root = document.getElementById("root");
+  const old = root.querySelector(":scope > .overlay.audmodal");
+  const fresh = audioModalNode();
+  if (!fresh) { if (old) old.remove(); return; }
+  if (old) old.replaceWith(fresh); else root.appendChild(fresh);
+}
+
+function audioModalNode() {
+  if (!AUDIO_OPEN) return null;
+  const ids = queueIds();
+  if (!ids.length) { AUDIO_OPEN = false; return null; }
+  const overlay = el("div", "overlay audmodal");
+  const modal = el("div", "modal audmodal");
+  const head = el("div", "mhead");
+  head.appendChild(el("span", "mid", "🎧 Audio · " + ids.length + " bài hàng đợi"));
+  head.appendChild(helpChip([
+    "Chọn file tiếng + số giây CHUNG cho mọi bài đang trong hàng đợi.",
+    "(theo id bài) = để Python tự chọn theo quy tắc P25b (sha1 của id chia số file).",
+    "Số giây = độ dài video B4 ghép ra (1–600 s). Bỏ trống = theo prefs workspace.",
+    "Chọn + ghi vào story.json từng bài (P26c); ⚡/▶ sau tự theo.",
+    "Bỏ chọn = xóa file + giây, bài về mặc định workspace."
+  ]));
+  head.appendChild(iconButton("cross", "Đóng (Esc)", closeAudio, "act"));
+  modal.appendChild(head);
+  const body = el("div", "mbody");
+  const files = Array.isArray(MODEL.audio.files) ? MODEL.audio.files : [];
+  const sel = document.createElement("select");
+  sel.className = "prov";
+  const optDef = el("option", null, "(theo id bài)");
+  optDef.value = "";
+  sel.appendChild(optDef);
+  files.forEach(name => { const o = el("option", null, name); o.value = name; sel.appendChild(o); });
+  sel.value = "";
+  const audioPrev = document.createElement("audio");
+  audioPrev.className = "preview";
+  audioPrev.controls = true;
+  audioPrev.style.display = "none";
+  function syncPreview() {
+    if (sel.value && MODEL.audio && Array.isArray(MODEL.audio.urls)) {
+      const idx = files.indexOf(sel.value);
+      if (idx >= 0 && MODEL.audio.urls[idx]) {
+        audioPrev.src = MODEL.audio.urls[idx];
+        audioPrev.style.display = "";
+      } else { audioPrev.style.display = "none"; }
+    } else { audioPrev.style.display = "none"; }
+  }
+  sel.addEventListener("change", syncPreview);
+  const secs = document.createElement("input");
+  secs.type = "number";
+  secs.min = "1";
+  secs.max = "600";
+  secs.value = String(Number(MODEL.audio.seconds || 60) || 60);
+  const row2 = el("div", "audrow");
+  row2.appendChild(secs);
+  row2.appendChild(el("span", "k", "giây (1–600)"));
+  const go = button("🎬 Chọn cho hàng đợi",
+    "Ghi file + giây vào story.json của " + ids.length + " bài trong hàng đợi",
+    () => {
+      const n = Number(secs.value);
+      send({ source: "b4_queue_audio",
+             audio: sel.value,
+             seconds: (Number.isFinite(n) && n > 0) ? Math.round(n) : 0 });
+      closeAudio();
+    }, "act");
+  const clr = button("Bỏ chọn", "Xóa file + giây đã chọn — các bài về mặc định workspace",
+    () => { send({ source: "b4_queue_audio_clear" }); closeAudio(); }, "act");
+  const rowActions = el("div", "audactions");
+  rowActions.appendChild(go);
+  rowActions.appendChild(clr);
+  const inner = el("div", "audbody");
+  inner.appendChild(el("span", "k", "File tiếng (bộ sưu tập: "
+    + (String(MODEL.audio.collection || "") || "(chưa chọn)") + ")"));
+  inner.appendChild(sel);
+  inner.appendChild(audioPrev);
+  inner.appendChild(row2);
+  inner.appendChild(rowActions);
+  body.appendChild(inner);
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  overlay.addEventListener("click", e => { if (e.target === overlay) closeAudio(); });
+  return overlay;
+}
+
 function queueAudioButton() {
   const ids = queueIds();
-  const b = button("🎧 Chọn file + giây",
+  const b = button("🎧 Audio",
     ids.length
-      ? ("Chọn file tiếng + số giây cho " + ids.length + " bài đang trong hàng đợi — "
-        + "chọn này ghi vào story.json của từng bài (P26c), các lần ⚡/▶ sau tự theo; "
-        + "bấm 'Bỏ chọn' để về mặc định workspace")
+      ? "Mở modal chọn file tiếng + số giây cho " + ids.length + " bài đang trong hàng đợi"
       : "Không có bài nào trong hàng đợi — thêm bằng nút ▶",
-    (bb) => {
-      const host = bb.parentElement;
-      const old = host.querySelector(".audqpick");
-      if (old) { old.remove(); return; }
-      const panel = el("div", "audqpick");
-      panel.appendChild(el("div", "muted", "Chung cho " + ids.length + " bài trong hàng đợi — "
-        + "không đổi cài đặt của workspace; chọn này ghi vào story.json từng bài."));
-      const files = Array.isArray(MODEL.audio.files) ? MODEL.audio.files : [];
-      const sel = document.createElement("select");
-      sel.className = "prov";
-      const optDefault = el("option", null, "(theo id bài)");
-      optDefault.value = "";
-      sel.appendChild(optDefault);
-      files.forEach(name => { const o = el("option", null, name); o.value = name; sel.appendChild(o); });
-      sel.value = "";
-      const row1 = el("div", "audrow");
-      row1.appendChild(sel);
-      panel.appendChild(row1);
-      const secs = document.createElement("input");
-      secs.type = "number";
-      secs.min = "1";
-      secs.max = "600";
-      secs.value = String(Number(MODEL.audio.seconds || 60) || 60);
-      const row2 = el("div", "audrow");
-      row2.appendChild(secs);
-      row2.appendChild(el("span", "muted", " giây (1–600)"));
-      panel.appendChild(row2);
-      const go = button("🎬 Chọn cho hàng đợi", "Ghi file + giây vào story.json của "
-        + ids.length + " bài trong hàng đợi", gg => {
-          const n = Number(secs.value);
-          send({ source: "b4_queue_audio",
-                 audio: sel.value,
-                 seconds: (Number.isFinite(n) && n > 0) ? Math.round(n) : 0 });
-          host.querySelector(".audqpick") && host.querySelector(".audqpick").remove();
-        }, "act");
-      const clr = button("Bỏ chọn", "Xóa file + giây đã chọn — các bài về mặc định workspace",
-        () => { send({ source: "b4_queue_audio_clear" }); }, "act");
-      const row3 = el("div", "audrow");
-      row3.appendChild(go);
-      row3.appendChild(clr);
-      panel.appendChild(row3);
-      host.appendChild(panel);
-    }, "act");
+    () => { AUDIO_OPEN = true; paintAudio(); },
+    "act");
   b.id = "b4queueaudio";
   if (!ids.length) b.disabled = true;
   return b;
@@ -3302,6 +3366,7 @@ function render(args, force) {
   if (modal) root.appendChild(modal);
   const io = ioNode();  // bảng Import/Export vẽ SAU modal bài: mở cả hai thì bảng này ở trên, đúng thứ anh vừa bấm
   if (io) root.appendChild(io);
+  paintAudio();  // P27a-UI: modal Audio vẽ SAU IO
   restoreView(view);
   updateBar();
   // chữ ký cho lần vá sau: hàng nào/cột nào vẽ ra sao, modal + khối đếm đang ở bản nào
@@ -3358,6 +3423,7 @@ document.addEventListener("keydown", e => {
     if (MENU) { closeMenu(); return; }
     if (inSearch) { SEARCH = ""; repaint(); return; }  // Esc ở ô tìm = xoá lọc, chưa phải đóng modal
     if (IO_OPEN) { closeIo(); return; }               // bảng Import/Export phủ lên lưới -> Esc đóng nó trước
+    if (AUDIO_OPEN) { closeAudio(); return; }          // P27a-UI: modal Audio
     if (modalRef()) { closeModal(); return; }
     if (expandedMode()) { lsSet(EXPANDED_KEY, "0"); repaint(); }  // Esc cũng thu được grid đang mở rộng
     return;
