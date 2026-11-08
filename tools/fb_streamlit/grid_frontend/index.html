@@ -3204,6 +3204,7 @@ function render(args, force) {
     video_chunk: Number(args.video_chunk || 0),
     video_types: Array.isArray(args.video_types) ? args.video_types : [],
     video_response: args.video_response && typeof args.video_response === "object" ? args.video_response : {},
+    audio: args.audio && typeof args.audio === "object" ? args.audio : {},
   };
   if (MODEL.workspace !== wasWorkspace) { REFRESH_PENDING = null; SHOWN = PAGE_ROWS; }  // đổi workspace: không có cú bấm nào đang chờ nữa, cửa sổ vẽ về 20
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
