@@ -15,6 +15,7 @@ import streamlit.components.v1 as components
 import db
 import grid_actions as ga
 import grid_runner as gr
+import providers as prov
 import stories
 import web_publisher as wp
 
@@ -484,6 +485,19 @@ def _news_payload() -> dict:
     ]}
 
 
+def _codex_usage_payload() -> dict:
+    """P29a: số usage cho icon Codex trên grid — đọc bản CLI tự ghi (token + session log), không spawn process.
+
+    Nặng (LIVE app-server) chỉ chạy khi anh bấm nút 📊 ở Cấu hình; ở grid mỗi tick chỉ đọc
+    file, ~mươi ms. Trả `accounts=[]` thì frontend không vẽ icon (không có bộ Codex hay chưa login).
+    """
+    try:
+        providers = db.list_providers(db.connect())
+    except Exception:
+        providers = []
+    return prov.grid_usage_payload(providers)
+
+
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     _push(out.lines)
@@ -692,6 +706,8 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     # P28a: modal News — danh sách website + kết quả đăng báo (đi 1 lần rồi xóa)
                     news=_news_payload(),
                     news_response=news_resp,
+                    # P29a: icon usage Codex góc phải — bản CACHED CLI tự ghi, ~mươi ms/tick
+                    codex_usage=_codex_usage_payload(),
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
         st.session_state["grid_component_error"] = f"{type(exc).__name__}: {exc}"

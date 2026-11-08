@@ -291,6 +291,26 @@
   .sqtip.warn { border-color:var(--error-b); }
   .sqtip.warn strong { color:#ffcf84; }
   .sqtip[hidden] { display:none; }
+  /* P29a: thẻ hover của icon hạn mức Codex — mỗi tài khoản một hàng: tên + vòng tròn % còn lại.
+     pointer-events:none như .sqtip: chỉ icon mới phải nhận con trỏ, thẻ không cướp hover. */
+  .usagetip { position:fixed; z-index:2147483500; pointer-events:none; padding:9px 12px;
+    background:var(--panel); color:var(--text); border:1px solid var(--accent); border-radius:10px;
+    box-shadow:0 10px 32px rgba(0,0,0,.38); font-size:12px; }
+  .usagetip[hidden] { display:none; }
+  .usagetip .uhead { font-weight:750; color:#f5f9ff; margin-bottom:6px; font-size:12px; }
+  .usagerow { display:flex; align-items:center; gap:9px; margin:3px 0; white-space:nowrap; }
+  .usagename { color:#dfe9fb; }
+  .usagesrc { color:#8fa4c0; font-size:10px; }
+  .udonut { width:36px; height:36px; flex:0 0 36px; }
+  .udonut .ubg { fill:none; stroke:#2d3b4f; stroke-width:5; }
+  .udonut .ufg { fill:none; stroke-width:5; stroke-linecap:round;
+    transform:rotate(-90deg); transform-origin:50% 50%; }
+  .udonut .ufg.ok  { stroke:#3ecf7a; }
+  .udonut .ufg.mid { stroke:#e8b84b; }
+  .udonut .ufg.low { stroke:#e05a4e; }
+  .udonut .ufg.none { stroke:#5a6b80; }
+  .udonut text { font-size:10px; font-weight:700; fill:#f5f9ff; }
+  .unote { color:#8fa4c0; font-size:10.5px; margin-top:5px; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none!important; transition:none!important; } }
   button.q { min-width:28px; padding:0; }
   button.q.on { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); font-weight:700; }
@@ -504,6 +524,8 @@ const ICON_PATHS = {
   refresh: '<path d="M20 12a8 8 0 1 1-8-8c2.3 0 4.5.9 6 2.5l2 1.5"/><path d="M20 4v4h-4"/>',
   // P28a: icon quả Địa Cầu cho modal News (globe = web publishing) — vòng tròn + hai đường cong
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3v18"/><path d="M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>',
+  // P29a: tia sét — icon hạn mức Codex (usage = điện năng còn lại của các bộ AI)
+  bolt: '<path d="M13 2 4.5 13.5h6L9.5 22 18 10.5h-6z"/>',
 };
 // Dựng MỘT lần lúc tải trang từ hằng số tự viết (không chứa chữ của hàng lưới/URL nào), sau đó nhân bản.
 const ICON_NODE = {};
@@ -549,7 +571,7 @@ function menuItem(icon, label, fn, cls, manual) {
   return { node: b, label: text };
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {}, news: {}, news_response: {} };
+let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {}, news: {}, news_response: {}, codex_usage: {} };
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
 let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
@@ -2951,6 +2973,7 @@ function closeAudio() { AUDIO_OPEN = false; paintAudio(); }
 
 function paintAudio() {
   const root = document.getElementById("root");
+  if (!root) return;  // DOM chưa sẵn — lần render kế tiếp sẽ vẽ lại
   const old = root.querySelector(":scope > .overlay.audmodal");
   const fresh = audioModalNode();
   if (!fresh) { if (old) old.remove(); return; }
@@ -3060,9 +3083,9 @@ function _newsPubIds() {
   // Những bài trong hàng đợi đủ B1(done) + B2(done) + B3(done), chưa có link.
   const qids = queueIds();
   const idSet = new Set(qids);
-  const rows = rows();
+  const all = rows();
   const out = [];
-  for (const row of rows) {
+  for (const row of all) {
     const id = String(row.id);
     if (!idSet.has(id)) continue;
     const st = row.states || {};
@@ -3088,6 +3111,7 @@ function newsButton() {
 
 function paintNews() {
   const root = document.getElementById("root");
+  if (!root) return;  // DOM chưa sẵn
   const old = root.querySelector(":scope > .overlay.newsmodal");
   const fresh = newsModalNode();
   if (!fresh) { if (old) old.remove(); return; }
@@ -3122,8 +3146,12 @@ function newsModalNode() {
   const siteSel = document.createElement("select");
   siteSel.className = "prov";
   siteOpts.forEach(function(site) {
-    const opt = el("option", null, site.label || site.name || site);
-    opt.value = String(site.value || site.name || site);
+    if (!site || typeof site !== "object") return;
+    const label = site.label || site.name || String(site.value || "");
+    const value = String(site.value || "");
+    if (!value) return;
+    const opt = el("option", null, label || value);
+    opt.value = value;
     siteSel.appendChild(opt);
   });
   if (!siteOpts.length) {
@@ -3184,6 +3212,87 @@ function newsModalNode() {
   overlay.appendChild(modal);
   overlay.addEventListener("click", e => { if (e.target === overlay) closeNews(); });
   return overlay;
+}
+
+// --- P29a: icon hạn mức Codex — hover hiện thẻ "tên tài khoản + vòng tròn % còn lại" ---
+const USAGE_TIP_ID = "usagetip";
+function usageAccounts() {
+  const u = MODEL.codex_usage;
+  return (u && Array.isArray(u.accounts)) ? u.accounts.filter(a => a && typeof a === "object") : [];
+}
+function usageDonut(a) {
+  // Vòng tròn %: stroke-dasharray trên circle có pathLength=100 — còn lại bao nhiêu vẽ bấy nhiêu.
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("class", "udonut");
+  const bg = document.createElementNS(SVG_NS, "circle");
+  bg.setAttribute("cx", "18"); bg.setAttribute("cy", "18"); bg.setAttribute("r", "15.9");
+  bg.setAttribute("pathLength", "100"); bg.setAttribute("class", "ubg");
+  svg.appendChild(bg);
+  const fg = document.createElementNS(SVG_NS, "circle");
+  fg.setAttribute("cx", "18"); fg.setAttribute("cy", "18"); fg.setAttribute("r", "15.9");
+  fg.setAttribute("pathLength", "100");
+  const left = (typeof a.left === "number") ? Math.max(0, Math.min(100, a.left)) : null;
+  let cls = "ufg none";
+  if (left === null) { fg.setAttribute("stroke-dasharray", "0 100"); }
+  else {
+    fg.setAttribute("stroke-dasharray", left.toFixed(1) + " " + (100 - left).toFixed(1));
+    cls = "ufg " + (left >= 30 ? "ok" : left > 0 ? "mid" : "low");
+  }
+  fg.setAttribute("class", cls);
+  svg.appendChild(fg);
+  const t = document.createElementNS(SVG_NS, "text");
+  t.setAttribute("x", "18"); t.setAttribute("y", "21.5"); t.setAttribute("text-anchor", "middle");
+  t.textContent = left === null ? "?" : Math.round(left);
+  svg.appendChild(t);
+  return svg;
+}
+function usageTipNode() {
+  let t = document.getElementById(USAGE_TIP_ID);
+  if (!t) {
+    t = el("div", "usagetip");
+    t.id = USAGE_TIP_ID;
+    t.hidden = true;
+    document.body.appendChild(t);
+  }
+  return t;
+}
+function fillUsageTip() {
+  const t = usageTipNode();
+  const accounts = usageAccounts();
+  t.textContent = "";
+  t.appendChild(el("div", "uhead", "⚡ Hạn mức Codex — còn lại (đọc từ máy, không gọi mạng)"));
+  if (!accounts.length) {
+    t.appendChild(el("div", "unote", "Chưa có bộ Codex CLI nào (hoặc chưa đăng nhập lần nào) — thêm ở Cấu hình ▸ Providers."));
+    return;
+  }
+  accounts.forEach(a => {
+    const row = el("div", "usagerow");
+    row.appendChild(usageDonut(a));
+    row.appendChild(el("span", "usagename", String(a.who || "(không gọi được tên)") + (a.plan ? " · " + a.plan : "")));
+    row.appendChild(el("span", "usagesrc",
+      a.source === "UNKNOWN" ? "chưa có số" : (a.source === "LIVE" ? "ngay lúc này" : "bản cuối CLI ghi")));
+    t.appendChild(row);
+  });
+  const stamp = String((MODEL.codex_usage || {}).stamp || "");
+  if (stamp) t.appendChild(el("div", "unote", "Đọc lúc " + stamp + " UTC — số mới nhất CLI tự ghi."));
+}
+function placeUsage(x, y) {
+  const t = usageTipNode();
+  let left = x + 15, top = y + 17;
+  if (left + t.offsetWidth > innerWidth - 8) left = Math.max(8, x - t.offsetWidth - 15);
+  if (top + t.offsetHeight > innerHeight - 8) top = Math.max(8, y - t.offsetHeight - 17);
+  t.style.left = left + "px";
+  t.style.top = top + "px";
+}
+function usageButton() {
+  // Số đi theo MỌI render từ Python (CACHED đọc file nên rẻ); thẻ dựng lại MỖI LẦN hover
+  // nên số trong thẻ luôn là bản mới nhất lưới đã nhận, kể cả khi thanh chỉ được vá chứ không dựng lại.
+  const b = iconButton("bolt", "Hạn mức còn lại của các tài khoản Codex — đưa chuột vào để xem", () => {}, "act");
+  b.addEventListener("pointerenter", e => { fillUsageTip(); usageTipNode().hidden = false; placeUsage(e.clientX, e.clientY); });
+  b.addEventListener("pointermove", e => placeUsage(e.clientX, e.clientY));
+  b.addEventListener("pointerleave", () => { usageTipNode().hidden = true; });
+  return b;
 }
 
 function errorCount() { return (MODEL.error_ids || []).length; }
@@ -3427,6 +3536,7 @@ function render(args, force) {
     audio: args.audio && typeof args.audio === "object" ? args.audio : {},
     news: args.news && typeof args.news === "object" ? args.news : {},
     news_response: args.news_response && typeof args.news_response === "object" ? args.news_response : {},
+    codex_usage: args.codex_usage && typeof args.codex_usage === "object" ? args.codex_usage : {},
   };
   if (MODEL.workspace !== wasWorkspace) { REFRESH_PENDING = null; SHOWN = PAGE_ROWS; }  // đổi workspace: không có cú bấm nào đang chờ nữa, cửa sổ vẽ về 20
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
@@ -3476,6 +3586,7 @@ function render(args, force) {
   bar.appendChild(queueButton());
   bar.appendChild(errorsButton());
   bar.appendChild(expandButton());
+  bar.appendChild(usageButton());  // P29a: hạn mức Codex — hover hiện vòng tròn % còn lại
   bar.appendChild(statsBar());
   const cnt = el("span", "count", countText());
   cnt.id = "rowcount";  // syncStats đổi chữ này tại chỗ khi số hàng thay đổi
@@ -3526,7 +3637,7 @@ function render(args, force) {
   const io = ioNode();  // bảng Import/Export vẽ SAU modal bài: mở cả hai thì bảng này ở trên, đúng thứ anh vừa bấm
   if (io) root.appendChild(io);
   paintAudio();  // P27a-UI: modal Audio vẽ SAU IO
-  paintNews();  // P28a: modal News vẽ SAU Audio
+  try { paintNews(); } catch (e) { console.error("paintNews:", e); }  // P28a: lỗi modal News không kéo sụp lưới
   restoreView(view);
   updateBar();
   // chữ ký cho lần vá sau: hàng nào/cột nào vẽ ra sao, modal + khối đếm đang ở bản nào

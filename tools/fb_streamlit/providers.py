@@ -1017,6 +1017,70 @@ def codex_usage_all_text(result: dict) -> str:
     return "\n".join(lines)
 
 
+def _grid_account_view(rec: dict) -> dict:
+    """Một tài khoản cho icon usage trên grid — đủ nhẹ để gửi qua component mỗi tick.
+
+    Vòng tròn % lấy từ cửa sổ `primary` (hoặc cửa sổ thứ nhất nếu CLI không tách primary),
+    vì đó là hạn mức anh nhìn thấy khi chạy ⚡/▶. `left` là % CHƯA dùng — con số anh cần để
+    quyết định có để hàng đợi chạy tiếp không (số `used` của màn hạn mức P18f không dùng lại
+    nguyên văn vì vòng tròn đọc đẹp hơn khi 'còn lại' là số nằm trong tâm).
+    """
+    source = str(rec.get("source") or "")
+    if source == "UNKNOWN":
+        return {"who": _grid_account_who(rec), "source": "UNKNOWN", "used": None,
+                "left": None, "plan": str(rec.get("plan") or ""),
+                "reason": str(rec.get("reason") or "CLI không trả lời")}
+    windows = [w for w in (rec.get("windows") or []) if str(w.get("kind")) == "primary"] or \
+        (rec.get("windows") or [])
+    if not windows:
+        return {"who": _grid_account_who(rec), "source": source, "used": None, "left": None,
+                "plan": str(rec.get("plan") or ""), "reason": "không có cửa sổ hạn mức"}
+    top = max(float(w.get("used") or 0) for w in windows)
+    return {"who": _grid_account_who(rec), "source": source,
+            "used": round(top, 1), "left": round(max(0.0, 100.0 - top), 1),
+            "plan": str(rec.get("plan") or ""), "reason": ""}
+
+
+def _grid_account_who(rec: dict) -> str:
+    """Tên tài khoản cho icon: email che (P18i) → id 8 ký tự → tên bộ. Không bí mật, che sẵn."""
+    identity = rec.get("identity") or {}
+    email = str(identity.get("email") or "")
+    if email:
+        return email
+    aid = str(rec.get("account_id") or "")
+    if aid:
+        return f"id {aid[:8]}"
+    return " · ".join(rec.get("providers") or [])
+
+
+def grid_usage_payload(providers) -> dict:
+    """Số usage cho ICON trên grid: CHỈ ĐỌC FILE (auth.json + session log), không spawn process.
+
+    Đường LIVE `app-server` (~2-3.2 s/nhà, đo P18g) chỉ dành cho nút 📊 ở Cấu hình; grid gọi hàm
+    này mỗi tick nên phải là đọc file ~vươi ms. Chưa có số trong session log thì báo UNKNOWN
+    kèm lý do thật, không đoán bừa.
+    """
+    try:
+        out = []
+        for acc in codex_accounts(providers):
+            identity = codex_identity(Path(acc["home"]))
+            block, stamp = _codex_rate_limits_cached(Path(acc["home"]))
+            if block:
+                rec = _usage_result(block, "CACHED", _stamp_utc(stamp))
+            else:
+                rec = _usage_result({}, "UNKNOWN", "", "chưa có số nào trong session log của home này")
+            rec["identity"] = identity
+            rec["account_id"] = identity.get("account_id", "")
+            rec["plan"] = rec.get("plan") or identity.get("plan", "")
+            rec["providers"] = list(acc["providers"])
+            out.append(_grid_account_view(rec))
+        return {"accounts": out, "n_providers": sum(len(a.get("providers") or []) for a in out),
+                "stamp": datetime.now(timezone.utc).strftime("%H:%M:%S")}
+    except Exception:
+        # Icon không được phép làm grid chết — trả rỗng là lưới bỏ vẽ icon, không phải báo lỗi.
+        return {"accounts": [], "n_providers": 0, "stamp": ""}
+
+
 def test_connection(provider) -> str:
     if provider["kind"] == "codex_cli":
         # P18j: "kết nối" với Codex KHÔNG phải là "CLI có trên máy" — cái đó luôn đúng nên một bộ vừa

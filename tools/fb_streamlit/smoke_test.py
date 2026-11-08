@@ -4412,10 +4412,12 @@ check("P21d updateBar không còn early-return theo #batch — chữ ▶/⚠ ph�
       and 'getElementById("queueerr")' in _p21d_update and "return;" not in _p21d_update.split("if (q)")[0])
 check("P21d thanh nút đúng thứ tự tìm · nhịp đọc (P21h) · import · ▶ · ⚠ · mở rộng · stats; "
       "P27a thêm nút '🎧 Chọn file + giây' (queue audio) trước ioButton; "
-      "P28a thêm nút News (globe) — 9 item, không ô chọn tất cả",
-      _p21d_bar.count("bar.appendChild(") == 9
+      "P28a thêm nút News (globe); P29a thêm nút hạn mức Codex (usage) giữa mở rộng và stats "
+      "— 10 item, không ô chọn tất cả",
+      _p21d_bar.count("bar.appendChild(") == 10
       and "pickAll" not in _p21d_bar
-      and _p21d_bar.index("newsButton") < _p21d_bar.index("ioButton", 200))
+      and _p21d_bar.index("newsButton") < _p21d_bar.index("ioButton", 200)
+      and _p21d_bar.index("expandButton") < _p21d_bar.index("usageButton") < _p21d_bar.index("statsBar"))
 check("P21d prefs cột cũ còn mang khóa 'pick' cũng vô hại: bề rộng dựng theo COLS (không phải theo file) "
       "và tổng chiều ngang tính từ COLS — khóa lạc không được nở lưới ra một cột ma",
       "COLS.forEach(c => { out[c.key] = Math.max(c.min, Number(saved[c.key]) || c.w); });" in _p21d_fe
@@ -4847,10 +4849,11 @@ check("P18f nút nằm ĐÚNG chỗ hai nút đăng nhập (Cấu hình ▸ Prov
 _p18f_grid_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
 _p18f_steps_src = (Path(__file__).resolve().parent / "steps.py").read_text(encoding="utf-8")
 _p18f_ga = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
-check("P18f là chỗ XEM chứ không phải cái phanh: grid / grid_actions / steps không tham khảo hạn mức "
-      "khi chạy, nên ⚡ và ▶ hành xử y như trước (đúng luật 'bỏ check chứ không thay check')",
-      "codex_usage" not in _p18f_grid_src and "codex_usage" not in _p18f_ga
-      and "codex_usage" not in _p18f_steps_src)
+check("P18f là chỗ XEM chứ không phải cái phanh: grid_actions / steps không đụng hạn mức khi chạy; "
+      "grid.py chỉ GỬI payload hiển thị cho icon (P29a) mà không gọi đường LIVE nặng — "
+      "⚡ và ▶ hành xử y như trước (đúng luật 'bỏ check chứ không thay check')",
+      "codex_usage" not in _p18f_ga and "codex_usage" not in _p18f_steps_src
+      and "codex_usage_all" not in _p18f_grid_src and "_codex_usage_payload" in _p18f_grid_src)
 
 # Nút thật trong trang Providers: stub codex_usage để KHÔNG spawn CLI, chỉ đo đường chữ ra màn hình.
 db.add_provider(conn, "P18fCodex", "codex_cli", "", "", "")
@@ -7277,6 +7280,26 @@ finally:
     stories._recents_path = _p27a_rec
     shutil.rmtree(_p27a_box, ignore_errors=True)
 # --- hết P27a ---
+
+
+# --- P29a: icon hạn mức Codex trên grid — hover hiện tên tài khoản + vòng tròn % còn lại ---
+_p29a_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p29a_prov = (Path(__file__).resolve().parent / "providers.py").read_text(encoding="utf-8")
+_p29a_grid = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+check("P29a icon usage: frontend có nút bolt + thẻ hover usagetip + vòng tròn donut (pathLength=100, "
+      "stroke-dasharray theo % còn lại, ba mức màu) và chỉ hiện khi MODEL.codex_usage có accounts",
+      "bolt:" in _p29a_fe and "function usageButton()" in _p29a_fe
+      and "USAGE_TIP_ID" in _p29a_fe and "usageDonut(a)" in _p29a_fe
+      and 'fg.setAttribute("pathLength", "100")' in _p29a_fe
+      and "stroke-dasharray" in _p29a_fe and '"ufg " + (left >= 30 ? "ok" : left > 0 ? "mid" : "low")' in _p29a_fe)
+check("P29a payload chỉ ĐỌC FILE (codex_accounts + codex_identity + _codex_rate_limits_cached), "
+      "KHÔNG qua codex_usage_all (đường LIVE spawn app-server ~2-3 s/nhà) — grid tick 2s phải rẻ; "
+      "grid.py gửi payload đúng một chỗ trong render_component",
+      "def grid_usage_payload" in _p29a_prov
+      and "_codex_rate_limits_cached(Path(acc[\"home\"]))" in _p29a_prov
+      and "codex_usage_all" not in _p29a_prov.split("def grid_usage_payload")[1].split("\ndef ")[0]
+      and "codex_usage=_codex_usage_payload()" in _p29a_grid)
+# --- hết P29a ---
 
 
 # cleanup test rows
