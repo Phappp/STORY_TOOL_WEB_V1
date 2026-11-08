@@ -115,6 +115,7 @@ class Outcome:
     video: dict | None = None  # payload tiến độ tải video trong modal B4 (P21c) — cũng đi 1 lần
     touched: list[str] = field(default_factory=list)
     b0_ids: list[str] = field(default_factory=list)  # bài vừa tạo/vừa xin trích -> grid giao luồng nền
+    news: dict | None = None  # P28a: payload kết quả đăng báo (modal News) — đi 1 lần như io/video
 
 
 def load_prefs(root: Path) -> dict:
@@ -2107,7 +2108,35 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "b4_pick":
             # Cú bấm trong modal B4 chỉ CHỌN bài sẽ nhận video; bytes vào bằng widget native, không qua event.
             stories.load_story(ctx.root, sid)
-            out.lines = [f"{sid}: đã chọn để nhận video — mở mục “🎬 B4 · Video” phía trên lưới để chọn file từ ổ đĩa."]
+            out.lines = [f"{sid}: đã chọn để nhận video — mở mục \"🎬 B4 · Video\" phía trên lưới để chọn file từ ổ đĩa."]
+        elif source == "webpub_login":
+            # P28a: modal News — mở Chromium cho đăng nhập thủ công (không ghi file story).
+            import web_publisher as wp
+            site = str(event.get("site") or wp.DEFAULT_SITE)
+            try:
+                wp.login(ctx.root, site=site)
+                out.lines = [f"Đã đóng cửa sổ đăng nhập cho {site}. Đảm bảo đã đăng nhập trước khi tiếp tục."]
+            except Exception as exc:
+                out.lines = [f"Lỗi mở Chromium: {exc}"]
+        elif source == "webpub_start":
+            # P28a: modal News — đăng tuần tự từng bài đủ B1+B2+B3 lên website.
+            import web_publisher as wp
+            site = str(event.get("site") or wp.DEFAULT_SITE)
+            ids = event.get("ids") or []
+            results = []
+            for pub_id in ids:
+                pub_id = str(pub_id)
+                try:
+                    url = wp.publish_one(ctx.root, pub_id, site=site)
+                    results.append({"sid": pub_id, "ok": True, "url": url})
+                    out.lines.append(f"{pub_id}: {url}")
+                except Exception as exc:
+                    results.append({"sid": pub_id, "ok": False, "err": str(exc)})
+                    out.lines.append(f"{pub_id}: {exc}")
+            done = sum(1 for r in results if r["ok"])
+            out.lines.append(f"Đã đăng {done}/{len(results)} bài lên website.")
+            out.touched = [r["sid"] for r in results]
+            out.news = {"results": results, "progress": f"{done}/{len(results)} bài"}
         else:
             out.lines = [f"Event không hợp lệ: {source or '(trống)'}"]
     except (stories.WorkspaceError, prov.ProviderError) as exc:

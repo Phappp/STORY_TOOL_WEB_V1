@@ -16,6 +16,7 @@ import db
 import grid_actions as ga
 import grid_runner as gr
 import stories
+import web_publisher as wp
 
 FRONTEND = Path(__file__).resolve().parent / "grid_frontend"
 COMPONENT_NAME = "fb_story_grid_v1"
@@ -474,6 +475,15 @@ def _build_audio_payload(audio_setup: dict) -> dict:
             "urls": urls}
 
 
+def _news_payload() -> dict:
+    """P28a: payload cho modal News — danh sách website có sẵn (từ web_publisher)."""
+    import web_publisher as wp
+    return {"sites": [
+        {"label": "US News PV247", "value": "https://usnewspv247.danhngon.pro"},
+        {"label": "News PH Van", "value": "https://newsphvan.danhngon.pro"},
+    ]}
+
+
 def _collect(out: ga.Outcome, event: dict) -> None:
     lines = [line for line in out.lines if line]
     _push(out.lines)
@@ -482,6 +492,8 @@ def _collect(out: ga.Outcome, event: dict) -> None:
         st.session_state["grid_io_response"] = out.io
     if out.video is not None:  # P21c: tiến độ tải video — vài chục byte, cũng đi đúng một lần
         st.session_state["grid_video_response"] = out.video
+    if out.news is not None:  # P28a: kết quả đăng báo (modal News) — đi 1 lần như io/video
+        st.session_state["grid_news_response"] = out.news
     if str(event.get("source") or "") in ("copy_request", "content_request", "image_request", "b0_request",
                                           "modal_request"):
         # render_component giao response đúng 1 lần rồi xóa; JS latch theo request_id nên không xử lý trùng
@@ -644,6 +656,7 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
         resp = st.session_state.pop("grid_copy_response", None) or {}
         io_resp = st.session_state.pop("grid_io_response", None) or {}
         vid_resp = st.session_state.pop("grid_video_response", None) or {}
+        news_resp = st.session_state.pop("grid_news_response", None) or {}
         audio_setup = ga.audio_setup(ctx.root)
         component()(rows=rows, workspace=str(ctx.root),
                     # P21h: nút nhịp đọc nằm trong lưới nên lưới phải TỰ NÓI nó đang ở chế độ nào,
@@ -676,6 +689,9 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     # TÊN (server ghép đường dẫn), giây mặc định của workspace để ô hiện sẵn số thật.
                     # P27a-UI: thêm `urls` — đường dẫn HTTP của từng file tiếng để modal preview (audio controls).
                     audio=_build_audio_payload(audio_setup),
+                    # P28a: modal News — danh sách website + kết quả đăng báo (đi 1 lần rồi xóa)
+                    news=_news_payload(),
+                    news_response=news_resp,
                     default=None, key=KEY)
     except Exception as exc:  # component hỏng thì tool vẫn phải chạy được
         st.session_state["grid_component_error"] = f"{type(exc).__name__}: {exc}"
@@ -925,6 +941,118 @@ def video_form(ctx: ga.Ctx) -> None:
             st.rerun(scope="app")  # folder vừa đổi: cả trang vẽ lại là lưới đọc mới, log cũng hiện luôn
 
 
+def publisher_form(ctx: ga.Ctx) -> None:
+    """Operator-controlled browser publishing, outside frequently refreshed Grid."""
+    with st.expander("🌐 Đăng báo lên website → lấy Link (B1 + B2 + B3)", expanded=False):
+        st.caption("Title = Caption B1 · Featured Image = ảnh B2 · Description = bài B3. "
+                   "Không điền SEO Title / SEO Keywords / SEO Description. "
+                   "Cần Chromium trên máy chạy Streamlit và phiên đăng nhập thủ công.")
+        site_options = {
+            "US News PV247": "https://usnewspv247.danhngon.pro",
+            "News PH Van": "https://newsphvan.danhngon.pro",
+            "Website khác (nhập URL)": "",
+        }
+        site_choice = st.selectbox("Website đăng bài", list(site_options), key="webpub_site_choice")
+        if site_options[site_choice]:
+            site_input = site_options[site_choice]
+            st.caption(f"Login: {site_input}/login · Posts: {site_input}/admin/posts")
+        else:
+            site_input = st.text_input(
+                "URL website (có thể dán /login, /admin/dashboard hoặc /admin/posts)",
+                value="https://",
+                key="webpub_site_custom",
+            )
+        try:
+            site = wp.normalized_site(site_input)
+            st.caption(f"Đăng trên: `{wp.posts_url(site)}` · Profile: `{wp.profile_name(site)}`")
+            site_error = None
+        except Exception as exc:
+            site = ""
+            site_error = str(exc)
+            st.error(site_error)
+        ids = stories.list_story_ids(ctx.root)
+        available = [sid for sid in ids if not stories.load_story(ctx.root, sid).get('link')]
+        chosen = st.multiselect("Chọn Story ID chưa có Link", available, key="webpub_stories")
+        st.caption("Hãy chạy thử một bài. Nếu bấm Save rồi mà chưa lấy được URL, sẽ khóa bài để tránh đăng trùng.")
+        if st.button("🔐 Mở Chromium và đăng nhập thủ công", key="webpub_login", disabled=bool(site_error)):
+            try:
+                wp.login(ctx.root, site=site)
+                st.success(f"Đã đóng cửa sổ đăng nhập cho {site}. Hãy bảo đảm bạn đã đăng nhập thành công trước khi đóng Chromium.")
+            except Exception as exc:
+                st.error(f"Lỗi mở trình duyệt: {exc}")
+        if st.button("🚀 Đăng và lấy Link", key="webpub_start", disabled=not chosen or bool(site_error)):
+            for sid in chosen:
+                try:
+                    url = wp.publish_one(ctx.root, sid, site=site)
+                    st.success(f"{sid}: {url}")
+                except Exception as exc:
+                    st.error(f"{sid}: {exc}")
+                    # A failed/needs_review post must never block independent stories.
+                    # publish_one() itself prevents re-posting that particular SID.
+                    continue
+            st.caption("Làm mới trang để cập nhật cột Link trên Grid.")
+        pending = [sid for sid in ids if (stories.load_story(ctx.root, sid).get('web_publish') or {}).get('state') == 'needs_review']
+        if pending:
+            st.divider()
+            st.warning("Bài needs_review có thể ĐÃ đăng trên website. Có thể đối soát Link hoặc chủ động tạo bài MỚI (nguy cơ trùng bài).")
+            with st.expander("♻️ Bỏ needs_review và đăng bài MỚI", expanded=False):
+                new_target = st.selectbox("Story ID muốn đăng mới", pending, key="webpub_new_post_id")
+                st.caption("Thao tác này KHÔNG xóa bài cũ trên website; chỉ đặt lại trạng thái xuất bản trong Story Tool và giữ lịch sử lần đăng trước.")
+                confirm_new = st.checkbox(
+                    "Tôi hiểu bài cũ có thể đã tồn tại và đồng ý tạo thêm một bài mới",
+                    key="webpub_confirm_new_post",
+                )
+                if st.button("♻️ Xóa khóa needs_review và đăng MỚI", key="webpub_force_new_post",
+                             disabled=not confirm_new or bool(site_error)):
+                    try:
+                        wp.reset_needs_review_for_new_post(ctx.root, new_target, site=site)
+                        fresh_url = wp.publish_one(ctx.root, new_target, site=site)
+                        st.success(f"{new_target}: đã tạo bài mới và lưu Link: {fresh_url}")
+                    except Exception as exc:
+                        st.error(f"{new_target}: {exc}")
+                    st.caption("Nếu trạng thái chưa đổi trên Grid, làm mới trang.")
+            target = st.selectbox("Bài cần đối soát", pending, key="webpub_reconcile_id")
+            original_site = (stories.load_story(ctx.root, target).get('web_publish') or {}).get('site') or site
+            st.caption(f"Website đã Save: `{original_site}`. Đối soát KHÔNG bấm Save và KHÔNG tạo bài mới.")
+            if st.button("🔎 Tự tìm Link đã đăng (không đăng lại)", key="webpub_reconcile_auto"):
+                try:
+                    found_url = wp.reconcile_auto(ctx.root, target, site=original_site)
+                    st.success(f"{target}: đã tìm được và lưu Link: {found_url}")
+                except Exception as exc:
+                    st.error(f"{target}: {exc}")
+            st.caption("Nếu tự dò không thấy, có thể chọn bài trực tiếp từ bảng Posts (không đăng lại).")
+            if st.button("📋 Tải danh sách bài gần đây để chọn Link", key="webpub_load_candidates"):
+                try:
+                    st.session_state['webpub_candidates'] = wp.recent_post_candidates(ctx.root, site=original_site)
+                    st.session_state['webpub_candidates_site'] = original_site
+                except Exception as exc:
+                    st.error(f"Không tải được danh sách Posts: {exc}")
+            options = (st.session_state.get('webpub_candidates') or []) if st.session_state.get('webpub_candidates_site') == original_site else []
+            if options:
+                chosen_index = st.selectbox(
+                    "Chọn đúng bài trên website theo tiêu đề (chỉ quét trang Posts hiện tại)",
+                    range(len(options)),
+                    format_func=lambda i: f"{i+1}. {options[i]['title'][:155]}",
+                    key="webpub_select_candidate",
+                )
+                st.code(options[chosen_index]['url'], language=None)
+                confirm = st.checkbox("Tôi đã kiểm tra đây đúng là bài của Story ID đang chọn", key="webpub_confirm_candidate")
+                if st.button("✅ Gán Link đã chọn vào Grid (không đăng lại)", key="webpub_apply_candidate", disabled=not confirm):
+                    try:
+                        wp.reconcile(ctx.root, target, options[chosen_index]['url'])
+                        st.success(f"Đã lưu Link vào {target}.")
+                    except Exception as exc:
+                        st.error(str(exc))
+            url = st.text_input("URL bài đã đăng (dự phòng nhập thủ công)", key="webpub_reconcile_url")
+            if st.button("Ghi URL đã xác minh vào Grid", key="webpub_reconcile_save"):
+                try:
+                    wp.reconcile(ctx.root, target, url)
+                    st.success(f"Đã lưu Link cho {target}.")
+                except Exception as exc:
+                    st.error(str(exc))
+        st.caption(f"Selector website có thể cấu hình qua {wp.selectors_path(ctx.root).name}. Xem WEB_PUBLISHER_GUIDE.md.")
+
+
 def render(ctx: ga.Ctx) -> None:
     st.subheader("Grid story")
     st.markdown(NO_DIM_CSS, unsafe_allow_html=True)
@@ -943,6 +1071,7 @@ def render(ctx: ga.Ctx) -> None:
                      help="Bài đã vào hàng đợi nổi lên đầu danh sách lưới; thứ tự LÀM theo cột # — "
                           "bấm ＋ trước thì làm trước, bài mới xếp cuối.")
     workspace_bar(ctx)
+    publisher_form(ctx)
     video_form(ctx)  # B4 đứng NGOÀI fragment: file_uploader native phải nhận bytes thẳng vào server
     # Fragment luôn chạy đều: event từ lưới chỉ vẽ lại đúng nó, nên giao việc cho luồng nền
     # không cần vẽ lại cả trang nữa (đó chính là cú loé trắng sau khi bấm ⚡/▶).

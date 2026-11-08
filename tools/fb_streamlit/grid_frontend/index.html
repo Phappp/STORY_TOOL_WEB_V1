@@ -47,6 +47,21 @@
   .audmodal .audrow { margin:0; }
   .audmodal .audactions { display:flex; gap:6px; margin-top:4px; }
   .audmodal .audactions button { flex:1; }
+  /* P28a: modal News — trái: thao tác (website + login + publish), phải: tiến trình + kết quả */
+  .modal.newsmodal { width:min(720px, 100%); }
+  .modal.newsmodal .mbody { padding:12px 14px; display:flex; flex-direction:row; gap:14px; }
+  .newscol { flex:1 1 0; min-width:0; display:flex; flex-direction:column; gap:8px; overflow:auto; }
+  .newscol.right { border-left:1px solid var(--border); padding-left:14px; }
+  .newslbl { color:var(--muted); font-size:12px; }
+  .newsitem { display:flex; flex-direction:column; gap:3px; padding:6px 8px; border-radius:6px;
+    background:var(--field); border:1px solid var(--border); font-size:12px; }
+  .newsitem .nid { font-family:ui-monospace,Consolas,monospace; font-weight:650; font-size:11px; color:var(--muted); }
+  .newsitem.ok { border-color:var(--done-b); }
+  .newsitem.ok .nid { color:var(--done-t); }
+  .newsitem.err { border-color:var(--error-b); }
+  .newsitem.err .nid { color:var(--error-t); }
+  .newsitem .nurl { color:var(--accent); text-decoration:underline; font-size:11px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
   .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }
@@ -487,6 +502,8 @@ const ICON_PATHS = {
   // P21h: glyph MỚI vẽ theo cùng khuôn (không phải đường dẫn copy từ legacy) — vòng cung hở một góc
   // kèm mũi tên: đọc là "quay lại vòng dữ liệu", không cần chữ "5s" đi cạnh.
   refresh: '<path d="M20 12a8 8 0 1 1-8-8c2.3 0 4.5.9 6 2.5l2 1.5"/><path d="M20 4v4h-4"/>',
+  // P28a: icon quả Địa Cầu cho modal News (globe = web publishing) — vòng tròn + hai đường cong
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3v18"/><path d="M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>',
 };
 // Dựng MỘT lần lúc tải trang từ hằng số tự viết (không chứa chữ của hàng lưới/URL nào), sau đó nhân bản.
 const ICON_NODE = {};
@@ -532,7 +549,7 @@ function menuItem(icon, label, fn, cls, manual) {
   return { node: b, label: text };
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {} };
+let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {}, news: {}, news_response: {} };
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
 let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
@@ -3033,6 +3050,142 @@ function queueIds() {
   return (MODEL.queue_ids || []).map(String);
 }
 
+// P28a: modal News — trái: website + login + publish, phải: tiến trình + kết quả.
+// Nút icon globe chỉ ENABLE khi có ≥1 bài trong hàng đợi ĐỦ B1+B2+B3 (xong, không link cũ).
+let NEWS_OPEN = false;
+const NEWS_RESULTS = {};  // sid -> {ok, url, err} — sống qua repaint, xóa khi đóng modal
+function closeNews() { NEWS_OPEN = false; paintNews(); }
+
+function _newsPubIds() {
+  // Những bài trong hàng đợi đủ B1(done) + B2(done) + B3(done), chưa có link.
+  const qids = queueIds();
+  const idSet = new Set(qids);
+  const rows = rows();
+  const out = [];
+  for (const row of rows) {
+    const id = String(row.id);
+    if (!idSet.has(id)) continue;
+    const st = row.states || {};
+    if (st.b1 !== "done" || st.b2 !== "done" || st.b3 !== "done") continue;
+    if (row.link) continue;  // đã đăng rồi thì không vào modal
+    out.push(id);
+  }
+  return out;
+}
+
+function newsButton() {
+  const ids = _newsPubIds();
+  const b = iconButton("globe",
+    ids.length
+      ? "Mở modal News — đăng " + ids.length + " bài đủ B1+B2+B3 (chưa có link) lên website"
+      : "Chưa có bài nào đủ B1+B2+B3 trong hàng đợi (hoặc tất cả đã có link)",
+    () => { NEWS_OPEN = true; paintNews(); },
+    "act i");
+  b.id = "newsbtn";
+  b.disabled = ids.length === 0;
+  return b;
+}
+
+function paintNews() {
+  const root = document.getElementById("root");
+  const old = root.querySelector(":scope > .overlay.newsmodal");
+  const fresh = newsModalNode();
+  if (!fresh) { if (old) old.remove(); return; }
+  if (old) old.replaceWith(fresh); else root.appendChild(fresh);
+}
+
+function newsModalNode() {
+  if (!NEWS_OPEN) return null;
+  const ids = _newsPubIds();
+  // Nếu không còn bài publishable (e.g. tất cả xong rồi), tự đóng.
+  if (!ids.length) { NEWS_OPEN = false; return null; }
+  const newsResp = MODEL.news_response && typeof MODEL.news_response === "object" ? MODEL.news_response : {};
+  const overlay = el("div", "overlay newsmodal");
+  const modal = el("div", "modal newsmodal");
+  const head = el("div", "mhead");
+  head.appendChild(el("span", "mid", "🌐 News · " + ids.length + " bài đủ B1+B2+B3"));
+  head.appendChild(helpChip([
+    "Đăng báo lên website: B1 → Title, B2 → Featured Image, B3 → Description.",
+    "Cần Chromium trên máy chạy Streamlit + phiên đăng nhập thủ công.",
+    "Không điền SEO Title/Keywords/Description. Nếu Save rồi chưa lấy URL → khóa needs_review."
+  ]));
+  head.appendChild(iconButton("cross", "Đóng (Esc)", closeNews, "act"));
+  modal.appendChild(head);
+  const body = el("div", "mbody");
+
+  // ---- CỘT TRÁI: thao tác ----
+  const left = el("div", "newscol left");
+  // Site selector
+  left.appendChild(el("span", "newslbl", "Website"));
+  const newsPayload = MODEL.news && typeof MODEL.news === "object" ? MODEL.news : {};
+  const siteOpts = Array.isArray(newsPayload.sites) ? newsPayload.sites : [];
+  const siteSel = document.createElement("select");
+  siteSel.className = "prov";
+  siteOpts.forEach(function(site) {
+    const opt = el("option", null, site.label || site.name || site);
+    opt.value = String(site.value || site.name || site);
+    siteSel.appendChild(opt);
+  });
+  if (!siteOpts.length) {
+    const opt = el("option", null, "usnewspv247.danhngon.pro");
+    opt.value = "https://usnewspv247.danhngon.pro";
+    siteSel.appendChild(opt);
+  }
+  left.appendChild(siteSel);
+
+  // Login button
+  const loginBtn = button("🔐 Đăng nhập (Chromium)",
+    "Mở Chromium để đăng nhập website (chỉ cần lần đầu hoặc khi session hết hạn)",
+    function() { send({ source: "webpub_login", site: siteSel.value }); },
+    "act");
+  left.appendChild(loginBtn);
+
+  // Publish button
+  const pubBtn = button("🚀 Đăng " + ids.length + " bài",
+    "Đăng tuần tự từng bài đủ B1+B2+B3 (cột phải) lên website chọn ở trên",
+    function() {
+      send({ source: "webpub_start", site: siteSel.value, ids: ids });
+    }, "act");
+  left.appendChild(pubBtn);
+
+  // Progress label (trước khi bấm Đăng — từ response)
+  const prog = newsResp.progress;
+  if (prog) {
+    left.appendChild(el("span", "newslbl", String(prog)));
+  }
+  body.appendChild(left);
+
+  // ---- CỘT PHẢI: kết quả (báo từ news_resp hoặc MODEL.news_response) ----
+  const right = el("div", "newscol right");
+  const results = newsResp.results || [];
+  if (!results.length) {
+    right.appendChild(el("span", "newslbl", "Chưa đăng bài nào — bấm 🚀 Đăng (trái) để bắt đầu."));
+  } else {
+    results.forEach(function(item) {
+      const box = el("div", "newsitem " + (item.ok ? "ok" : "err"));
+      box.appendChild(el("span", "nid", String(item.sid || "")));
+      if (item.ok && item.url) {
+        const a = document.createElement("a");
+        a.className = "nurl";
+        a.href = String(item.url);
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = String(item.url).replace(/^https?:\/\//, "").slice(0, 60) + "…";
+        a.title = String(item.url);
+        box.appendChild(a);
+      } else if (!item.ok && item.err) {
+        box.appendChild(el("span", "ioline bad", String(item.err).slice(0, 140)));
+      }
+      right.appendChild(box);
+    });
+  }
+  body.appendChild(right);
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  overlay.addEventListener("click", e => { if (e.target === overlay) closeNews(); });
+  return overlay;
+}
+
 function errorCount() { return (MODEL.error_ids || []).length; }
 
 function queueButton() {
@@ -3202,6 +3355,9 @@ function updateBar() {
   // tới lần dựng lại cả lưới kế tiếp, tức là nói dối về chính cái vừa bật.
   const r = document.getElementById(REFRESH_BTN_ID);
   if (r) paintRefresh(r);
+  // P28a: nút News disabled khi không còn bài đủ B1+B2+B3 trong hàng đợi (hoặc tất cả đã có link)
+  const nb = document.getElementById("newsbtn");
+  if (nb) nb.disabled = _newsPubIds().length === 0;
 }
 
 let drag = null;
@@ -3269,6 +3425,8 @@ function render(args, force) {
     video_types: Array.isArray(args.video_types) ? args.video_types : [],
     video_response: args.video_response && typeof args.video_response === "object" ? args.video_response : {},
     audio: args.audio && typeof args.audio === "object" ? args.audio : {},
+    news: args.news && typeof args.news === "object" ? args.news : {},
+    news_response: args.news_response && typeof args.news_response === "object" ? args.news_response : {},
   };
   if (MODEL.workspace !== wasWorkspace) { REFRESH_PENDING = null; SHOWN = PAGE_ROWS; }  // đổi workspace: không có cú bấm nào đang chờ nữa, cửa sổ vẽ về 20
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
@@ -3313,6 +3471,7 @@ function render(args, force) {
   bar.appendChild(searchBox());
   bar.appendChild(refreshButton());  // P21h: nút nhịp đọc folder — trước đây là st.toggle đứng NGOÀI lưới
   bar.appendChild(queueAudioButton());  // P27a: chọn file tiếng + giây cho hàng đợi
+  bar.appendChild(newsButton());  // P28a: modal News — đăng báo lên website
   bar.appendChild(ioButton());  // P22b: import/export nằm cạnh ô tìm — không còn mục native nào nữa
   bar.appendChild(queueButton());
   bar.appendChild(errorsButton());
@@ -3367,6 +3526,7 @@ function render(args, force) {
   const io = ioNode();  // bảng Import/Export vẽ SAU modal bài: mở cả hai thì bảng này ở trên, đúng thứ anh vừa bấm
   if (io) root.appendChild(io);
   paintAudio();  // P27a-UI: modal Audio vẽ SAU IO
+  paintNews();  // P28a: modal News vẽ SAU Audio
   restoreView(view);
   updateBar();
   // chữ ký cho lần vá sau: hàng nào/cột nào vẽ ra sao, modal + khối đếm đang ở bản nào
@@ -3424,6 +3584,7 @@ document.addEventListener("keydown", e => {
     if (inSearch) { SEARCH = ""; repaint(); return; }  // Esc ở ô tìm = xoá lọc, chưa phải đóng modal
     if (IO_OPEN) { closeIo(); return; }               // bảng Import/Export phủ lên lưới -> Esc đóng nó trước
     if (AUDIO_OPEN) { closeAudio(); return; }          // P27a-UI: modal Audio
+    if (NEWS_OPEN) { closeNews(); return; }            // P28a: modal News
     if (modalRef()) { closeModal(); return; }
     if (expandedMode()) { lsSet(EXPANDED_KEY, "0"); repaint(); }  // Esc cũng thu được grid đang mở rộng
     return;

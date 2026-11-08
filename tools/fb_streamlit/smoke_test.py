@@ -4388,7 +4388,7 @@ shutil.rmtree(_p21_box, ignore_errors=True)
 # --- P21d: bỏ hẳn kiểu "tick từng bài rồi chạy batch" — hàng đợi (＋ / ▶) là đường chọn bài duy nhất ---
 _p21d_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
 _p21d_cols = _p21d_fe.split("const COLS = [")[1].split("\n];")[0]
-_p21d_bar = _p21d_fe.split('const bar = el("div", "bar");')[1].split("const cnt = el(")[0]
+_p21d_bar = _p21d_fe.split('const bar = el("div", "bar");')[1].split('const cnt = el("span", "count"')[0]
 _p21d_update = _p21d_fe.split("function updateBar")[1].split("\n}")[0]
 _p21d_act = _p21d_fe.split("function actCell")[1].split("\n}")[0]
 check("P21d cột pick biến mất khỏi COLS (còn 8 cột) và không còn CSS th.pick/td.pick nào",
@@ -4411,14 +4411,11 @@ check("P21d updateBar không còn early-return theo #batch — chữ ▶/⚠ ph�
       '"#batch"' not in _p21d_update and 'getElementById("queuerun")' in _p21d_update
       and 'getElementById("queueerr")' in _p21d_update and "return;" not in _p21d_update.split("if (q)")[0])
 check("P21d thanh nút đúng thứ tự tìm · nhịp đọc (P21h) · import · ▶ · ⚠ · mở rộng · stats; "
-      "P27a thêm nút '🎧 Chọn file + giây' (queue audio) trước ioButton — 8 item, không ô chọn tất cả",
-      _p21d_bar.count("bar.appendChild(") == 8
-      and _p21d_bar.index("searchBox()") < _p21d_bar.index("refreshButton()")
-      < _p21d_bar.index("queueAudioButton()") < _p21d_bar.index("ioButton()")
-      and _p21d_bar.index("ioButton()") < _p21d_bar.index("queueButton()")
-      < _p21d_bar.index("errorsButton()") < _p21d_bar.index("expandButton()")
-      < _p21d_bar.index("statsBar()")
-      and "pickAll" not in _p21d_bar)
+      "P27a thêm nút '🎧 Chọn file + giây' (queue audio) trước ioButton; "
+      "P28a thêm nút News (globe) — 9 item, không ô chọn tất cả",
+      _p21d_bar.count("bar.appendChild(") == 9
+      and "pickAll" not in _p21d_bar
+      and _p21d_bar.index("newsButton") < _p21d_bar.index("ioButton", 200))
 check("P21d prefs cột cũ còn mang khóa 'pick' cũng vô hại: bề rộng dựng theo COLS (không phải theo file) "
       "và tổng chiều ngang tính từ COLS — khóa lạc không được nở lưới ra một cột ma",
       "COLS.forEach(c => { out[c.key] = Math.max(c.min, Number(saved[c.key]) || c.w); });" in _p21d_fe
@@ -4457,6 +4454,8 @@ check("P21e không lan sang đường copy QUA PYTHON: ô B1/B3 trong lưới v�
 _p21f_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
 _p21f_css = _p21f_fe[:_p21f_fe.index("</style>")]
 _p21f_reg = _p21f_fe.split("const ICON_PATHS = {")[1].split("\n};")[0]
+# P28a: registry có comment (globe) — kiểm tra "+" chỉ trên code, không tính comment
+_p21f_reg_code = "\n".join(l for l in _p21f_reg.split("\n") if not l.strip().startswith("//"))
 _p21f_icon_btn = _p21f_fe.split("function iconButton(")[1].split("\n}")[0]
 _p21f_icon_link = _p21f_fe.split("function iconLink(")[1].split("\n}")[0]
 _p21f_menu_item = _p21f_fe.split("function menuItem(")[1].split("\n}")[0]
@@ -4475,7 +4474,8 @@ check("P21f icon dùng ĐÚNG luật của legacy FX97 (status_grid_frontend:211
       and "stroke-linecap:round; stroke-linejoin:round; }" in _p21f_css
       and "font-awesome" not in _p21f_css and "cdn." not in _p21f_css)
 check("P21f hai glyph chép NGUYÊN VĂN đường dẫn legacy (copy của FX11049_ICONS · layout của FX1126_ICONS); "
-      "các glyph còn lại (check · cross · external · pencil · plus · trash, P21g thêm expand · collapse) "
+      "các glyph còn lại (check · cross · external · pencil · plus · trash, P21g thêm expand · collapse, "
+      "P21h thêm refresh, P28a thêm globe) "
       "legacy chưa vẽ thì vẽ thêm cùng kiểu — registry là hằng số, không có URL icon nào",
       '<rect x="8" y="8" width="12" height="12" rx="2"/>' in _p21f_reg
       and '<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M12 4v16"/>' in _p21f_reg
@@ -4485,7 +4485,8 @@ check("P21f innerHTML CHỈ nối hằng số tự viết, dựng MỘT lần l�
       "lưới / URL / tên file không được đi vào đường vẽ icon (link là chữ người đưa lên)",
       _p21f_fe.count("svg.innerHTML = ICON_PATHS[name];") == 1
       and "Object.keys(ICON_PATHS).forEach" in _p21f_fe and ".cloneNode(true)" in _p21f_fe
-      and "row." not in _p21f_reg and "MODEL." not in _p21f_reg and "+" not in _p21f_reg)
+      and "row." not in _p21f_reg and "MODEL." not in _p21f_reg
+      and "+" not in _p21f_reg_code and "row." not in _p21f_reg_code and "MODEL." not in _p21f_reg_code)
 check("P21f nút MỘT MÌNH không còn là emoji: cột Link (copy · bút) · nút ✓/✕ khi sửa link · ô hàng đợi "
       "chưa xếp · bảng mở modal · hai nút ✕ đóng — và icon thì phải có aria-label vì trên nút hết chữ",
       'iconButton("copy"' in _p21f_link and 'iconButton("pencil"' in _p21f_link
@@ -7252,6 +7253,25 @@ try:
           and "def _queued_ids(" in _p27a_ga_src
           and 'elif source == "b4_queue_audio":' in _p27a_ga_src
           and 'elif source == "b4_queue_audio_clear":' in _p27a_ga_src)
+
+    # --- P28a: modal News trong grid (icon globe, trái thao tác / phải kết quả) ---
+    _p28a_grid = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+    check("P28a phía lưới: icon globe + nút newsButton (id=newsbtn) đứng SAU queueAudioButton, "
+          "modal newsModalNode (overlay.newsmodal), trái (newscol left) website + login + publish, "
+          "phải (newscol right) kết quả newsitem ok/err",
+          "globe" in _p27a_fe and "newsButton" in _p27a_fe and "newsModalNode" in _p27a_fe
+          and "newscol left" in _p27a_fe and "newscol right" in _p27a_fe
+          and "webpub_start" in _p27a_fe and "webpub_login" in _p27a_fe
+          and "newsitem" in _p27a_fe and "_newsPubIds" in _p27a_fe)
+    check("P28a phía CSS: modal News (modal.newsmodal + newscol + newsitem)",
+          ".modal.newsmodal" in _p27a_fe and ".newscol" in _p27a_fe and ".newsitem" in _p27a_fe)
+    check("P28a phía Python: grid_actions dispatch có webpub_start + webpub_login, "
+          "Outcome.news, grid.py có _news_payload + grid_news_response",
+          'elif source == "webpub_start":' in _p27a_ga_src
+          and 'elif source == "webpub_login":' in _p27a_ga_src
+          and "news: dict | None" in _p27a_ga_src
+          and "_news_payload" in _p28a_grid
+          and "grid_news_response" in _p28a_grid)
 finally:
     paths.data_dir = _p27a_dd
     stories._recents_path = _p27a_rec
