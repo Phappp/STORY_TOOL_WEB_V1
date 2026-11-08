@@ -7294,6 +7294,10 @@ try:
     check("P31a grid_actions webpub_start: lỗi không phải 'saving/needs_review/done' "
           "phải được ghi web_publish.state=error để preview hiện đúng",
           '"state": "error", "site": site' in _p27a_ga_src)
+    check("P31a modal News tự cập nhật khi grid đang mở: nhánh patchCells gọi paintNews() "
+          "trước restoreView/finishCopy nên cột phải đổi đúng theo state LIVE mới nhận",
+          ("syncModal();\n    syncIo();\n    if (NEWS_OPEN) paintNews();\n    restoreView(view);"
+           in _p27a_fe))
 finally:
     paths.data_dir = _p27a_dd
     stories._recents_path = _p27a_rec

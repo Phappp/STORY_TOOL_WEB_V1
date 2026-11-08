@@ -3628,6 +3628,7 @@ function render(args, force) {
     syncStats();
     syncModal();
     syncIo();
+    if (NEWS_OPEN) paintNews();
     restoreView(view);
     finishCopy();
     applyFlash();
