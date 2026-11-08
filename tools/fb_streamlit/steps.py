@@ -5,6 +5,7 @@ Mỗi hàm tự ghi trạng thái vào story.json trước/sau khi gọi provide
 """
 
 import hashlib
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -34,6 +35,27 @@ REF_DESC_PROMPT = (
     "bảng màu, bố cục và khung hình, bối cảnh, chữ hoặc logo nhìn thấy được.\n"
     "- Nếu có nhiều ảnh, gộp thành MỘT mô tả chung; khác biệt nổi bật thì nêu rõ là biến thể.\n"
     "- Chỉ tả những gì thực sự nhìn thấy. Không đoán nội dung, không bình luận, không hỏi lại.")
+
+# P33a: chữ AI từ chối — không phải kết quả thật. B1/B3 trả về mấy dòng này thì ô phải
+# chuyển sang trạng thái "refused" (vàng), không phải "done" (xanh lá).
+_REFUSAL_RES = re.compile(
+    r"không thể (viết|hoàn thành|tạo|lập|sáng tác|viết bài)"
+    r"|i (cannot|can't|am not able to|cannot)"
+    r"|i (won't|will not) (write|create|complete|fulfill)"
+    r"|refus(es|al|ing)"
+    r"|^tôi không thể\b"
+    r"|yêu cầu .* (vi phạm|nguy hiểm|gây hại|không hợp lệ|không phù hợp)"
+    r"|đề xuất .* (vi phạm|không phù hợp|không an toàn)"
+    r"|từ chối (thực hiện|hoàn thành|viết)",
+    re.IGNORECASE,
+)
+
+def is_refusal(text: str) -> bool:
+    """True khi nội dung AI trả về là lời từ chối (chưa viết thật), cần đánh dấu refused."""
+    if not text or not text.strip():
+        return False
+    head = text[:800]
+    return bool(_REFUSAL_RES.search(head))
 
 
 def why(exc: Exception) -> str:
@@ -182,6 +204,11 @@ def run_b1(root: Path, sid: str, preset, provider, model: str, post) -> tuple[st
     except Exception as exc:
         stories.set_step_state(root, sid, "b1", "error", detail=why(exc))
         return None, f"B1 caption LỖI: {why(exc)}"
+    if is_refusal(text):
+        stories.save_step_text(root, sid, "b1", text, refused=True,
+                               refusal_note="AI từ chối viết caption (có thể do prompt/input nhạy cảm)",
+                               provider=provider["name"], model=model)
+        return text, "B1 caption: AI từ chối viết (ô chuyển vàng — xem modal để đọc lý do)"
     stories.save_step_text(root, sid, "b1", text, provider=provider["name"], model=model)
     return text, "B1 caption: OK"
 
@@ -413,6 +440,11 @@ def run_b3(root: Path, sid: str, preset, provider, model: str, post, caption: st
     except Exception as exc:
         stories.set_step_state(root, sid, "b3", "error", detail=why(exc))
         return f"B3 SEO LỖI: {why(exc)}", None
+    if is_refusal(text):
+        stories.save_step_text(root, sid, "b3", text, refused=True,
+                               refusal_note="AI từ chối viết SEO (có thể do prompt/input nhạy cảm)",
+                               provider=provider["name"], model=model)
+        return "B3 SEO: AI từ chối viết (ô chuyển vàng — xem modal để đọc lý do)", text
     stories.save_step_text(root, sid, "b3", text, provider=provider["name"], model=model)
     return "B3 SEO: OK", text
 

@@ -38,6 +38,8 @@ RUNNING = "running"
 DONE = "done"
 ERROR = "error"
 MISSING = "missing"
+# P33a: AI từ chối viết — không phải lỗi kỹ thuật, cần xem lại prompt/input (màu vàng = thiếu).
+REFUSED = "refused"
 
 
 # ---------- workspace ----------
@@ -359,14 +361,20 @@ def step_text(root: Path, sid: str, step: str) -> str:
 
 @serialized
 def save_step_text(root: Path, sid: str, step: str, text: str, **meta) -> dict:
-    """B1 -> caption.txt, B3 -> seo.md, đồng thời cập nhật state trong story.json."""
+    """B1 -> caption.txt, B3 -> seo.md, đồng thời cập nhật state trong story.json.
+
+    P33a: nếu `refused` flag được pass vào (AI từ chối viết thật), ghi state=REFUSED (vàng).
+    """
     if step not in ("b1", "b3"):
         raise WorkspaceError(f"Không lưu được text cho bước {step}.")
     folder = story_dir(root, sid)
     _write_text(folder / STEP_FILE[step], text)
     story = load_story(root, sid)
     block = dict(story.get(step) or {})
-    block.update({"state": DONE if text.strip() else PENDING, "detail": "", "updated_at": time.time()})
+    if meta.pop("refused", False):
+        block.update({"state": REFUSED, "detail": meta.pop("refusal_note", "AI từ chối viết"), "updated_at": time.time()})
+    else:
+        block.update({"state": DONE if text.strip() else PENDING, "detail": "", "updated_at": time.time()})
     block.update(meta)
     if step == "b3":
         block["file"] = SEO_FILE if text.strip() else None
@@ -648,6 +656,8 @@ def step_state(story: dict, folder: Path, step: str) -> str:
         if file is not None and _file_fp(file) != str(block.get("file_fp") or ""):
             return DONE
         return state
+    if state == REFUSED:
+        return REFUSED
     return DONE if file is not None else (MISSING if state == DONE else PENDING)
 
 

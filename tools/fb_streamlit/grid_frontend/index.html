@@ -284,6 +284,7 @@
   button.sq.running { background:var(--running); color:var(--running-t); border-color:var(--running-b); }
   button.sq.error { background:var(--error); color:var(--error-t); border-color:var(--error-b); }
   button.sq.missing { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }
+  button.sq.refused { background:var(--missing); color:var(--missing-t); border-color:var(--missing-b); }
   button.sq.queued { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); }
   button.sq.stale { background:var(--error); color:var(--error-t); border-color:var(--error-b); border-style:dashed; }
   /* ô đang/do luồng nền giữ: chờ tới lượt = tím nét đứt, đang gọi AI = xanh dương TĨNH.
@@ -3818,7 +3819,7 @@ document.addEventListener("keydown", e => {
 });
 // --- P13b: thẻ hover của ô B0-B3, port cách làm của legacy FX114311 (con trỏ báo trạng thái chi tiết) ---
 const SQ_TIP_ID = "sqtip";
-const SQ_WARN = ["error", "stale", "missing"];  // ba trạng thái phải nhìn ra ngay, không phải đọc chữ
+const SQ_WARN = ["error", "stale", "missing", "refused"];  // ba trạng thái phải nhìn ra ngay, không phải đọc chữ
 function tipNode() {
   let t = document.getElementById(SQ_TIP_ID);
   if (!t) {

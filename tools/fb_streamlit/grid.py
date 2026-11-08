@@ -67,11 +67,11 @@ B4_TARGET_KEY = "grid_b4_target"  # bài vừa bấm trong modal B4 -> seed cho 
 B4_FILE_KEY = "grid_b4_file"
 VIDEO_TYPES = [s.lstrip(".") for s in ga.VIDEO_SUFFIXES]
 STATE_LABELS = {stories.PENDING: "chưa chạy", ga.QUEUED: "đợi", stories.DONE: "xong", stories.RUNNING: "đang chạy",
-                stories.ERROR: "lỗi", stories.MISSING: "mất file", ga.STALE: "treo"}
+                stories.ERROR: "lỗi", stories.MISSING: "mất file", ga.STALE: "treo", stories.REFUSED: "AI từ chối"}
 # Bảng chẩn đoán (native) không tô màu được từng ô như component, nên dùng ký hiệu + chú giải.
 STATE_GLYPH = {stories.PENDING: "·", ga.QUEUED: "◇", stories.DONE: "✓", stories.RUNNING: "▶",
-               stories.ERROR: "✗", stories.MISSING: "!", ga.STALE: "⏱"}
-LEGEND = "◇ đợi (đã vào hàng đợi) · · chưa chạy · ▶ đang chạy · ✓ xong · ✗ lỗi · ⏱ treo >15 phút · ! mất file"
+               stories.ERROR: "✗", stories.MISSING: "!", ga.STALE: "⏱", stories.REFUSED: "✗"}
+LEGEND = "◇ đợi (đã vào hàng đợi) · · chưa chạy · ▶ đang chạy · ✓ xong · ✗ lỗi · ✗ AI từ chối · ⏱ treo >15 phút · ! mất file"
 
 _component = None
 

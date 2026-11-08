@@ -2924,8 +2924,8 @@ check("P20 một cơ chế hover duy nhất: pill lưới lẫn dấu ? đều c
       'function pillUnder(node) { return node && node.closest ? node.closest("[data-tip]") : null; }' in js_p13
       and "pill.dataset.tip" in js_p13 and 'q.dataset.tip = lines.filter(Boolean).join("\\n")' in js_p13
       and js_p13.count('addEventListener("pointerover"') == 1)
-check("P13b ô lỗi/treo/mất file thì thẻ đổi viền + màu chữ cảnh báo",
-      'const SQ_WARN = ["error", "stale", "missing"];' in js_p13
+check("P13b ô lỗi/treo/mất file/AI-từ-chối thì thẻ đổi viền + màu chữ cảnh báo",
+      'const SQ_WARN = ["error", "stale", "missing", "refused"];' in js_p13
       and 't.classList.toggle("warn", SQ_WARN.indexOf(pill.dataset.tipk) >= 0)' in js_p13)
 check("P13b step_hint nói dấu vết lần chạy (provider · model · cách · lúc) và im lặng khi chưa chạy",
       fbgrid.step_hint({"b3": {"provider": "TTA_1", "model": "DeepSeek-V4-Pro", "method": "AI",
@@ -7364,6 +7364,30 @@ check("P29a payload dùng codex_usage (LIVE+CACHED) cho TỪNG NHÀ CLI (không 
       and "codex_usage=_codex_usage_payload()" in _p29a_grid)
 # --- hết P29a ---
 
+
+# --- P33a: ô B1/B3 chuyển vàng (refused) khi AI trả lời là từ chối ---
+_p33a_fe   = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p33a_steps= (Path(__file__).resolve().parent / "steps.py").read_text(encoding="utf-8")
+_p33a_stor = (Path(__file__).resolve().parent / "stories.py").read_text(encoding="utf-8")
+_p33a_grid = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+check("P33a stories.py: REFUSED constant + step_state trả REFUSED + save_step_text nhận flag refused",
+      'REFUSED = "refused"' in _p33a_stor
+      and "if state == REFUSED:\n        return REFUSED" in _p33a_stor
+      and 'meta.pop("refused", False)' in _p33a_stor
+      and '"state": REFUSED' in _p33a_stor)
+check("P33a steps.py: is_refusal regex + run_b1 & run_b3 đều gọi save_step_text(refused=True)",
+      "def is_refusal(text: str) -> bool:" in _p33a_steps
+      and "is_refusal(text)" in _p33a_steps
+      and 'stories.save_step_text(root, sid, "b1", text, refused=True' in _p33a_steps
+      and 'stories.save_step_text(root, sid, "b3", text, refused=True' in _p33a_steps)
+check("P33a grid.py: REFUSED có trong STATE_LABELS và STATE_GLYPH",
+      "stories.REFUSED: \"AI từ chối\"" in _p33a_grid
+      and "stories.REFUSED: \"✗\"" in _p33a_grid
+      and "AI từ chối" in _p33a_grid)
+check("P33a frontend: CSS .sq.refused + SQ_WARN chứa 'refused'",
+      "button.sq.refused" in _p33a_fe
+      and '"refused"' in _p33a_fe)
+# --- hết P33a ---
 
 # cleanup test rows
 c = db.connect()
