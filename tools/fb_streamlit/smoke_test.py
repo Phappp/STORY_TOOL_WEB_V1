@@ -7275,6 +7275,25 @@ try:
           and "news: dict | None" in _p27a_ga_src
           and "_news_payload" in _p28a_grid
           and "grid_news_response" in _p28a_grid)
+    # --- P31a: preview News đọc state LIVING trong story.json, không chỉ kết quả 1 lần ---
+    _p31a_stories = (Path(__file__).resolve().parent / "stories.py").read_text(encoding="utf-8")
+    _p31a_rows_for = _p28a_grid.split("def rows_for(ctx: ga.Ctx) -> list[dict]:")[1].split("def ")[0]
+    check("P31a stories.summary + row grid có web_publish: modal News đọc được "
+          "state sống (saving/needs_review/done/error) của từng story qua polling",
+          '"web_publish": dict(story.get("web_publish") or {})' in _p31a_stories
+          and '"web_publish": summary.get("web_publish") or {}' in _p31a_rows_for)
+    check("P31a modal News phải vẽ trạng thái LIVE + summary + target giữ qua repaint: "
+          "nstate.done/saving/review/fail/ready, NEWS_TARGET_IDS, nurl, 'Cần đối soát'",
+          ".nstate.done" in _p27a_fe
+          and ".newsitem.saving" in _p27a_fe
+          and "NEWS_TARGET_IDS" in _p27a_fe
+          and '"needs_review"' in _p27a_fe
+          and "nurl" in _p27a_fe
+          and "Cần đối soát" in _p27a_fe
+          and 'right.prepend(summary)' in _p27a_fe)
+    check("P31a grid_actions webpub_start: lỗi không phải 'saving/needs_review/done' "
+          "phải được ghi web_publish.state=error để preview hiện đúng",
+          '"state": "error", "site": site' in _p27a_ga_src)
 finally:
     paths.data_dir = _p27a_dd
     stories._recents_path = _p27a_rec

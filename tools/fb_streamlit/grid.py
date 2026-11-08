@@ -276,6 +276,8 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             # P26c: chọn riêng của bài này (nếu đã ghép với chọn tay) — modal B4 hiện sẵn đúng chọn.
             "b4rec": {"audio": str((story.get("b4") or {}).get("audio") or ""),
                       "seconds": int((story.get("b4") or {}).get("audio_seconds") or 0)},
+            # P31a: state đăng báo (web_publish) — modal News đọc trực tiếp từ row, sống qua polling
+            "web_publish": summary.get("web_publish") or {},
             # một dòng cho tab B2: ảnh refs của bài đi vào prompt bằng đường nào (P19a) — xem notes
             "b2ref": ga.b2_ref_hint(story, kinds),
             "bucket": "error" if corrupt else ga.bucket(states),  # bài không đọc được story.json là việc phải xử lý, không phải "chờ"

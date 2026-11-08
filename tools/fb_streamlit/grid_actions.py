@@ -2131,8 +2131,17 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
                     results.append({"sid": pub_id, "ok": True, "url": url})
                     out.lines.append(f"{pub_id}: {url}")
                 except Exception as exc:
-                    results.append({"sid": pub_id, "ok": False, "err": str(exc)})
-                    out.lines.append(f"{pub_id}: {exc}")
+                    detail = str(exc)
+                    # P31a: lỗi xảy ra trước khi publish_one kịp đánh dấu `saving` cũng phải sống
+                    # trong story.json để modal News cột phải hiện "Lỗi" qua các tick sau.
+                    current = stories.load_story(ctx.root, pub_id)
+                    current_pub = dict(current.get("web_publish") or {})
+                    if current_pub.get("state") not in ("saving", "needs_review", "done"):
+                        stories.update_story(ctx.root, pub_id,
+                                             web_publish={"state": "error", "site": site,
+                                                          "reason": detail[:1000], "at": time.time()})
+                    results.append({"sid": pub_id, "ok": False, "err": detail})
+                    out.lines.append(f"{pub_id}: {detail}")
             done = sum(1 for r in results if r["ok"])
             out.lines.append(f"Đã đăng {done}/{len(results)} bài lên website.")
             out.touched = [r["sid"] for r in results]

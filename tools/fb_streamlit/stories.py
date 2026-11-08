@@ -674,6 +674,9 @@ def story_summary(root: Path, sid: str, story: dict | None = None) -> dict:
         "video": video.name if video else "",
         "detail": {step: str((story.get(step) or {}).get("detail") or "") for step in STEPS},
         "has_input": bool((folder / INPUT_FILE).is_file()),
+        # P31a: trạng thái đăng báo (web_publish) — modal News cột phải đọc STATE THẬT từ story.json
+        # (saving/needs_review/done + url) thay vì chỉ nhìn kết quả lượt bấm cuối (đã mất sau 1 render).
+        "web_publish": dict(story.get("web_publish") or {}),
     }
     for step in STEPS:
         out[step] = step_state(story, folder, step)
