@@ -682,21 +682,93 @@ def page_providers(c):
     if rows:
         st.subheader("Provider hiện có")
         rmap = {r["id"]: r for r in rows}
-        rid = st.selectbox("Chọn provider", list(rmap.keys()), format_func=lambda i: f"{rmap[i]['name']} ({KIND_LABELS[rmap[i]['kind']]})", key="provider_manage")
+        opts = list(rmap.keys())
+
+        def _safe(row, key, default=""):
+            try:
+                return row[key] if row[key] is not None else default
+            except (KeyError, IndexError, TypeError):
+                return default
+
+        # Nếu session_state còn giữ id vừa bị xóa, _fmt phải trả đúng MỘT label có trong options
+        # (label của bộ đầu) — Streamlit crash ở options.index() nếu trả label lạ.
+        def _fmt(i):
+            rec = rmap.get(i)
+            if rec is None:
+                first = rmap[opts[0]]
+                rec = first
+            return f"{_safe(rec, 'name')} ({KIND_LABELS.get(_safe(rec, 'kind'), '?')})"
+
+        _sel_key = "provider_manage"
+        # Dọn session_state trước khi build: nếu giá trị cũ không còn trong DB, ép về bộ đầu
+        if _sel_key in st.session_state and st.session_state[_sel_key] not in opts:
+            st.session_state[_sel_key] = opts[0]
+
+        rid = st.selectbox("Chọn provider", opts, format_func=_fmt, key=_sel_key)
         r = rmap[rid]
         st.json({k: r[k] for k in ("name", "kind", "base_url", "key_env", "models", "is_default")})
-        a1, a2, a3 = st.columns(3)
-        if a1.button("Test kết nối"):
+
+        # --- Form chỉnh sửa provider đã có (kể từ P30a) ---
+        # Form có form_submit_button nên value= trong st.text_input bị reset về default mỗi lượt.
+        # Dùng st.session_state để seed giá trị LẦN ĐẦU theo rid, các lượt sau giữ nguyên.
+        _pk = f"pedit_{rid}"
+        if _pk not in st.session_state:
+            st.session_state[_pk] = {"name": r["name"], "kind": r["kind"],
+                                     "base_url": r["base_url"] or "", "key_env": r["key_env"] or "",
+                                     "models": r["models"] or ""}
+        _pv = st.session_state[_pk]
+        with st.form(f"provider_edit_{rid}"):
+            e_name = st.text_input("Tên *", key=f"{_pk}_name", value=_pv["name"],
+                                   help="Đổi tên là đổi cả tên trong prefs workspace và preset trỏ tới bộ này "
+                                        "(nó giữ id, không giữ tên — nên grid vẫn tìm thấy bằng id).")
+            e_kind = st.selectbox("Loại", list(KIND_LABELS.keys()),
+                                  index=list(KIND_LABELS.keys()).index(_pv["kind"]),
+                                  key=f"{_pk}_kind",
+                                  format_func=lambda k: KIND_LABELS[k])
+            e_base_url = st.text_input("Base URL (chỉ loại OpenAI-compatible)",
+                                       key=f"{_pk}_base", value=_pv["base_url"])
+            e_key_env = st.text_input("Tên biến môi trường chứa API key",
+                                      key=f"{_pk}_key", value=_pv["key_env"],
+                                      help="CHỈ đặt TÊN biến — giá trị key thật nằm trong .env.")
+            e_models = st.text_input("Models (phân cách bởi dấu phẩy)",
+                                     key=f"{_pk}_models", value=_pv["models"])
+            s1, s2, s3 = st.columns(3)
+            if s1.form_submit_button("💾 Lưu thay đổi"):
+                if not e_name.strip():
+                    st.error("Tên provider không được để trống.")
+                else:
+                    try:
+                        db.update_provider(c, rid, e_name.strip(), e_kind,
+                                           e_base_url.strip(), e_key_env.strip(), e_models)
+                        # Seed lại từ DB sau khi lưu: nếu anh đổi provider trên màn khác giữa chừng,
+                        # form phải theo giá trị mới chứ không giữ bản nháp cũ.
+                        _fresh = rmap[rid]
+                        st.session_state[_pk] = {"name": _fresh["name"], "kind": _fresh["kind"],
+                                                 "base_url": _fresh["base_url"] or "",
+                                                 "key_env": _fresh["key_env"] or "",
+                                                 "models": _fresh["models"] or ""}
+                        st.success(f"Đã cập nhật '{e_name.strip()}'.")
+                    except db.sqlite3.IntegrityError:
+                        st.error("Tên provider đã bị một bộ khác dùng.")
+            # nút Xóa rời form: bấm lưu mà tay lỡ chạm Xóa thì form clear_on_submit=True làm mất ô input
+            del_ = s2.form_submit_button("🗑 Xóa provider")
+            if s3.form_submit_button("Đặt làm mặc định"):
+                db.set_default_provider(c, rid)
+                st.success("Đã đặt làm mặc định.")
+        if del_:
+            db.delete_provider(c, rid)
+            st.session_state.pop(f"pedit_{rid}", None)  # bỏ bản nháp của bộ vừa xóa
+            st.success("Đã xóa.")
+            # provider vừa xóa không còn trong DB — rerun để selectbox build lại với danh sách sạch,
+            # nếu không session_state còn giữ id vừa xóa và format_func crash trên tick kế.
+            st.rerun()
+
+        if st.button("Test kết nối", key=f"provider_test_{rid}"):
             try:
                 st.success(prov.test_connection(r))
             except (prov.ProviderError, Exception) as exc:
                 st.error(str(exc))
-        if a2.button("Đặt làm mặc định"):
-            db.set_default_provider(c, rid)
-            st.success("Đã đặt làm mặc định.")
-        if a3.button("Xóa provider"):
-            db.delete_provider(c, rid)
-            st.success("Đã xóa.")
+
         if r["kind"] == "openai" and not (r["key_env"] or "").strip():
             st.caption("Lưu ý: provider không có key env thì request sẽ gửi không Authorization header (chỉ dùng được với endpoint công khai).")
         if r["kind"] == "codex_cli":

@@ -84,6 +84,14 @@ def delete_provider(conn, provider_id):
     conn.commit()
 
 
+def update_provider(conn, provider_id, name, kind, base_url, key_env, models):
+    conn.execute(
+        "UPDATE providers SET name=?, kind=?, base_url=?, key_env=?, models=? WHERE id=?",
+        (name, kind, base_url, key_env, models, provider_id),
+    )
+    conn.commit()
+
+
 def set_default_provider(conn, provider_id):
     conn.execute("UPDATE providers SET is_default = (id=?)", (provider_id,))
     conn.commit()
