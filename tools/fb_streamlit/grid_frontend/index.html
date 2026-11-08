@@ -73,6 +73,7 @@
   .newsitem .nstate.review { background:#5a4a1c;       color:#ffd98a;          border:1px solid #c9a24a; }
   .newsitem .nstate.ready   { background:var(--queued); color:var(--queued-t);  border:1px dashed var(--queued-b); }
   .newsitem .nstate.fail    { background:var(--error); color:var(--error-t);   border:1px solid var(--error-b); }
+  .newsitem .nstate.processing { background:var(--running); color:var(--running-t); border:1px solid var(--running-b); }
   .newsitem .nstate.idle    { background:var(--field); color:var(--muted);     border:1px solid var(--border); }
   .newsitem .nurl { color:var(--accent); text-decoration:underline; font-size:11px;
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -3214,13 +3215,15 @@ function newsModalNode() {
   const respResults = {};
   (newsResp.results || []).forEach(r => { respResults[String(r.sid)] = r; });
 
-  let saving = 0, review = 0, done = 0, fail = 0, ready = 0;
+  let saving = 0, review = 0, done = 0, fail = 0, ready = 0, processing = 0;
   ids.forEach(sid => {
     sid = String(sid);
     const row = rowById[sid] || {};
     const wp = row.web_publish || {};
+    const st = row.states || {};
     const topic = String(row.topic || "");
     const r = respResults[sid];
+    const anyRunning = st.b1 === "running" || st.b2 === "running" || st.b3 === "running";
     let cls, stateTxt;
     if (wp.state === "saving")            { cls="saving"; stateTxt="Đang lưu…";      saving++; }
     else if (wp.state === "needs_review"){ cls="review"; stateTxt="Cần đối soát";    review++; }
@@ -3228,6 +3231,7 @@ function newsModalNode() {
     else if (wp.state === "error")       { cls="fail";   stateTxt="Lỗi";             fail++; }
     else if (r && !r.ok)                 { cls="fail";   stateTxt="Lỗi (lượt này)";  fail++; }
     else if (r && r.ok && r.url)         { cls="done";   stateTxt="Đã đăng ✓";       done++; }
+    else if (anyRunning)                 { cls="processing"; stateTxt="Xử lý…";     processing++; }
     else                                  { cls="ready";  stateTxt="Sẵn sàng";        ready++; }
 
     const box = el("div", "newsitem " + cls);
@@ -3251,6 +3255,8 @@ function newsModalNode() {
       box.appendChild(el("span", "ioline bad", String(errTxt).slice(0, 160)));
     } else if (wp.state === "saving") {
       box.appendChild(el("span", "ioline ok", "Chờ Chromium xác nhận Save…"));
+    } else if (anyRunning) {
+      box.appendChild(el("span", "ioline ok", "B1–B3 đang chạy — chưa đăng được"));
     }
     right.appendChild(box);
   });
@@ -3259,8 +3265,8 @@ function newsModalNode() {
   const summary = el("span", "newslbl");
   summary.textContent =
     "Tổng: " + ids.length + " · " +
-    "xong " + done + " · đang lưu " + saving + " · cần đối soát " + review +
-    " · lỗi " + fail + " · sẵn sàng " + ready;
+    "xong " + done + " · đang lưu " + saving + " · xử lý " + processing +
+    " · cần đối soát " + review + " · lỗi " + fail + " · sẵn sàng " + ready;
   right.prepend(summary);
 
   body.appendChild(right);

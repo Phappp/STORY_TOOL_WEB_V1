@@ -7298,6 +7298,16 @@ try:
           "trước restoreView/finishCopy nên cột phải đổi đúng theo state LIVE mới nhận",
           ("syncModal();\n    syncIo();\n    if (NEWS_OPEN) paintNews();\n    restoreView(view);"
            in _p27a_fe))
+    check("P31a modal News hiển thị 'Xử lý…' khi B1/B2/B3 đang chạy (chưa đủ đăng): "
+          "nhánh anyRunning (b1/b2/b3 == running) → cls=processing + 'B1–B3 đang chạy' + counter xử lý",
+          'anyRunning' in _p27a_fe
+          and 'st.b1 === "running"' in _p27a_fe
+          and 'st.b2 === "running"' in _p27a_fe
+          and 'st.b3 === "running"' in _p27a_fe
+          and '"Xử lý…"' in _p27a_fe
+          and 'ioline ok", "B1–B3 đang chạy — chưa đăng được' in _p27a_fe
+          and '.newsitem .nstate.processing' in _p27a_fe
+          and 'xử lý " + processing' in _p27a_fe)
     _p32a_wp = (Path(__file__).resolve().parent / "web_publisher.py").read_text(encoding="utf-8")
     check("P32a web publisher ẩn Chromium khi xử lý: browser_context/publish_one/reconcile_auto "
           "mặc định headed=False (headless), riêng login thủ công vẫn headed=True để thao tác đăng nhập",
