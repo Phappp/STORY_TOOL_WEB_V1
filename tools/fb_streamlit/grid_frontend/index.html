@@ -3096,7 +3096,9 @@ const NEWS_RESULTS = {};  // sid -> {ok, url, err} — sống qua repaint, xóa 
 function closeNews() { NEWS_OPEN = false; NEWS_TARGET_IDS = []; paintNews(); }
 
 function _newsPubIds() {
-  // Những bài trong hàng đợi đủ B1(done) + B2(done) + B3(done), chưa có link.
+  // Mọi bài trong hàng đợi, trừ đã có link (đã đăng xong) hoặc B1/B2/B3 đang lỗi.
+  // Bài đang chạy (B1/B2/B3 = running/pending) vẫn hiện trong modal với state "Xử lý…"
+  // để anh theo dõi tiến trình mà không cần mở modal B riêng.
   const qids = queueIds();
   const idSet = new Set(qids);
   const all = rows();
@@ -3104,9 +3106,10 @@ function _newsPubIds() {
   for (const row of all) {
     const id = String(row.id);
     if (!idSet.has(id)) continue;
-    const st = row.states || {};
-    if (st.b1 !== "done" || st.b2 !== "done" || st.b3 !== "done") continue;
     if (row.link) continue;  // đã đăng rồi thì không vào modal
+    const st = row.states || {};
+    // Loại bài B1/B2/B3 lỗi (không thể đăng được)
+    if (st.b1 === "error" || st.b2 === "error" || st.b3 === "error") continue;
     out.push(id);
   }
   return out;
@@ -3116,8 +3119,8 @@ function newsButton() {
   const ids = _newsPubIds();
   const b = iconButton("globe",
     ids.length
-      ? "Mở modal News — đăng " + ids.length + " bài đủ B1+B2+B3 (chưa có link) lên website"
-      : "Chưa có bài nào đủ B1+B2+B3 trong hàng đợi (hoặc tất cả đã có link)",
+      ? "Mở modal News — " + ids.length + " bài trong hàng đợi (chưa có link, chưa lỗi B1–B3)"
+      : "Chưa có bài nào đủ điều kiện (hết hàng đợi, tất cả đã có link, hoặc B1–B3 lỗi)",
     () => { NEWS_OPEN = true; paintNews(); },
     "act i");
   b.id = "newsbtn";
@@ -3146,7 +3149,7 @@ function newsModalNode() {
   const overlay = el("div", "overlay newsmodal");
   const modal = el("div", "modal newsmodal");
   const head = el("div", "mhead");
-  head.appendChild(el("span", "mid", "🌐 News · " + ids.length + " bài đủ B1+B2+B3"));
+  head.appendChild(el("span", "mid", "🌐 News · " + ids.length + " bài trong hàng đợi"));
   head.appendChild(helpChip([
     "Đăng báo lên website: B1 → Title, B2 → Featured Image, B3 → Description.",
     "Xử lý đăng/chạy nền bằng Chromium ẩn (headless); chỉ nút Đăng nhập mới mở cửa sổ để thao tác.",

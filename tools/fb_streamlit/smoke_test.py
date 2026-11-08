@@ -7266,6 +7266,11 @@ try:
           and "newscol left" in _p27a_fe and "newscol right" in _p27a_fe
           and "webpub_start" in _p27a_fe and "webpub_login" in _p27a_fe
           and "newsitem" in _p27a_fe and "_newsPubIds" in _p27a_fe)
+    check("P31a _newsPubIds: giữ MỌI bài hàng đợi trừ link đã có hoặc B1/B2/B3 lỗi "
+          "(bài đang chạy vẫn hiện với state 'Xử lý…', không bị lọc như trước)",
+          'st.b1 !== "done" || st.b2 !== "done" || st.b3 !== "done"' not in _p27a_fe
+          and 'st.b1 === "error"' in _p27a_fe
+          and 'row.link' in _p27a_fe)
     check("P28a phía CSS: modal News (modal.newsmodal + newscol + newsitem)",
           ".modal.newsmodal" in _p27a_fe and ".newscol" in _p27a_fe and ".newsitem" in _p27a_fe)
     check("P28a phía Python: grid_actions dispatch có webpub_start + webpub_login, "
