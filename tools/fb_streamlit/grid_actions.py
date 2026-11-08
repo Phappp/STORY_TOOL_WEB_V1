@@ -1486,6 +1486,50 @@ def scan_ref_urls(ctx: Ctx) -> dict:
             "sample": sample, "line": line, "ids": touched}
 
 
+def scan_refusals(ctx: Ctx) -> dict:
+    """Toàn workspace: đọc caption.txt + seo.md bằng is_refusal(); đổi state từ DONE sang REFUSED.
+
+    P33a: bài chạy xong trước khi có is_refusal() vẫn state=done (xanh lá). Quét này chỉ đọc file,
+    không gọi AI, nên chi phí 0. Sau quét, ô B1/B3 chuyển vàng — bấm ▶ riêng để chạy lại thật.
+    """
+    import steps as _steps
+    refused: list[str] = []
+    checked = 0
+    for sid in stories.list_story_ids(ctx.root):
+        story = stories.load_story(ctx.root, sid)
+        touched = False
+        for step in ("b1", "b3"):
+            block = story.get(step) or {}
+            if str(block.get("state") or "") != stories.DONE:
+                continue
+            folder = stories.story_dir(ctx.root, sid)
+            text = (folder / stories.STEP_FILE[step]).read_text(encoding="utf-8", errors="replace") \
+                   if (folder / stories.STEP_FILE[step]).is_file() else ""
+            if _steps.is_refusal(text):
+                stories.save_step_text(ctx.root, sid, step, text,
+                                       refused=True,
+                                       refusal_note="Quét P33a: nội dung là lời từ chối AI (state từng ghi done)",
+                                       provider=str(block.get("provider") or ""),
+                                       model=str(block.get("model") or ""))
+                refused.append(f"{sid}/{step}")
+                touched = True
+            checked += 1
+        # touched chưa được dùng (lỗi import) — giữ để extension
+    if not checked:
+        line = "Không có file caption.txt hay seo.md nào trong workspace."
+    else:
+        n = len(refused)
+        if n:
+            ids = sorted({r.split("/")[0] for r in refused})
+            line = (f"✗ {n} ô B1/B3 bị AI từ chối (ghi vàng): "
+                    + " · ".join(refused[:10]) + (" …" if n > 10 else "")
+                    + f" — mở từng bài bấm ▶ để chạy lại thật.")
+        else:
+            line = f"✓ Đã quét {checked} file — không có nội dung nào là từ chối AI."
+    return {"kind": "refusal_scan", "refused": len(refused), "line": line,
+            "ids": sorted({r.split("/")[0] for r in refused})}
+
+
 def io_export(ctx: Ctx, kind, ids) -> dict:
     """Export phần đang hiện -> {name, text} để lưới tải về bằng Blob (không ghi file nào ra ổ).
 

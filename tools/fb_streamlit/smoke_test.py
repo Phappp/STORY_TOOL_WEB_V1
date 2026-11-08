@@ -7389,6 +7389,30 @@ check("P33a frontend: CSS .sq.refused + SQ_WARN chứa 'refused'",
       and '"refused"' in _p33a_fe)
 # --- hết P33a ---
 
+# --- P33b: nút "🔍 Quét từ chối AI" trong modal Import · Export ---
+_p33b_ga   = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p33b_grid = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+_p33b_fe   = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+check("P33b grid_actions: scan_refusals() đọc caption.txt+seo.md bằng is_refusal(), đổi DONE→REFUSED, "
+      "trả {kind: 'refusal_scan', refused, line, ids}",
+      "def scan_refusals(ctx: Ctx) -> dict:" in _p33b_ga
+      and "is_refusal(text)" in _p33b_ga
+      and 'stories.save_step_text(ctx.root, sid, step, text,' in _p33b_ga
+      and '"kind": "refusal_scan"' in _p33b_ga
+      and "refused.append" in _p33b_ga)
+check("P33b grid.py: event 'refusal_scan' trong IO_SOURCES + _io_dispatch gọi ga.scan_refusals",
+      '"refusal_scan"' in _p33b_grid
+      and "elif src == \"refusal_scan\":" in _p33b_grid
+      and "ga.scan_refusals(ctx)" in _p33b_grid)
+check("P33b frontend: ioRefusalCard() + IO_REF + response handler 'refusal_scan' + ioSig cập nhật",
+      "function ioRefusalCard()" in _p33b_fe
+      and "let IO_REF" in _p33b_fe
+      and "kind === \"refusal_scan\") IO_REF = r" in _p33b_fe
+      and '(IO_REF || {}).refused' in _p33b_fe
+      and "Quét từ chối AI" in _p33b_fe
+      and "left.appendChild(ioRefusalCard())" in _p33b_fe)
+# --- hết P33b ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")

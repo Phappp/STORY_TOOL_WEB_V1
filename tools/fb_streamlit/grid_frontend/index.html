@@ -2243,6 +2243,7 @@ let IO_STATE = {};      // payload import gần nhất: reading | preview | comm
 let IO_EXPORT = {};     // payload export gần nhất: {format, name, text, count, note}
 let IO_B0 = {};         // payload "trích B0 còn thiếu" gần nhất
 let IO_SCAN = {};       // P23c: payload "quét sha1 ảnh thiếu url" gần nhất {matched, unmatched, sample, line}
+let IO_REF = {};        // P33a: payload "quét từ chối AI" gần nhất {refused, line}
 let IO_SEQ = 0;         // đếm response đã nạp — chữ ký khỏi phải stringify cả file export vài MB
 let IO_BUSY = false;    // đã gửi một file, chờ lưới trả lời: ô chọn file PHẢI khóa tới lúc đó, vì
                         // repaint() dựng lại input nên `pick.disabled = true` chỉ sống tới lượt vẽ kế.
@@ -2827,6 +2828,31 @@ function ioScanCard() {
         + "lượt sau vẫn còn cơ hội."]});
 }
 
+// P33a: quét nội dung từ chối AI trong caption.txt / seo.md — chỉ đọc file, không gọi AI.
+// Nút đặt ở đây vì đây là việc của TOÀN WORKSPACE, không phải của một bài.
+function ioRefusalCard() {
+  const st = IO_REF || {};
+  const told = st.refused != null || !!st.error;
+  const refused = Number(st.refused || 0);
+  const body = [];
+  if (st.error) body.push(ioNote("⚠ " + st.error, "bad"));
+  else if (told) body.push(ioNote((refused ? "✗ " : "✓ ") + String(st.line || ""), refused ? "bad" : "ok"));
+  else body.push(ioNote("Chưa quét lần nào — bấm nút dưới để lưới đọc caption.txt / seo.md của mọi bài "
+    + "và đổi ô xanh lá sang VÀNG (refused) khi nội dung là lời từ chối AI."));
+  const b = button("🔍 Quét từ chối AI (B1/B3)",
+    "Đi từng bài trong workspace: đọc file caption.txt (B1) và seo.md (B3), "
+      + "nếu nội dung khớp mẫu từ chối thì ghi state = refused (ô vàng). "
+      + "KHÔNG gọi AI, KHÔNG sửa nội dung file — chỉ đổi màu. Muốn chạy lại thật thì mở bài bấm ▶.",
+    bb => { bb.disabled = true; send({ source: "refusal_scan" }); });
+  body.push(b);
+  return card({ title: "🔍 Quét từ chối AI", state: st.error ? "error" : told ? (refused ? "pending" : "done") : "pending",
+    body: body,
+    help: ["Ô B1/B3 xanh lá nhưng AI trả về 'Tôi không thể viết…' → màu xanh lá sai (vì có file, có chữ).",
+      "Nút này đọc file trên đĩa bằng regex (không tốn lượt gọi AI) và đổi state thành 'refused' (vàng).",
+      "Sau quét: ô chuyển vàng → mở bài bấm ▶ để chạy lại B1/B3 thật.",
+      "Không đổi nội dung file: caption.txt / seo.md giữ nguyên, chỉ đổi màu trên lưới."]});
+}
+
 function ioNode() {
   if (!IO_OPEN) return null;
   const overlay = el("div", "overlay io");
@@ -2851,6 +2877,7 @@ function ioNode() {
   left.appendChild(ioExportCard());
   left.appendChild(ioB0Card());
   left.appendChild(ioScanCard());
+  left.appendChild(ioRefusalCard());
   body.appendChild(left);
   body.appendChild(ioPreviewCard());
   modal.appendChild(body);
@@ -2887,12 +2914,14 @@ function ingestIo() {
     if (String(r.source || "") === "export_request") IO_EXPORT = { error: why };
     else if (String(r.source || "") === "b0_retry") IO_B0 = { error: why };
     else if (String(r.source || "") === "ref_url_scan") IO_SCAN = { error: why };
+    else if (String(r.source || "") === "refusal_scan") IO_REF = { error: why };
     else IO_STATE = { kind: "preview", error: why };
     return;
   }
   if (kind === "export") IO_EXPORT = r;
   else if (kind === "b0_retry") IO_B0 = r;
   else if (kind === "ref_scan") IO_SCAN = r;
+  else if (kind === "refusal_scan") IO_REF = r;
   else if (kind === "detail") IO_DETAIL = r;
   else if (kind === "preview" || kind === "commit") { IO_STATE = r; if (kind === "commit") IO_B0 = {};
     // thẻ chi tiết gắn theo SỔ THỨ TỰ dòng — đổi file là sổ đổi theo, để nó treo lại là chỉ bài sai
@@ -2905,7 +2934,9 @@ function ioSig() {
     Number(ioModel().b0_todo || 0), ioCap(), Array.from(IO_CAPS).sort().join("|"),
     IO_ALL, (IO_DETAIL || {}).index === undefined ? "" : IO_DETAIL.index,
     // P23c: kết quả quét hiện trong thẻ "🧹 Ảnh thiếu link" — hai con số đổi thì vẽ lại, không đổi thì bỏ
-    (IO_SCAN || {}).matched, (IO_SCAN || {}).unmatched, (IO_SCAN || {}).error ? 1 : 0]);
+    (IO_SCAN || {}).matched, (IO_SCAN || {}).unmatched, (IO_SCAN || {}).error ? 1 : 0,
+    // P33a: kết quả quét từ chối AI hiện trong thẻ "🔍 Quét từ chối AI"
+    (IO_REF || {}).refused, (IO_REF || {}).error ? 1 : 0]);
 }
 
 function syncIo() {

@@ -44,7 +44,7 @@ READ_SOURCES = {"copy_request", "content_request", "image_request", "b0_request"
                 # quét lại qua `grid_video_scan`.
                 "video_chunk", "video_abort"}
 IO_SOURCES = {"import_read", "import_detail", "import_commit", "b0_retry", "export_request",
-              "ref_url_scan"}  # mọi việc của modal Import/Export (P23c thêm quét sha1 ảnh)
+              "ref_url_scan", "refusal_scan"}  # mọi việc của modal Import/Export (P23c + P33a)
 VIDEO_SOURCES = {"video_chunk", "video_abort"}  # tải video trong modal B4 — buffer nằm ở session
 VIDEO_UP_KEY = "grid_video_up"  # các mẩu đang ghồng trong RAM của phiên này
 VIDEO_SCAN_KEY = "grid_video_scan"  # mẩu cuối đã ghi xong -> lượt vẽ kế phải đọc lại folder
@@ -578,6 +578,11 @@ def _io(ctx: ga.Ctx, event: dict) -> ga.Outcome:
             out.b0_ids = out.io.pop("ids", [])
         elif src == "ref_url_scan":
             out.io = ga.scan_ref_urls(ctx)
+            scan_ids = out.io.pop("ids", [])
+            if scan_ids:
+                out.touched = list(out.touched or []) + scan_ids
+        elif src == "refusal_scan":
+            out.io = ga.scan_refusals(ctx)
             scan_ids = out.io.pop("ids", [])
             if scan_ids:
                 out.touched = list(out.touched or []) + scan_ids
