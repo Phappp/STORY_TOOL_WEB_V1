@@ -1053,32 +1053,34 @@ def _grid_account_who(rec: dict) -> str:
     return " · ".join(rec.get("providers") or [])
 
 
-def grid_usage_payload(providers) -> dict:
-    """Số usage cho ICON trên grid: CHỈ ĐỌC FILE (auth.json + session log), không spawn process.
+# ---------- P29a: payload usage cho icon grid (TTL cache, LIVE+CACHED theo codex_usage_all) ----------
+# Grid tick 2s, không thể spawn app-server mỗi tick (~2-3.2s/nhà). Cache 30s: số khớp màn 📊
+# (cùng nguồn LIVE/CACHED, cùng merge theo account_id), chỉ hỏi CLI mỗi 30s.
 
-    Đường LIVE `app-server` (~2-3.2 s/nhà, đo P18g) chỉ dành cho nút 📊 ở Cấu hình; grid gọi hàm
-    này mỗi tick nên phải là đọc file ~vươi ms. Chưa có số trong session log thì báo UNKNOWN
-    kèm lý do thật, không đoán bừa.
+_GRID_USAGE_TTL = 30  # giây
+_grid_usage_cache = {"t": 0.0, "data": None}
+
+
+def grid_usage_payload(providers, ttl: int = _GRID_USAGE_TTL) -> dict:
+    """Số usage cho ICON trên grid — hỏi LIVE (app-server) rồi fallback CACHED, giống nút 📊.
+
+    TTL cache `ttl` giây: grid gọi mỗi tick (~2s), chỉ spawn process CLI khi cache hết hạn.
+    Trả dict với `accounts` đã merge theo `account_id` (nhiều home cùng tài khoản = 1 dòng).
     """
+    now = time.monotonic()
+    if _grid_usage_cache["data"] is not None and (now - _grid_usage_cache["t"]) < ttl:
+        return _grid_usage_cache["data"]
     try:
-        out = []
-        for acc in codex_accounts(providers):
-            identity = codex_identity(Path(acc["home"]))
-            block, stamp = _codex_rate_limits_cached(Path(acc["home"]))
-            if block:
-                rec = _usage_result(block, "CACHED", _stamp_utc(stamp))
-            else:
-                rec = _usage_result({}, "UNKNOWN", "", "chưa có số nào trong session log của home này")
-            rec["identity"] = identity
-            rec["account_id"] = identity.get("account_id", "")
-            rec["plan"] = rec.get("plan") or identity.get("plan", "")
-            rec["providers"] = list(acc["providers"])
-            out.append(_grid_account_view(rec))
-        return {"accounts": out, "n_providers": sum(len(a.get("providers") or []) for a in out),
-                "stamp": datetime.now(timezone.utc).strftime("%H:%M:%S")}
+        raw = codex_usage_all(providers)
+        out = [_grid_account_view(rec) for rec in (raw.get("accounts") or [])]
+        result = {"accounts": out,
+                  "n_providers": int(raw.get("n_providers") or 0),
+                  "stamp": datetime.now(timezone.utc).strftime("%H:%M:%S")}
     except Exception:
-        # Icon không được phép làm grid chết — trả rỗng là lưới bỏ vẽ icon, không phải báo lỗi.
-        return {"accounts": [], "n_providers": 0, "stamp": ""}
+        result = {"accounts": [], "n_providers": 0, "stamp": ""}
+    _grid_usage_cache["t"] = now
+    _grid_usage_cache["data"] = result
+    return result
 
 
 def test_connection(provider) -> str:

@@ -4849,11 +4849,11 @@ check("P18f nút nằm ĐÚNG chỗ hai nút đăng nhập (Cấu hình ▸ Prov
 _p18f_grid_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
 _p18f_steps_src = (Path(__file__).resolve().parent / "steps.py").read_text(encoding="utf-8")
 _p18f_ga = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
-check("P18f là chỗ XEM chứ không phải cái phanh: grid_actions / steps không đụng hạn mức khi chạy; "
-      "grid.py chỉ GỬI payload hiển thị cho icon (P29a) mà không gọi đường LIVE nặng — "
-      "⚡ và ▶ hành xử y như trước (đúng luật 'bỏ check chứ không thay check')",
+check("P18f là chỗ XEM chứ không phải cái phanh: grid_actions / steps không đụng hạn mức khi chạy, "
+      "⚡ và ▶ không đọc usage trước khi chạy (đúng luật 'bỏ check chứ không thay check'); "
+      "grid.py chỉ gửi payload cho icon hiển thị (P29a)",
       "codex_usage" not in _p18f_ga and "codex_usage" not in _p18f_steps_src
-      and "codex_usage_all" not in _p18f_grid_src and "_codex_usage_payload" in _p18f_grid_src)
+      and "_codex_usage_payload" in _p18f_grid_src)
 
 # Nút thật trong trang Providers: stub codex_usage để KHÔNG spawn CLI, chỉ đo đường chữ ra màn hình.
 db.add_provider(conn, "P18fCodex", "codex_cli", "", "", "")
@@ -7292,12 +7292,11 @@ check("P29a icon usage: frontend có nút bolt + thẻ hover usagetip + vòng tr
       and "USAGE_TIP_ID" in _p29a_fe and "usageDonut(a)" in _p29a_fe
       and 'fg.setAttribute("pathLength", "100")' in _p29a_fe
       and "stroke-dasharray" in _p29a_fe and '"ufg " + (left >= 30 ? "ok" : left > 0 ? "mid" : "low")' in _p29a_fe)
-check("P29a payload chỉ ĐỌC FILE (codex_accounts + codex_identity + _codex_rate_limits_cached), "
-      "KHÔNG qua codex_usage_all (đường LIVE spawn app-server ~2-3 s/nhà) — grid tick 2s phải rẻ; "
-      "grid.py gửi payload đúng một chỗ trong render_component",
+check("P29a payload dùng codex_usage_all (LIVE+CACHED, cùng nguồn với nút 📊) nhưng có TTL cache 30s "
+      "để không spawn process mỗi tick; grid.py gọi đúng _codex_usage_payload một chỗ",
       "def grid_usage_payload" in _p29a_prov
-      and "_codex_rate_limits_cached(Path(acc[\"home\"]))" in _p29a_prov
-      and "codex_usage_all" not in _p29a_prov.split("def grid_usage_payload")[1].split("\ndef ")[0]
+      and "codex_usage_all" in _p29a_prov.split("def grid_usage_payload")[1].split("\ndef ")[0]
+      and "_GRID_USAGE_TTL" in _p29a_prov
       and "codex_usage=_codex_usage_payload()" in _p29a_grid)
 # --- hết P29a ---
 
