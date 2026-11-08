@@ -3148,7 +3148,7 @@ function newsModalNode() {
   head.appendChild(el("span", "mid", "🌐 News · " + ids.length + " bài đủ B1+B2+B3"));
   head.appendChild(helpChip([
     "Đăng báo lên website: B1 → Title, B2 → Featured Image, B3 → Description.",
-    "Cần Chromium trên máy chạy Streamlit + phiên đăng nhập thủ công.",
+    "Xử lý đăng/chạy nền bằng Chromium ẩn (headless); chỉ nút Đăng nhập mới mở cửa sổ để thao tác.",
     "Cột phải hiện TRẠNG THÁI THẬT trong story.json (đang lưu / cần đối soát / xong / lỗi) — "
       + "sống qua polling 2s, không phải chỉ kết quả lượt bấm cuối."
   ]));

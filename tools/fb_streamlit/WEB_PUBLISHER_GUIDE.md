@@ -37,6 +37,7 @@
 
 - Trong Grid bấm `🔐 Mở Chromium và đăng nhập thủ công`. Trình duyệt Chromium chạy trên **máy đang chạy Streamlit**, không tự mở trên máy client nếu Streamlit ở VPS/server.
 - Đăng nhập tài khoản website trực tiếp trong Chromium (tự nhập mật khẩu và xác thực 2 bước nếu có). Đợi giao diện Posts hiện nút **New post**, sau đó đóng cửa sổ trình duyệt.
+- Chạy **Đăng / Đối soát link tự động** hiện dùng Chromium ẩn (`headless`), không mở tab; chỉ nút **Đăng nhập thủ công** mở cửa sổ Chromium để người dùng thao tác.
 - Playwright lưu trạng thái đăng nhập vào thư mục `.web-publisher-browser/` ở workspace. Đây là **dữ liệu nhạy cảm**, không chép hoặc chia sẻ, nên đặt workspace trên máy riêng và hạn chế quyền đọc file.
 - Nếu hết hạn phiên: nhấn nút mở Chromium, đăng nhập lại bằng chính profile này. Không gửi mật khẩu, session token, cookie vào hội thoại.
 - Chrome/Edge đang đăng nhập sẵn thông thường **không chia sẻ phiên** với Playwright Chromium; cần đăng nhập một lần trong cửa sổ Playwright.
@@ -62,5 +63,5 @@
 - Đã có HTML tĩnh xác nhận các selector chính nhưng chưa xác minh JS sau Save, thời gian upload ảnh và hành vi đăng thật.
 - Một số editor đòi thao tác nhập qua API của chính editor để cập nhật React/Vue state. Nếu sau Save nội dung bị trống, cần sửa `_fill_editor` dựa trên HTML/JS editor.
 - Tìm hàng bằng Title có thể không hoạt động nếu bảng rút gọn Title, phân trang, hoặc bài có cùng Title: khi đó hệ thống **dừng để đối soát**, không lấy nhầm link.
-- Chạy ứng dụng trên server không có desktop thì nút đăng nhập Chromium dạng có giao diện sẽ không hoạt động; cần desktop/remote desktop.
+- Chạy ứng dụng trên server không có desktop thì các thao tác **Đăng / Đối soát tự động** vẫn chạy bằng Chromium ẩn; chỉ **Đăng nhập thủ công** cần desktop/remote desktop để mở cửa sổ Chromium.
 - Không nhập token, mật khẩu hoặc cookie vào cấu hình.

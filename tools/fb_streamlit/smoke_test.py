@@ -7298,6 +7298,13 @@ try:
           "trước restoreView/finishCopy nên cột phải đổi đúng theo state LIVE mới nhận",
           ("syncModal();\n    syncIo();\n    if (NEWS_OPEN) paintNews();\n    restoreView(view);"
            in _p27a_fe))
+    _p32a_wp = (Path(__file__).resolve().parent / "web_publisher.py").read_text(encoding="utf-8")
+    check("P32a web publisher ẩn Chromium khi xử lý: browser_context/publish_one/reconcile_auto "
+          "mặc định headed=False (headless), riêng login thủ công vẫn headed=True để thao tác đăng nhập",
+          'def browser_context(root: Path, playwright, headed: bool = False, *, site: str = DEFAULT_SITE):' in _p32a_wp
+          and 'def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAULT_SITE) -> str:' in _p32a_wp
+          and 'def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = False) -> str:' in _p32a_wp
+          and 'def login(root: Path, *, site: str = DEFAULT_SITE, headed: bool = True) -> None:' in _p32a_wp)
 finally:
     paths.data_dir = _p27a_dd
     stories._recents_path = _p27a_rec

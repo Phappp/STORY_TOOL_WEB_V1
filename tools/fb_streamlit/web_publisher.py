@@ -124,7 +124,7 @@ def validate_public_url(candidate: str) -> str:
     return url
 
 
-def browser_context(root: Path, playwright, headed: bool = True, *, site: str = DEFAULT_SITE):
+def browser_context(root: Path, playwright, headed: bool = False, *, site: str = DEFAULT_SITE):
     """Persistent local login, deliberately outside workspace story folders."""
     profile = Path(root) / profile_name(site)
     profile.mkdir(parents=True, exist_ok=True)
@@ -134,14 +134,14 @@ def browser_context(root: Path, playwright, headed: bool = True, *, site: str = 
     )
 
 
-def login(root: Path, *, site: str = DEFAULT_SITE) -> None:
+def login(root: Path, *, site: str = DEFAULT_SITE, headed: bool = True) -> None:
     """Launch visible browser for the operator to log in; close when finished.
 
     Note: close browser AFTER login, then press the publisher button in Streamlit.
     """
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
-        context = browser_context(root, p, site=site)
+        context = browser_context(root, p, headed=headed, site=site)
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(login_url(site), wait_until='domcontentloaded', timeout=45000)
@@ -614,7 +614,7 @@ def _find_url_after_save(page, sel: dict[str, str], title: str, *, site: str = D
     )
 
 
-def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = True) -> str:
+def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = False) -> str:
     """Recover public URL without republishing a post already saved on site."""
     root = Path(root)
     story = stories.load_story(root, sid)
@@ -667,7 +667,7 @@ def reset_needs_review_for_new_post(root: Path, sid: str, *, site: str) -> None:
                                       'previous_attempt_may_exist': True})
 
 
-def publish_one(root: Path, sid: str, *, headed: bool = True, site: str = DEFAULT_SITE) -> str:
+def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAULT_SITE) -> str:
     """Synchronous, conservative single-post publisher.
 
     Any uncertain save becomes `needs_review` and is blocked on rerun. This
