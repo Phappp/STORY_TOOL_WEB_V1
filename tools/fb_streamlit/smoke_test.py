@@ -7292,11 +7292,16 @@ check("P29a icon usage: frontend có nút bolt + thẻ hover usagetip + vòng tr
       and "USAGE_TIP_ID" in _p29a_fe and "usageDonut(a)" in _p29a_fe
       and 'fg.setAttribute("pathLength", "100")' in _p29a_fe
       and "stroke-dasharray" in _p29a_fe and '"ufg " + (left >= 30 ? "ok" : left > 0 ? "mid" : "low")' in _p29a_fe)
-check("P29a payload dùng codex_usage_all (LIVE+CACHED, cùng nguồn với nút 📊) nhưng có TTL cache 30s "
-      "để không spawn process mỗi tick; grid.py gọi đúng _codex_usage_payload một chỗ",
+check("P29a payload dùng codex_usage (LIVE+CACHED) cho TỪNG NHÀ CLI (không gộp theo account_id như "
+      "codex_usage_all — grid cần phân biệt CODEX1/CODEX2 vì ⚡/▶ chạy ở nhà riêng P18h), "
+      "capped=True khi rate_limit_reached/ordinary_allowed=False (donut đỏ 0 + nhãn 'đã chạm trần'); "
+      "TTL cache 30s không spawn process mỗi tick; grid.py gọi đúng _codex_usage_payload một chỗ",
       "def grid_usage_payload" in _p29a_prov
-      and "codex_usage_all" in _p29a_prov.split("def grid_usage_payload")[1].split("\ndef ")[0]
+      and "codex_usage(max(3" in _p29a_prov
+      and "codex_accounts(providers)" in _p29a_prov
+      and "by_id" not in _p29a_prov.split("def grid_usage_payload")[1].split("\ndef ")[0]
       and "_GRID_USAGE_TTL" in _p29a_prov
+      and "capped" in _p29a_prov
       and "codex_usage=_codex_usage_payload()" in _p29a_grid)
 # --- hết P29a ---
 

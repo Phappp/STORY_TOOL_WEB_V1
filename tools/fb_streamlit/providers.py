@@ -1018,39 +1018,51 @@ def codex_usage_all_text(result: dict) -> str:
 
 
 def _grid_account_view(rec: dict) -> dict:
-    """Một tài khoản cho icon usage trên grid — đủ nhẹ để gửi qua component mỗi tick.
+    """Một dòng cho icon usage trên grid — đủ nhẹ để gửi qua component mỗi tick.
 
-    Vòng tròn % lấy từ cửa sổ `primary` (hoặc cửa sổ thứ nhất nếu CLI không tách primary),
-    vì đó là hạn mức anh nhìn thấy khi chạy ⚡/▶. `left` là % CHƯA dùng — con số anh cần để
-    quyết định có để hàng đợi chạy tiếp không (số `used` của màn hạn mức P18f không dùng lại
-    nguyên văn vì vòng tròn đọc đẹp hơn khi 'còn lại' là số nằm trong tâm).
+    Vòng tròn % lấy từ cửa sổ `primary` (hoặc cửa sổ thứ nhất nếu CLI không tách primary).
+    `left` là % CHƯA dùng. Khi tài khoản ĐÃ CHẠM TRẦN (`reached` hoặc `ordinary_allowed=False`),
+    ép `left=0` và đánh cờ `capped=True` — donut hiện 0 đỏ kèm nhãn "đã chạm trần", không để
+    con số "còn 98% của cửa sổ 5h" che mất thực tế "hết hạn mức 7 ngày".
     """
     source = str(rec.get("source") or "")
     if source == "UNKNOWN":
         return {"who": _grid_account_who(rec), "source": "UNKNOWN", "used": None,
                 "left": None, "plan": str(rec.get("plan") or ""),
-                "reason": str(rec.get("reason") or "CLI không trả lời")}
+                "reason": str(rec.get("reason") or "CLI không trả lời"), "capped": False}
     windows = [w for w in (rec.get("windows") or []) if str(w.get("kind")) == "primary"] or \
         (rec.get("windows") or [])
     if not windows:
         return {"who": _grid_account_who(rec), "source": source, "used": None, "left": None,
-                "plan": str(rec.get("plan") or ""), "reason": "không có cửa sổ hạn mức"}
+                "plan": str(rec.get("plan") or ""), "reason": "không có cửa sổ hạn mức",
+                "capped": False}
+    # "chạm trần" mới là số anh cần theo dõi để quyết định có nên bấm ▶ tiếp hay không —
+    # cửa sổ PRIMARY (5 giờ, used thấp) che mất thực tế "hết hạn mức 7 ngày" nếu chỉ lấy primary.
+    # max() trên MỌI cửa sổ primary + secondary = cửa sổ đang thực sự ràng buộc (7 ngày, used cao).
     top = max(float(w.get("used") or 0) for w in windows)
+    capped = bool(rec.get("reached")) or (rec.get("ordinary_allowed") is False)
+    left = 0.0 if capped else round(max(0.0, 100.0 - top), 1)
     return {"who": _grid_account_who(rec), "source": source,
-            "used": round(top, 1), "left": round(max(0.0, 100.0 - top), 1),
-            "plan": str(rec.get("plan") or ""), "reason": ""}
+            "used": round(top, 1), "left": left,
+            "plan": str(rec.get("plan") or ""), "reason": "", "capped": capped}
 
 
 def _grid_account_who(rec: dict) -> str:
-    """Tên tài khoản cho icon: email che (P18i) → id 8 ký tự → tên bộ. Không bí mật, che sẵn."""
+    """Tên tài khoản cho icon: email che (P18i) + TÊN BỘ CODEX (CODEX1/CODEX2…).
+
+    Hai home cùng một email (một tài khoản, hai nhà CLI) phải PHÂN BIỆT được trên grid bằng
+    tên bộ đứng sau, nếu không anh chỉ thấy một dòng "ke***@gmail.com" không biết nhà nào chạm trần.
+    """
+    providers = " · ".join(rec.get("providers") or [])
     identity = rec.get("identity") or {}
     email = str(identity.get("email") or "")
     if email:
-        return email
+        return f"{email} ({providers})" if providers else email
     aid = str(rec.get("account_id") or "")
     if aid:
-        return f"id {aid[:8]}"
-    return " · ".join(rec.get("providers") or [])
+        who = f"id {aid[:8]}"
+        return f"{who} ({providers})" if providers else who
+    return providers
 
 
 # ---------- P29a: payload usage cho icon grid (TTL cache, LIVE+CACHED theo codex_usage_all) ----------
@@ -1062,19 +1074,37 @@ _grid_usage_cache = {"t": 0.0, "data": None}
 
 
 def grid_usage_payload(providers, ttl: int = _GRID_USAGE_TTL) -> dict:
-    """Số usage cho ICON trên grid — hỏi LIVE (app-server) rồi fallback CACHED, giống nút 📊.
+    """Số usage cho ICON trên grid — hỏi LIVE (app-server) rồi fallback CACHED, y hệt nút 📊.
+
+    Mỗi NHÀ CLI (home) là một dòng riêng — KHÔNG gộp theo `account_id` như `codex_usage_all`
+    (hàm đó gộp để trả lời câu "thêm provider có tăng dung lượng không"), mà grid cần phân biệt
+    CODEX1 (home mặc định) và CODEX2 (home riêng) vì ⚡/▶ của từng bộ chạy ở nhà của nó (P18h):
+    một nhà chạm trần 7 ngày còn nhà kia chưa — gộp sẽ che mất điều đó.
 
     TTL cache `ttl` giây: grid gọi mỗi tick (~2s), chỉ spawn process CLI khi cache hết hạn.
-    Trả dict với `accounts` đã merge theo `account_id` (nhiều home cùng tài khoản = 1 dòng).
     """
     now = time.monotonic()
     if _grid_usage_cache["data"] is not None and (now - _grid_usage_cache["t"]) < ttl:
         return _grid_usage_cache["data"]
     try:
-        raw = codex_usage_all(providers)
-        out = [_grid_account_view(rec) for rec in (raw.get("accounts") or [])]
+        # Một nhà một lượt, tuần tự trong ngân sách (giữ kỷ luật của P18g), nhưng KHÔNG gộp.
+        accounts = codex_accounts(providers)
+        out = []
+        start = time.monotonic()
+        for acc in accounts:
+            left = int(USAGE_ALL_BUDGET - (time.monotonic() - start))
+            if left < 1:
+                rec = _usage_result({}, "UNKNOWN", "", f"hết ngân sách {USAGE_ALL_BUDGET}s của một lượt xem")
+            else:
+                rec = codex_usage(max(3, min(USAGE_TIMEOUT, left)), Path(acc["home"]))
+            identity = codex_identity(Path(acc["home"]))
+            rec["identity"] = identity
+            rec["account_id"] = rec.get("account_id") or identity.get("account_id", "")
+            rec["plan"] = rec.get("plan") or identity.get("plan", "")
+            rec["providers"] = list(acc["providers"])
+            out.append(_grid_account_view(rec))
         result = {"accounts": out,
-                  "n_providers": int(raw.get("n_providers") or 0),
+                  "n_providers": sum(len(a.get("providers") or []) for a in out),
                   "stamp": datetime.now(timezone.utc).strftime("%H:%M:%S")}
     except Exception:
         result = {"accounts": [], "n_providers": 0, "stamp": ""}

@@ -3232,10 +3232,16 @@ function usageDonut(a) {
   const fg = document.createElementNS(SVG_NS, "circle");
   fg.setAttribute("cx", "18"); fg.setAttribute("cy", "18"); fg.setAttribute("r", "15.9");
   fg.setAttribute("pathLength", "100");
+  const capped = a.capped === true;  // đã chạm trần (rate_limit_reached / ordinary_allowed=false)
   const left = (typeof a.left === "number") ? Math.max(0, Math.min(100, a.left)) : null;
   let cls = "ufg none";
-  if (left === null) { fg.setAttribute("stroke-dasharray", "0 100"); }
-  else {
+  if (capped) {
+    // Vẽ vòng ĐỎ TRẮNG (0% còn) — donut hiện 0, không để con số % còn của cửa sổ ngắn che.
+    fg.setAttribute("stroke-dasharray", "0 100");
+    cls = "ufg low";
+  } else if (left === null) {
+    fg.setAttribute("stroke-dasharray", "0 100");
+  } else {
     fg.setAttribute("stroke-dasharray", left.toFixed(1) + " " + (100 - left).toFixed(1));
     cls = "ufg " + (left >= 30 ? "ok" : left > 0 ? "mid" : "low");
   }
@@ -3243,7 +3249,7 @@ function usageDonut(a) {
   svg.appendChild(fg);
   const t = document.createElementNS(SVG_NS, "text");
   t.setAttribute("x", "18"); t.setAttribute("y", "21.5"); t.setAttribute("text-anchor", "middle");
-  t.textContent = left === null ? "?" : Math.round(left);
+  t.textContent = capped ? "0" : (left === null ? "?" : Math.round(left));
   svg.appendChild(t);
   return svg;
 }
@@ -3269,9 +3275,12 @@ function fillUsageTip() {
   accounts.forEach(a => {
     const row = el("div", "usagerow");
     row.appendChild(usageDonut(a));
-    row.appendChild(el("span", "usagename", String(a.who || "(không gọi được tên)") + (a.plan ? " · " + a.plan : "")));
-    row.appendChild(el("span", "usagesrc",
-      a.source === "UNKNOWN" ? "chưa có số" : (a.source === "LIVE" ? "ngay lúc này" : "bản cuối CLI ghi")));
+    const who = String(a.who || "(không gọi được tên)") + (a.plan ? " · " + a.plan : "");
+    row.appendChild(el("span", "usagename", who));
+    const src = a.source === "UNKNOWN" ? "chưa có số"
+             : (a.source === "LIVE" ? "ngay lúc này" : "bản cuối CLI ghi");
+    const cap = (a.capped === true) ? " · ĐÃ CHẠM TRẦN — chờ reset" : "";
+    row.appendChild(el("span", "usagesrc", src + cap));
     t.appendChild(row);
   });
   const stamp = String((MODEL.codex_usage || {}).stamp || "");
