@@ -856,26 +856,27 @@ function tabField(tab) { return tab === "b2" ? "Ảnh" : tab === "b4" ? "Video" 
 
 // Xin nội dung/ảnh từ Python (component không tự đọc file) — ghi cache theo dấu mốc của folder story.
 // `short` = nút copy chỉ là một ICON: nhãn báo phải gọn một ký tự, dài là méo đầu thẻ.
-function requestContent(row, field, mode, flashId, short) {
+function requestContent(row, field, mode, flashId, short, tab) {
   const rid = eventId();
   const key = contentKey(row, field);
   NOTES.delete(key);
-  WAITING.set(rid, { keys: [key], key: key, fields: [field], field: field,
-                     id: String(row.id), mode: mode, flash: flashId || "", short: !!short, at: Date.now() });
   const source = mode === "copy" ? "copy_request"
     : (field === "Ảnh" ? "image_request" : (field === TAB_FIELD.b0 ? "b0_request" : "content_request"));
+  WAITING.set(rid, { keys: [key], key: key, fields: [field], field: field,
+                     id: String(row.id), mode: mode, flash: flashId || "", short: !!short,
+                     at: Date.now(), tab: tab || "", source: source });
   send({ source: source, id: row.id, field: field, request_id: rid });
 }
-
 // Một tab modal = MỘT request cho cả kết quả lẫn prompt (P18a).
 // Streamlit chỉ chuyển đúng MỘT event mỗi lượt script, nên hai send() liền nhau (content + prompt)
 // từng làm mất cái thứ hai — mà WAITING đã nhân khóa nội dung đó thì JS không bao giờ xin lại,
 // modal kẹt hẳn "… đang đọc nội dung từ folder story". Python gom lô trong grid_actions.modal_payload.
-function requestModal(row, fields) {
+function requestModal(row, fields, tab) {
   const rid = eventId();
   const keys = fields.map(f => contentKey(row, f));
   keys.forEach(k => NOTES.delete(k));
-  WAITING.set(rid, { keys: keys, fields: fields, id: String(row.id), mode: "show", flash: "", at: Date.now() });
+  WAITING.set(rid, { keys: keys, fields: fields, id: String(row.id), mode: "show", flash: "",
+                     at: Date.now(), tab: tab || "", source: "modal_request" });
   send({ source: "modal_request", id: row.id, fields: fields, request_id: rid });
   scheduleWaitRetry();
 }
@@ -884,21 +885,42 @@ function requestModal(row, fields) {
 // nên tự hẹn một lần vẽ lại sau đúng một trần chờ: request lạc được xin lại, không treo vô hạn.
 let WAIT_TIMER = null;
 function scheduleWaitRetry() {
-  if (WAIT_TIMER) return;  // một lần hẹn đủ: repaint sẽ xét hết mọi entry quá hạn cùng lúc
+  if (WAIT_TIMER) return;  // một lần hẹn đủ: xét hết mọi entry quá hạn cùng lúc
   WAIT_TIMER = setTimeout(() => {
     WAIT_TIMER = null;
-    if (expiredWaits() > 0) repaint();
+    reissueExpiredWaits();  // P36c: chỉ repaint KHÔNG xong chuyện (chữ vẫn thiếu); phải xin lại request
   }, WAIT_EXPIRE_MS + 400);
 }
+// P36c: xóa entry quá hạn + tự XIN LẠI chính request đó (nếu vẫn đứng ở đúng bài/tab). Trọn vẹn
+// câu "next sang story khác rồi quay lại mới hết kẹt": trước đây response lạc chỉ bị ĐẶT MỘT CÂU CHUYỆN
+// XÓA, không ai xin lại, nên modal "đang đọc" vô hạn. Giờ tự làm lại đúng cái anh từng phải bấm tay.
 function expiredWaits() {
   const now = Date.now();
-  let n = 0;
+  const out = [];
   WAITING.forEach((w, rid) => {
     if (now - Number(w.at || 0) <= WAIT_EXPIRE_MS) return;
-    n++;
+    out.push(w);
     WAITING.delete(rid);  // xóa luôn để lần xin lại không bị chính nó chặn
   });
-  return n;
+  return out;
+}
+function reissueExpiredWaits() {
+  const dead = expiredWaits();
+  if (!dead.length) return;
+  const ref = modalRef();
+  dead.forEach(w => {
+    // Chỉ xin lại nếu MẪU request đó vẫn đang mở (đúng bài + đúng tab), không spam request thừa.
+    const live = w.mode !== "copy" && ref && String(ref.id) === String(w.id)
+      && (w.tab == null || w.tab === ref.tab);
+    const row = findRow(String(w.id));
+    if (live && row) {
+      const fields = Array.isArray(w.fields) && w.fields.length ? w.fields : [w.field];
+      (w.source === "b0_request" || fields[0] === TAB_FIELD.b0)
+        ? ensureOne(row, fields[0])
+        : requestModal(row, fields, w.tab);
+    }
+  });
+  repaint();  // modal mới: modalSig đổi theo copy_response mới về; lỗi thiếu chữ tự hiện spinner
 }
 
 // response vừa về sau 1 request -> nạp cache (việc copy làm sau khi DOM đã vẽ, xem finishCopy).
@@ -1161,7 +1183,7 @@ function ensureTab(row, tab) {
   let asked = false;  // đang có request sống phủ một trong mấy khóa này -> chưa được xin trùng
   WAITING.forEach(w => { if ((w.keys || [w.key]).some(k => askKeys.indexOf(k) >= 0)) asked = true; });
   if (asked) return;
-  requestModal(row, ask);
+  requestModal(row, ask, tab);
 }
 function ensureOne(row, field) {  // riêng B0: một request cũ đã mang đủ cả caption lẫn ảnh
   const key = contentKey(row, field);

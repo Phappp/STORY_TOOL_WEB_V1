@@ -2722,7 +2722,7 @@ def _p18_fn(name):
 
 check("P18a modal chỉ xin MỘT lần cho cả tab: ensureTab đứng đầu modalNode, không còn đường xin lẻ",
       "ensureTab(row, ref.tab)" in _p18_fn("modalNode") and "ensureContent" not in _p18_js
-      and "ensurePrompt" not in _p18_js and "requestModal(row, ask)" in _p18_fn("ensureTab"))
+      and "ensurePrompt" not in _p18_js and "requestModal(row, ask, tab)" in _p18_fn("ensureTab"))
 check("P18a phần vẽ thẻ kết quả/thẻ prompt KHÔNG được gửi event — đó là chỗ từng làm mất request thứ hai",
       "send(" not in _p18_fn("modalBody") + _p18_fn("promptCard") + _p18_fn("resultCards")
       and "requestContent" not in _p18_fn("modalBody") + _p18_fn("promptCard")
@@ -7545,6 +7545,25 @@ check("P36b B4 thay thanh ngang bằng VÒNG TRÒN % giữa khung mờ: progress
       and 'frame.classList.add("bad");' in _p36b_player
       and "vidbar" not in _p36b_player and "fill.style.width" not in _p36b_player)
 # --- hết P36b ---
+
+# --- P36c: B1/B2/B3 modal kẹt "đang đọc" — response lạc thì TỰ xin lại request (giống P36a với video) ---
+_p36c_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p36c_reissue = _p36c_fe.split("function reissueExpiredWaits")[1].split("\n}")[0]
+_p36c_retr = _p36c_fe.split("function scheduleWaitRetry")[1].split("\n}")[0]
+_p36c_reqm = _p36c_fe.split("function requestModal(row, fields, tab)")[1].split("\n}")[0]
+check("P36c request modal ghi lại tab + source vào WAITING để xin lại đúng bài/tab khi response lạc",
+      'tab: tab || "", source: "modal_request"' in _p36c_reqm
+      and "requestModal(row, ask, tab)" in _p36c_fe)
+check("P36c khi WAITING hết hạn (6s) KHÔNG chỉ xóa rồi im lặng: scheduleWaitRetry gọi reissueExpiredWaits, "
+      "chức năng này DÒ row hiện tại + tab hiện rồi tự requestModal / ensureOne lại MỘT request sạch, "
+      "hết cảnh 'next sang story khác rồi quay lại mới hết kẹt'",
+      "reissueExpiredWaits();" in _p36c_retr
+      and "const dead = expiredWaits();" in _p36c_reissue
+      and "w.mode !== \"copy\" && ref && String(ref.id) === String(w.id)" in _p36c_reissue
+      and "w.tab == null || w.tab === ref.tab" in _p36c_reissue
+      and "ensureOne(row, fields[0])" in _p36c_reissue
+      and "requestModal(row, fields, w.tab)" in _p36c_reissue)
+# --- hết P36c ---
 
 # cleanup test rows
 c = db.connect()
