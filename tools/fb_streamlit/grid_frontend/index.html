@@ -3588,8 +3588,23 @@ function modalSig() {
     String(MODEL.video_play_max || 0)]);
 }
 
+// P34a: phần phụ RIÊNG của chữ ký modal — thứ KHÔNG nằm trong model (bản dịch đã dịch, bộ Dịch
+// đang chọn) mà modal phải tự vẽ lại khi đổi. Tách khỏi modalSig (P21c đã đóng chuỗi video_play_max
+// ở đúng vị trí cuối mảng) nên ghép vào sig bên ngoài, không đụng token cũ.
+function modalTransSig() {
+  const ref = modalRef();
+  if (!ref) return "";
+  const row = findRow(ref.id);
+  if (!row) return "";
+  const dtext = CONTENT.get(contentKey(row, "Dịch"));
+  const dnote = NOTES.get(contentKey(row, "Dịch"));
+  return (dtext != null ? "D:" + dtext.length : "") + (dnote != null ? "N:" + dnote.length : "")
+    + "|" + String(Array.isArray(MODEL.defaults.translate) ? MODEL.defaults.translate.join("|")
+                                                           : (MODEL.defaults.translate || ""));
+}
+
 function syncModal() {
-  const sig = modalSig();
+  const sig = modalSig() + "|" + modalTransSig();  // P34a: + state Dịch (bản dịch / bộ Dịch đang chọn)
   if (sig === LAST_MODAL_SIG) return;
   LAST_MODAL_SIG = sig;
   const root = document.getElementById("root");

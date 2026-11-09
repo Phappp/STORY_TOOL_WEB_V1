@@ -7425,10 +7425,12 @@ check("P34a grid_actions: _translate() đọc caption/seo, gọi provider Dịch
       and '"field": "Dịch"' in _p34a_ga
       and 'prov.chat(provider, model, prompt' in _p34a_ga
       and "stories.step_text(ctx.root, sid, step)" in _p34a_ga)
-check("P34a grid_actions dispatch: event 'translate' gọi _translate và trả qua out.copy (kênh copy_response)",
+check("P34a grid_actions dispatch: event 'translate' gọi _translate và trả payload qua out.copy (kênh copy_response), "
+      "lines riêng ra out.lines (không gộp sai)",
       'elif source == "translate":' in _p34a_ga
-      and "_translate(ctx, sid, step" in _p34a_ga
-      and "out.copy, out.lines = _translate" in _p34a_ga)
+      and "tr_payload, tr_lines = _translate(ctx, sid, step" in _p34a_ga
+      and "out.copy = tr_payload" in _p34a_ga
+      and "list(out.lines) + tr_lines" in _p34a_ga)
 check("P34a grid.py: ô 'Dịch' (PROV_KEYS translate) + _collect gửi 'translate' qua grid_copy_response + payload defaults",
       '"translate": "grid_prov_translate"' in _p34a_grid
       and '"modal_request", "translate"' in _p34a_grid

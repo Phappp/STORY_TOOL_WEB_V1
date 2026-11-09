@@ -2274,8 +2274,11 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "translate":
             # P34a: dịch B1/B3 sang tiếng Việt — CHỈ hiện trên UI (kênh copy), không ghi caption.txt/seo.md
             # cũng không đụng story.json. Dùng đúng provider anh chọn ở ô "Dịch" đầu lưới.
-            out.copy, out.lines = _translate(ctx, sid, step, str(event.get("request_id") or "")), \
-                                  out.lines
+            # _translate trả (payload, lines) — payload vào out.copy (đi copy_response), lines vào out.lines.
+            tr_payload, tr_lines = _translate(ctx, sid, step, str(event.get("request_id") or ""))
+            out.copy = tr_payload
+            if tr_lines:
+                out.lines = list(out.lines) + tr_lines
         else:
             out.lines = [f"Event không hợp lệ: {source or '(trống)'}"]
     except (stories.WorkspaceError, prov.ProviderError) as exc:
