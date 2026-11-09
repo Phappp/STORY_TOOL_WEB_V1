@@ -241,6 +241,8 @@
   /* P36a: % TẢI NỘI DUNG video B4 trong modal — thanh + chữ con số (đọc từ chính <video>).
      Dùng cùng khuôn .vidbar của ô tải (P21c) để hai thanh tiến độ nhìn như một họ. */
   .vidplay .vidbar { margin-top:2px; }
+  .vidplay .vidbar.bad { border-color:var(--error-b); }
+  .vidplay .vidbar.bad i { background:var(--error); }
   /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
   button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
@@ -1720,6 +1722,10 @@ function vidPlayMax() { return Number(MODEL.video_play_max || 0) || 8 * 1048576;
 
 // P21i: thẻ B4 PHÁT thật video trong folder. Bytes KHÔNG đi qua message component như chiều tải lên
 // (P21c) — Python chỉ đưa URL /media/, trình duyệt tự xin qua HTTP nên 8 MB là chuyện bình thường.
+// P36a: % tải đọc từ CHÍNH <video> (buffered/duration, sự kiện progress) — MỘT request duy nhất,
+// preload="auto" bắt trình duyệt tải hết file. Bản fetch() thứ hai chạy song song từng treo ở ⏳ mãi,
+// và mỗi mẩu byte lại đổi chữ ký làm modal dựng lại, hủy <video> giữa chừng — nay % cập nhật THẲNG
+// vào DOM của thẻ, không vào chữ ký nào, nên modal không dựng lại vì % và video không bao giờ đứt.
 function vidPlayer(row) {
   const key = contentKey(row, "Video");
   const box = el("div", "vidplay");
@@ -1730,57 +1736,60 @@ function vidPlayer(row) {
     return box;
   }
   const v = VIDEOS.get(key);
-  if (!v || !v.url) {
-    box.appendChild(el("div", "loading", NOTES.get(key) || ("⏳ đang tải video về thẻ · " + row.b4meta)));
+  const url = v ? String(v.url || "") : "";
+  const name = (v && v.name) || row.b4meta;
+  if (!url) {
+    // URL chưa về (đang xin /media) hoặc server báo lỗi: hiện đúng lời chờ/lỗi, modal vẽ lại khi
+    // URL về (request_id đổi trong modalSig). Không dựng <video> đen không src.
+    box.appendChild(el("div", "ioline", NOTES.get(key) || ("⏳ đang tải video về thẻ · " + name)));
     return box;
   }
   const clip = document.createElement("video");
   clip.className = "videl";
-  clip.src = String(v.url);
+  clip.src = url;
   clip.controls = true;
-  clip.preload = "metadata";
+  clip.preload = "auto";
   clip.playsInline = true;
-  clip.title = (v.name || row.b4meta) + " — bấm ▶ để xem ngay trong modal";
+  clip.title = name + " — bấm ▶ để xem ngay trong modal";
   box.appendChild(clip);
-  // P36a: % TẢI NỘI DUNG video thật — thanh + chữ con số, đọc từ chính <video> (trình duyệt tự xin
-  // qua HTTP /media, Range). Chỉ hiện khi có số liệu; chưa tải thì ẩn hẳn để không hứa một % bịa.
-  const pctBar = el("div", "vidbar");
-  const pctFill = el("i");
-  pctBar.appendChild(pctFill);
-  pctBar.style.display = "none";
-  const pctLbl = el("div", "ioline");
-  pctLbl.id = "vidpct_" + String(row.id);
-  pctLbl.textContent = "…";
-  pctLbl.style.display = "none";
-  box.appendChild(pctBar);
-  box.appendChild(pctLbl);
-  const upd = function () {
-    // % tải THẬT: dùng buffered TimeRanges + duration. Chưa có duration (video vừa mới bắt đầu
-    // load, chưa ra metadata) thì chưa tính được % -> giữ bar ẩn, không bịa một con số.
-    const b = clip.buffered;
-    const dur = clip.duration;
-    if (!b || b.length === 0 || !isFinite(dur) || dur <= 0) return;
-    const hi = b.end(b.length - 1);
-    const frac = Math.min(1, Math.max(0, (hi - b.start(0)) / dur));
-    const pct = Math.round(frac * 100);
-    pctFill.style.width = pct + "%";
-    pctBar.classList.toggle("done", pct >= 100);
-    pctBar.style.display = "";
-    pctLbl.style.display = "";
-    pctLbl.textContent = pct >= 100
-      ? "✓ đã tải hết video (" + String(v.name || row.b4meta) + ")"
-      : "Đang tải video · " + pct + "% · " + String(v.name || row.b4meta);
-  };
-  ['loadedmetadata', 'loadeddata', 'progress', 'canplay', 'canplaythrough'].forEach(function (ev) {
+  const bar = el("div", "vidbar");
+  const fill = el("i");
+  bar.appendChild(fill);
+  box.appendChild(bar);
+  const line = el("div", "ioline", "Đang tải video · 0% · " + name + " · nút mở ở góc thẻ mở tab mới");
+  box.appendChild(line);
+  let failed = false;
+  function upd() {
+    if (failed) return;
+    const dur = Number(clip.duration);
+    let pct = 0, done = false;
+    if (isFinite(dur) && dur > 0 && clip.buffered.length) {
+      try {
+        const end = clip.buffered.end(clip.buffered.length - 1);
+        pct = Math.min(100, Math.round((end / dur) * 100));
+        // "hết" khi buffered phủ tới đuôi thật. KHÔNG tin readyState>=4: với video ngắn nó bật ở ~24%
+        // (trình duyệt ước lượng đủ để phát liền mạch) nên sẽ báo "✓ đã tải hết" trong khi còn đang tải.
+        done = end >= dur - 0.3;
+      } catch (_) {}
+    }
+    if (done) pct = 100;
+    fill.style.width = pct + "%";
+    bar.classList.toggle("done", done);
+    line.textContent = (done ? "✓ đã tải hết video (" + name + ")"
+                             : "Đang tải video · " + pct + "% · " + name)
+      + " · nút mở ở góc thẻ mở tab mới";
+  }
+  ['progress', 'loadedmetadata', 'canplay', 'canplaythrough'].forEach(function (ev) {
     clip.addEventListener(ev, upd);
-  });  clip.addEventListener("error", function () {
-    pctBar.style.display = "none";
-    pctLbl.style.display = "";
-    pctLbl.textContent = "⚠ không tải được video từ /media — kiểm tra folder bài (" + row.b4meta + ")";
   });
-  if (clip.readyState >= 2) upd();  // thẻ dựng lại mà video đã ready -> hiện % đúng trạng thái thật
-  box.appendChild(el("div", "ioline", "▶ đang phát " + String(v.name || row.b4meta)
-    + " trực tiếp từ folder · nút mở ở góc thẻ mở tab mới"));
+  clip.addEventListener("error", function () {
+    failed = true;
+    bar.classList.add("bad");
+    fill.style.width = "100%";
+    line.classList.add("bad");
+    line.textContent = "⚠ không tải được video từ /media — kiểm tra folder bài (" + name + ")";
+  });
+  if (clip.readyState >= 2) upd();  // thẻ dựng lại khi video đã có data (cache) -> khỏi chờ event
   return box;
 }
 
@@ -3760,7 +3769,7 @@ function modalTransSig() {
 }
 
 function syncModal() {
-  const sig = modalSig() + "|" + modalTransSig();  // P34a: + state Dịch (bản dịch / bộ Dịch đang chọn)
+  const sig = modalSig() + "|" + modalTransSig();  // P34a: + Dịch; P36a: % video cập nhật thẳng DOM, không vào sig
   if (sig === LAST_MODAL_SIG) return;
   LAST_MODAL_SIG = sig;
   const root = document.getElementById("root");

@@ -4372,11 +4372,12 @@ check("P21i response video nạp vào VIDEOS bằng URL chứ không phải base
       in _p22_fe.split("function fillField")[1].split("\n}")[0]
       and "!p.video" in _p22_fe.split("function fillField")[1].split("\n}")[0])
 _p21i_player = _p22_fe.split("function vidPlayer")[1].split("\n}")[0]
-check("P21i thẻ vẽ <video controls> thật từ URL /media/, preload metadata (không xin cả file khi chưa bấm) + "
+check("P21i thẻ vẽ <video controls> thật từ URL /media/, preload auto (P36a: xin cả file để đo % tải) + "
       "playsInline; chưa có URL thì hiện ⏳/lỗi, không hiện ô đen hỏng",
       'document.createElement("video")' in _p21i_player and "clip.controls = true;" in _p21i_player
-      and 'clip.src = String(v.url);' in _p21i_player and 'clip.preload = "metadata";' in _p21i_player
-      and "clip.playsInline = true;" in _p21i_player and "⏳ đang tải video về thẻ" in _p21i_player
+      and 'clip.preload = "auto";' in _p21i_player
+      and "clip.playsInline = true;" in _p21i_player
+      and "⏳ đang tải video về thẻ" in _p21i_player
       and "send(" not in _p21i_player)
 check("P21i thẻ B4 có ↗ mở URL /media/ bằng tab mới khi đã cấp được video (file ngoài trần không có ↗ vì không có URL)",
       "actions: played && played.url ? [openIcon(played.url," in _p22_fe.split("function videoCard")[1].split("\n}")[0])
@@ -7476,16 +7477,24 @@ check("P35a frontend: visible() chạy filterPredicate trước sort + listSigOf
       and "bar.appendChild(filterButton())" in _p35a_fe)
 # --- hết P35a ---
 
-# --- P36a: thẻ video B4 trong modal hiện % tải thật (đọc từ <video> qua /media Range) ---
+# --- P36a: thẻ video B4 trong modal hiện % tải thật (đọc buffered/duration từ CHÍNH <video>) ---
 _p36a_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
-check("P36a frontend: vidPlayer gắn thanh % + chữ con số vào <video>, ẩn khi chưa có số liệu, "
-      "báo lỗi /media không tải được",
-      "pctBar.appendChild(pctFill)" in _p36a_fe
+check("P36a frontend: vidPlayer preload=auto cho trình duyệt tải HẾT file bằng MỘT request, % đọc từ "
+      "clip.buffered/duration qua sự kiện progress rồi ghi THẲNG vào DOM — không fetch thứ hai, không "
+      "vidPctSig (bản cũ dựng lại modal từng mẩu byte làm đứt video và từng kẹt ở ⏳ rất lâu)",
+      "function vidPlayer(row)" in _p36a_fe
+      and 'clip.preload = "auto";' in _p36a_fe
       and "clip.buffered" in _p36a_fe
-      and "'canplaythrough'" in _p36a_fe
-      and "không tải được video từ /media" in _p36a_fe
+      and "'progress', 'loadedmetadata', 'canplay', 'canplaythrough'" in _p36a_fe
       and "Đang tải video · " in _p36a_fe
-      and "✓ đã tải hết video" in _p36a_fe)
+      and "✓ đã tải hết video" in _p36a_fe
+      and "không tải được video từ /media" in _p36a_fe
+      and "trackVideoLoad" not in _p36a_fe
+      and "vidPctSig" not in _p36a_fe)
+check("P36a frontend: 'tải hết' chỉ khi buffered phủ tới đuôi (end >= dur - 0.3) — KHÔNG dùng readyState>=4 "
+      "về làm mốc hết: video ngắn bật HAVE_ENOUGH_DATA ở ~24% buffered nên sẽ báo ✓ sớm khi còn đang tải",
+      "end >= dur - 0.3" in _p36a_fe
+      and "pct >= 100 || clip.readyState >= 4" not in _p36a_fe)
 # --- hết P36a ---
 
 # cleanup test rows
