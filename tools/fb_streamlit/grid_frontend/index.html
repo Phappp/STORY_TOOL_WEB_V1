@@ -238,6 +238,9 @@
   .vidplay { display:flex; flex-direction:column; gap:6px; min-width:0; }
   .vidplay video.videl { width:100%; max-height:min(38vh,320px); min-height:118px; background:#000;
     border:1px solid var(--border); border-radius:8px; }
+  /* P36a: % TẢI NỘI DUNG video B4 trong modal — thanh + chữ con số (đọc từ chính <video>).
+     Dùng cùng khuôn .vidbar của ô tải (P21c) để hai thanh tiến độ nhìn như một họ. */
+  .vidplay .vidbar { margin-top:2px; }
   /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
   button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
@@ -1739,6 +1742,43 @@ function vidPlayer(row) {
   clip.playsInline = true;
   clip.title = (v.name || row.b4meta) + " — bấm ▶ để xem ngay trong modal";
   box.appendChild(clip);
+  // P36a: % TẢI NỘI DUNG video thật — thanh + chữ con số, đọc từ chính <video> (trình duyệt tự xin
+  // qua HTTP /media, Range). Chỉ hiện khi có số liệu; chưa tải thì ẩn hẳn để không hứa một % bịa.
+  const pctBar = el("div", "vidbar");
+  const pctFill = el("i");
+  pctBar.appendChild(pctFill);
+  pctBar.style.display = "none";
+  const pctLbl = el("div", "ioline");
+  pctLbl.id = "vidpct_" + String(row.id);
+  pctLbl.textContent = "…";
+  pctLbl.style.display = "none";
+  box.appendChild(pctBar);
+  box.appendChild(pctLbl);
+  const upd = function () {
+    // % tải THẬT: dùng buffered TimeRanges + duration. Chưa có duration (video vừa mới bắt đầu
+    // load, chưa ra metadata) thì chưa tính được % -> giữ bar ẩn, không bịa một con số.
+    const b = clip.buffered;
+    const dur = clip.duration;
+    if (!b || b.length === 0 || !isFinite(dur) || dur <= 0) return;
+    const hi = b.end(b.length - 1);
+    const frac = Math.min(1, Math.max(0, (hi - b.start(0)) / dur));
+    const pct = Math.round(frac * 100);
+    pctFill.style.width = pct + "%";
+    pctBar.classList.toggle("done", pct >= 100);
+    pctBar.style.display = "";
+    pctLbl.style.display = "";
+    pctLbl.textContent = pct >= 100
+      ? "✓ đã tải hết video (" + String(v.name || row.b4meta) + ")"
+      : "Đang tải video · " + pct + "% · " + String(v.name || row.b4meta);
+  };
+  ['loadedmetadata', 'loadeddata', 'progress', 'canplay', 'canplaythrough'].forEach(function (ev) {
+    clip.addEventListener(ev, upd);
+  });  clip.addEventListener("error", function () {
+    pctBar.style.display = "none";
+    pctLbl.style.display = "";
+    pctLbl.textContent = "⚠ không tải được video từ /media — kiểm tra folder bài (" + row.b4meta + ")";
+  });
+  if (clip.readyState >= 2) upd();  // thẻ dựng lại mà video đã ready -> hiện % đúng trạng thái thật
   box.appendChild(el("div", "ioline", "▶ đang phát " + String(v.name || row.b4meta)
     + " trực tiếp từ folder · nút mở ở góc thẻ mở tab mới"));
   return box;

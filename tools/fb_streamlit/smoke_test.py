@@ -7476,6 +7476,18 @@ check("P35a frontend: visible() chạy filterPredicate trước sort + listSigOf
       and "bar.appendChild(filterButton())" in _p35a_fe)
 # --- hết P35a ---
 
+# --- P36a: thẻ video B4 trong modal hiện % tải thật (đọc từ <video> qua /media Range) ---
+_p36a_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+check("P36a frontend: vidPlayer gắn thanh % + chữ con số vào <video>, ẩn khi chưa có số liệu, "
+      "báo lỗi /media không tải được",
+      "pctBar.appendChild(pctFill)" in _p36a_fe
+      and "clip.buffered" in _p36a_fe
+      and "'canplaythrough'" in _p36a_fe
+      and "không tải được video từ /media" in _p36a_fe
+      and "Đang tải video · " in _p36a_fe
+      and "✓ đã tải hết video" in _p36a_fe)
+# --- hết P36a ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")
