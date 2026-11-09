@@ -7413,6 +7413,35 @@ check("P33b frontend: ioRefusalCard() + IO_REF + response handler 'refusal_scan'
       and "left.appendChild(ioRefusalCard())" in _p33b_fe)
 # --- hết P33b ---
 
+# --- P34a: dịch B1/B3 sang tiếng Việt (chỉ hiện UI, không ghi file) + ô "Dịch" đầu grid ---
+_p34a_ga   = _p33b_ga
+_p34a_grid = _p33b_grid
+_p34a_fe   = _p33b_fe
+check("P34a grid_actions: _translate() đọc caption/seo, gọi provider Dịch (kind openai), "
+      "trả payload {field:'Dịch', mode:'show', text} — không ghi file; translate_provider đọc pool 'translate'",
+      "def _translate(ctx: Ctx, sid: str, step: str, request_id: str):" in _p34a_ga
+      and "def translate_provider(ctx: Ctx) -> str:" in _p34a_ga
+      and "ctx.defaults.get(\"translate\")" in _p34a_ga
+      and '"field": "Dịch"' in _p34a_ga
+      and 'prov.chat(provider, model, prompt' in _p34a_ga
+      and "stories.step_text(ctx.root, sid, step)" in _p34a_ga)
+check("P34a grid_actions dispatch: event 'translate' gọi _translate và trả qua out.copy (kênh copy_response)",
+      'elif source == "translate":' in _p34a_ga
+      and "_translate(ctx, sid, step" in _p34a_ga
+      and "out.copy, out.lines = _translate" in _p34a_ga)
+check("P34a grid.py: ô 'Dịch' (PROV_KEYS translate) + _collect gửi 'translate' qua grid_copy_response + payload defaults",
+      '"translate": "grid_prov_translate"' in _p34a_grid
+      and '"modal_request", "translate"' in _p34a_grid
+      and "Provider Dịch" in _p34a_grid
+      and "defaults=dict(ctx.defaults)" in _p34a_grid)
+check("P34a frontend: nút '🇻🇳 Dịch sang tiếng Việt' (b1/b3) + event translate + thẻ 'Bản dịch' đọc cache 'Dịch'",
+      '"🇻🇳 Dịch sang tiếng Việt"' in _p34a_fe
+      and 'source: "translate"' in _p34a_fe
+      and 'MODEL.defaults.translate' in _p34a_fe
+      and 'contentKey(row, "Dịch")' in _p34a_fe
+      and "Bản dịch (tiếng Việt)" in _p34a_fe)
+# --- hết P34a ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")

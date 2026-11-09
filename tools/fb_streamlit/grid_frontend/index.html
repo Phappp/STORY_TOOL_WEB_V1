@@ -1860,6 +1860,25 @@ function resultCards(row, tab, key) {
 function modalBody(row, tab, key) {
   const body = el("div", "mbody mcards");
   resultCards(row, tab, key).forEach(c => { if (c) body.appendChild(c); });
+  // P34a: thẻ "Bản dịch (tiếng Việt)" — chỉ cho B1/B3, nằm DƯỚI thẻ kết quả thật. Nội dung đọc từ
+  // cache "Dịch" (do nút 🇻🇳 nạp từ response translate), KHÔNG ghi file. Chưa bấm dịch thì giấu hẳn.
+  if (["b1", "b3"].indexOf(tab) >= 0) {
+    const dkey = contentKey(row, "Dịch");
+    const dtext = CONTENT.get(dkey);
+    const dnote = NOTES.get(dkey);
+    if (dtext != null || dnote != null) {
+      const tcard = el("div", "mcards");
+      if (dtext != null && String(dtext).trim()) {
+        tcard.appendChild(el("div", "muted", "🇻🇳 Bản dịch (tiếng Việt) — chỉ hiện UI, không ghi file, đóng modal là mất"));
+        const md = el("div");
+        if (tab === "b3" && SHOW_MD) renderMarkdown(String(dtext), md); else md.textContent = String(dtext);
+        tcard.appendChild(md);
+        body.appendChild(tcard);
+      } else if (dnote != null) {
+        body.appendChild(el("div", "muted", "🇻🇳 " + dnote));
+      }
+    }
+  }
   const pb = promptCard(row, tab);
   if (pb) body.appendChild(pb);  // thẻ prompt đứng NGANG thẻ kết quả — ảnh + prompt thấy cùng một màn
   return body;
@@ -1952,6 +1971,25 @@ function modalNode() {
     sel.addEventListener("click", e => e.stopPropagation());
     sel.addEventListener("change", () => send({ source: "set_provider", id: row.id, step: ref.tab, provider: sel.value }));
     tools.appendChild(sel);
+    // P34a: nút "🇻🇳 Dịch sang tiếng Việt" — chỉ cho B1 (caption) / B3 (SEO). Dịch nội dung tab
+    // đang mở, CHỈ HIỆN TRÊN UI (không ghi caption.txt/seo.md, không đổi màu ô). Dùng bộ "Dịch"
+    // đầu lưới (MODEL.defaults.translate); bấm gửi event translate, kết quả về qua copy_response.
+    if (["b1", "b3"].indexOf(ref.tab) >= 0) {
+      const trPool = Array.isArray(MODEL.defaults.translate) ? MODEL.defaults.translate : [];
+      const trName = trPool.length ? trPool.join(" → ") : "chưa chọn";
+      const tbtn = button("🇻🇳 Dịch sang tiếng Việt",
+        "Dịch " + (STEP_TITLE[ref.tab] || ref.tab) + " của " + row.id + " sang tiếng Việt, CHỈ HIỆN TRÊN UI "
+          + "(không ghi file, không đổi màu ô B1/B3, không tốn lượt chạy B). Bộ Dịch đang chọn: " + trName
+          + " — chọn ở ô 'Provider Dịch' đầu lưới. Không đổi nội dung gốc, đóng modal là mất bản dịch.",
+        bb => {
+          bb.disabled = true;
+          const rid = eventId();
+          WAITING.set(rid, { keys: [contentKey(row, "Dịch")], fields: ["Dịch"], id: String(row.id), mode: "show", flash: "", at: Date.now() });
+          send({ source: "translate", id: row.id, step: ref.tab, request_id: rid });
+        }, "act");
+      if (!trPool.length) tbtn.title += " · (chưa chọn bộ Dịch — bấm sẽ báo chọn ô Provider Dịch đầu lưới)";
+      tools.appendChild(tbtn);
+    }
   }
   if (ref.tab === "b4") {
     // P21c: ô tải ngay trong modal lo được file tới trần modal, nên nút này CHỈ còn việc mở mục native

@@ -524,6 +524,16 @@ def provider_pref(ctx: Ctx, story: dict, step: str) -> str:
     return pool[0] if pool else ""
 
 
+# P34a: "Dịch" là pool workspace riêng (chìa 'translate' trong prefs.providers), KHÔNG phải
+# provider của một B. Lấy bộ ĐẦU tiên anh chọn cho ô Dịch — rỗng = chưa chọn, bấm dịch sẽ báo lỗi.
+def translate_provider(ctx: Ctx) -> str:
+    pool = ctx.defaults.get("translate")
+    if isinstance(pool, str):
+        pool = [pool] if pool else []
+    names = [str(n) for n in (pool or []) if str(n)]
+    return names[0] if names else ""
+
+
 def free_provider(root: Path, sid: str, step: str, busy) -> tuple[str, str]:
     """Bộ đang RẢNH cho một việc của luồng nền — trả (tên provider, lý do bó tay).
 
@@ -1606,6 +1616,62 @@ def _run_step(ctx: Ctx, sid: str, step: str, preferred: str = "", chained: bool 
     return lines or [f"{STEP_NAMES['b2']}: không có gì mới — xem chi tiết ở ô B2."]
 
 
+def _translate(ctx: Ctx, sid: str, step: str, request_id: str):
+    """P34a: dịch nội dung B1 (caption.txt) / B3 (seo.md) của bài sang tiếng Việt bằng provider ô Dịch.
+
+    Kênh trả về `out.copy` (cùng `copy_response`) nên modal nạp vào cache `CONTENT` như mọi field —
+    kết quả chỉ HIỆN trên UI, không ghi file, không đụng story.json (đúng yêu cầu 'bản dịch chỉ
+    xuất hiện trên UI'). Provider = bộ đầu tiên anh chọn ở ô 'Dịch' đầu lưới (workspace), trống là
+    báo lỗi chứ không tự bịa bộ. provider không phải OpenAI-like (codex_cli) thì không có service
+    chat gọn cho dịch, nên báo rõ để anh chọn bộ API.
+    """
+    if step not in ("b1", "b3"):
+        return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show",
+                "text": "", "error": f"{sid}: 'Dịch' chỉ chạy được ở B1 (caption) hoặc B3 (SEO), "
+                                     f"không phải {step or '(trống)'}.", "copyable": False}, []
+    text = stories.step_text(ctx.root, sid, step)
+    if not text.strip():
+        return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show",
+                "text": "", "error": f"{sid}: {step.upper()} trống — chưa có gì để dịch.",
+                "copyable": False}, []
+    pname = translate_provider(ctx)
+    if not pname:
+        return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show", "text": "",
+                "error": f"{sid}: chưa chọn provider Dịch — chọn ô 'Dịch' ở đầu lưới (hoặc thêm bộ "
+                         "ở Cấu hình ▸ Providers) rồi bấm lại.", "copyable": False}, []
+    provider = next((p for p in ctx.providers.values() if str(p["name"]) == pname), None)
+    if provider is None:
+        return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show", "text": "",
+                "error": f"{sid}: provider Dịch '{pname}' không còn trong Cấu hình ▸ Providers.",
+                "copyable": False}, []
+    if str(provider["kind"]) != "openai":
+        return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show", "text": "",
+                "error": f"{sid}: bộ '{pname}' là Codex CLI — không có service chat để dịch gọn. "
+                         "Chọn một bộ OpenAI-like (API) ở ô Dịch.", "copyable": False}, []
+    models = prov.parse_models(provider)
+    model = models[0] if models else ""
+    if not model:
+        return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show", "text": "",
+                "error": f"{sid}: bộ '{pname}' chưa khai báo model (Cấu hình ▸ Providers) để dịch.",
+                "copyable": False}, []
+    prompt = ("Dịch đoạn văn bản dưới đây sang TIẾNG VIỆT. Giữ nguyên cấu trúc (dòng, bullet, "
+              "heading markdown, in đậm/nguyên văn link). Không thêm, bớt hay bình luận, chỉ trả "
+              "kết quả dịch.\n\n---\n" + text)
+    try:
+        trans = prov.chat(provider, model, prompt, system="", temperature=0.2)
+    except prov.ProviderError as exc:
+        return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show", "text": "",
+                "error": f"{sid}: lỗi dịch — {exc}", "copyable": False}, \
+               [f"{sid}: Dịch thất bại — {exc}"]
+    if not trans or not trans.strip():
+        return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show", "text": "",
+                "error": f"{sid}: bộ '{pname}' ({model}) trả về bản dịch rỗng.", "copyable": False}, \
+               [f"{sid}: Dịch thất bại — bộ trả về rỗng."]
+    return {"id": sid, "field": "Dịch", "request_id": request_id, "mode": "show",
+            "text": trans.strip(), "copyable": True, "note": f"Bản dịch của {step.upper()} bằng {pname}"}, \
+           [f"{sid}: đã dịch {step.upper()} sang tiếng Việt (bằng {pname}) — hiện trên UI, không ghi file."]
+
+
 def _run_all(ctx: Ctx, sid: str) -> list[str]:
     ready, why = _guard(ctx, sid)
     if ready is None:
@@ -2205,6 +2271,11 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
                 out.lines = [f"{pub_id}: {exc}"]
                 out.news = {"results": [{"sid": pub_id, "ok": False, "err": str(exc)}],
                             "progress": f"0/1 bài"}
+        elif source == "translate":
+            # P34a: dịch B1/B3 sang tiếng Việt — CHỈ hiện trên UI (kênh copy), không ghi caption.txt/seo.md
+            # cũng không đụng story.json. Dùng đúng provider anh chọn ở ô "Dịch" đầu lưới.
+            out.copy, out.lines = _translate(ctx, sid, step, str(event.get("request_id") or "")), \
+                                  out.lines
         else:
             out.lines = [f"Event không hợp lệ: {source or '(trống)'}"]
     except (stories.WorkspaceError, prov.ProviderError) as exc:

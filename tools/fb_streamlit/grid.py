@@ -49,7 +49,7 @@ VIDEO_SOURCES = {"video_chunk", "video_abort"}  # tải video trong modal B4 —
 VIDEO_UP_KEY = "grid_video_up"  # các mẩu đang ghồng trong RAM của phiên này
 VIDEO_SCAN_KEY = "grid_video_scan"  # mẩu cuối đã ghi xong -> lượt vẽ kế phải đọc lại folder
 BUSY_STATES = {stories.RUNNING, ga.STALE}  # folder nói bước này đang có lượt gọi AI (chạy dở hoặc treo)
-PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3"}
+PROV_KEYS = {"b1": "grid_prov_b1", "b2": "grid_prov_b2", "b3": "grid_prov_b3", "translate": "grid_prov_translate"}
 PRESET_KEY = "ws_preset"  # cùng key cho Grid và trang Tạo bài: một widget, một ý nghĩa, một sự thật
 PRESET_NONE_LABEL = "— Chưa chọn (mỗi bài theo preset_id của nó) —"
 # Khi fragment vẽ lại, Streamlit đánh dấu phần tử của nó bằng data-stale và gắn class có `opacity: .33`
@@ -156,6 +156,26 @@ def workspace_bar(ctx: ga.Ctx) -> None:
                               "lấy bộ mặc định; chọn ở đây hoặc chọn riêng trong modal bài. "
                               f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
                               if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
+
+    # P34a: ô "Dịch" — bộ OpenAI-like DÀNH RIÊNG cho việc dịch B1/B3 sang tiếng Việt (chỉ hiện UI,
+    # không ghi file, không đổi màu ô, không tốn lượt B1/B3). Pool độc lập với 3 ô B1/B2/B3 nên chọn
+    # ở đây không đụng provider chạy pipeline. Bộ đầu tiên anh chọn được dùng khi bấm "🇻🇳 Dịch".
+    tr_key = "translate"
+    tr_wanted = [str(n) for n in (stored.get(tr_key) or [])]
+    tr_gone = [n for n in tr_wanted if n not in names]
+    if tr_gone:
+        ga.set_pref_providers(ctx.root, tr_key, [n for n in tr_wanted if n in names])
+        tr_wanted = [n for n in tr_wanted if n in names]
+    st.session_state[PROV_KEYS[tr_key]] = tr_wanted
+    st.columns([0.6])[0].multiselect("Provider Dịch (B1/B3 → tiếng Việt, chỉ hiện UI)", names,
+                                      key=PROV_KEYS[tr_key],
+                                      on_change=lambda: save_provider_pref(ctx, "translate"),
+                                      help=("Chọn bộ dùng cho nút '🇻🇳 Dịch' trong modal B1/B3 — dịch nội dung tab "
+                                            "đang mở sang tiếng Việt, CHỈ HIỆN TRÊN UI (không ghi caption.txt/"
+                                            "seo.md, không đổi màu ô, không tốn lượt B1/B3). Bộ đầu tiên được dùng. "
+                                            "Nên chọn bộ OpenAI-like (API); bộ Codex CLI không có service chat để dịch. "
+                                            f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
+                                            if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
 
     pid = ga.pref_preset(ctx.root)
     if pid is not None and pid not in ctx.presets:  # preset đã bị xóa ở Cấu hình -> bỏ khỏi prefs
@@ -511,7 +531,7 @@ def _collect(out: ga.Outcome, event: dict) -> None:
     if out.news is not None:  # P28a: kết quả đăng báo (modal News) — đi 1 lần như io/video
         st.session_state["grid_news_response"] = out.news
     if str(event.get("source") or "") in ("copy_request", "content_request", "image_request", "b0_request",
-                                          "modal_request"):
+                                          "modal_request", "translate"):
         # render_component giao response đúng 1 lần rồi xóa; JS latch theo request_id nên không xử lý trùng
         st.session_state["grid_copy_response"] = out.copy or {
             "id": str(event.get("id") or ""), "field": str(event.get("field") or "Ảnh"),
