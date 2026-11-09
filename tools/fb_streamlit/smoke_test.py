@@ -7497,6 +7497,55 @@ check("P36a frontend: 'tải hết' chỉ khi buffered phủ tới đuôi (end >
       and "pct >= 100 || clip.readyState >= 4" not in _p36a_fe)
 # --- hết P36a ---
 
+# --- P36b: khung nội dung mở sẵn bị LÀM MỜ + spinner giữa khung (B1/B2/B3), vòng tròn % cho B4 ---
+_p36b_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p36b_text = _p36b_fe.split("function textCard")[1].split("\n}")[0]
+_p36b_img = _p36b_fe.split("function imageCard")[1].split("\n}")[0]
+_p36b_player = _p36b_fe.split("function vidPlayer")[1].split("\n}")[0]
+_p36b_ring = _p36b_fe.split("function progressRing")[1].split("\n}")[0]
+_p36b_clear = _p36b_fe.split("function clearFrame")[1].split("\n}")[0]
+check("P36b bộ khung chờ dùng chung: loadFrame dựng .loadframe.loading (body làm mờ + overlay giữa), "
+      "spinnerNode/skeletonNode giữ chỗ, clearFrame gỡ .loading + .loadover khi nội dung thật đã về",
+      "function loadFrame(inner, opts)" in _p36b_fe
+      and "function spinnerNode(label)" in _p36b_fe
+      and "function skeletonNode(kind)" in _p36b_fe
+      and "function clearFrame(frame)" in _p36b_fe
+      and 'el("div", "loadframe loading")' in _p36b_fe
+      and 'frame.classList.remove("loading");' in _p36b_clear
+      and 'frame.querySelector(":scope > .loadover")' in _p36b_clear
+      and "over.remove();" in _p36b_clear)
+check("P36b làm mờ là CSS thật chứ không phải chữ hứa: .loadframe.loading .loadbody blur + opacity, "
+      "spinner xoay bằng @keyframes, vòng tròn B4 có cung stroke riêng",
+      ".loadframe.loading .loadbody { filter:blur(4px); opacity:.4; }" in _p36b_fe
+      and ".spinner {" in _p36b_fe and "@keyframes loadspin" in _p36b_fe
+      and ".loadover { position:absolute; inset:0;" in _p36b_fe
+      and ".progring .ringarc {" in _p36b_fe)
+check("P36b B1/B3: chưa có chữ thì vẽ khung mờ + spinner (không phải dòng '… đang đọc' trơ); có lời "
+      "NOTES (lỗi/chờ riêng) thì hiện đúng lời đó chứ không quay spinner vô hạn",
+      'else body.push(loadFrame(null, { kind: "text", label: "đang đọc nội dung từ folder story" }));' in _p36b_text
+      and 'else if (NOTES.get(key)) body.push(el("div", "loading", NOTES.get(key)));' in _p36b_text)
+check("P36b B2: URL ảnh về CHƯA phải hết chờ — spinner trụ tới sự kiện load của CHÍNH <img> (bytes còn "
+      "tải qua HTTP /media); lỗi mạng thì clearFrame + viền đỏ + lời báo, ảnh đã cache thì gỡ ngay",
+      'const frame = loadFrame(img, { kind: "image" });' in _p36b_img
+      and 'img.addEventListener("load", function () { clearFrame(frame); });' in _p36b_img
+      and 'img.addEventListener("error", fail);' in _p36b_img
+      and "if (img.complete) { if (img.naturalWidth > 0) clearFrame(frame); else fail(); }" in _p36b_img
+      and "không tải được ảnh từ /media" in _p36b_img
+      and 'else body.push(loadFrame(null, { kind: "image", label: o.loading }));' in _p36b_img)
+check("P36b B4 thay thanh ngang bằng VÒNG TRÒN % giữa khung mờ: progressRing trả set() đổi "
+      "stroke-dashoffset + chữ %, vidPlayer gọi ring.set(pct) và clearFrame khi buffered phủ tới đuôi; "
+      "hết dấu thanh .vidbar/fill trong thẻ xem (thanh upload P21c vẫn còn nguyên chỗ khác)",
+      "function progressRing()" in _p36b_fe
+      and 'arc.setAttribute("stroke-dashoffset", String(100 - p));' in _p36b_ring
+      and 'pct.textContent = p + "%";' in _p36b_ring
+      and "const ring = progressRing();" in _p36b_player
+      and 'const frame = loadFrame(clip, { kind: "video", ring: ring.node });' in _p36b_player
+      and "ring.set(pct);" in _p36b_player
+      and "if (done) clearFrame(frame);" in _p36b_player
+      and 'frame.classList.add("bad");' in _p36b_player
+      and "vidbar" not in _p36b_player and "fill.style.width" not in _p36b_player)
+# --- hết P36b ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")

@@ -238,11 +238,36 @@
   .vidplay { display:flex; flex-direction:column; gap:6px; min-width:0; }
   .vidplay video.videl { width:100%; max-height:min(38vh,320px); min-height:118px; background:#000;
     border:1px solid var(--border); border-radius:8px; }
-  /* P36a: % TẢI NỘI DUNG video B4 trong modal — thanh + chữ con số (đọc từ chính <video>).
-     Dùng cùng khuôn .vidbar của ô tải (P21c) để hai thanh tiến độ nhìn như một họ. */
-  .vidplay .vidbar { margin-top:2px; }
-  .vidplay .vidbar.bad { border-color:var(--error-b); }
-  .vidplay .vidbar.bad i { background:var(--error); }
+  /* P36b: khung nội dung MỞ SẴN nhưng bị LÀM MỜ khi chưa có nội dung — spinner giữa khung cho
+     B1/B2/B3, vòng tròn tiến trình cho B4. .loadbody giữ chỗ (skeleton) để khung không nhảy cỡ;
+     .loadover phủ giữa, clearFrame() bỏ .loading + overlay khi nội dung thật đã về/đã tải xong. */
+  .loadframe { position:relative; display:flex; flex:1 1 auto; min-height:130px; min-width:0;
+    border-radius:8px; overflow:hidden; }
+  .loadframe .loadbody { display:flex; flex-direction:column; gap:6px; flex:1 1 auto; min-width:0;
+    min-height:0; transition:filter .35s ease, opacity .35s ease; }
+  .loadframe.loading { background:var(--field); }
+  .loadframe.loading .loadbody { filter:blur(4px); opacity:.4; }
+  .loadframe.bad { border:1px solid var(--error-b); }
+  .loadover { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(13,21,32,.45); }
+  .loadspin-wrap { display:flex; flex-direction:column; align-items:center; gap:9px; }
+  .loadlabel { font-size:11px; color:var(--muted); text-align:center; max-width:90%; }
+  .spinner { width:34px; height:34px; border:3px solid var(--border); border-top-color:var(--accent);
+    border-radius:50%; animation:loadspin .7s linear infinite; }
+  @keyframes loadspin { to { transform:rotate(360deg); } }
+  .skeleton { display:flex; flex-direction:column; gap:10px; flex:1 1 auto; min-height:120px; padding:8px 4px; }
+  .skeleton .skline { height:11px; border-radius:5px; background:var(--border); }
+  .skeleton .skblock { flex:1 1 auto; min-height:120px; border-radius:8px; background:var(--border); }
+  .progring { position:relative; width:88px; height:88px; flex:0 0 auto; }
+  .progring .ringsvg { width:88px; height:88px; transform:rotate(-90deg); display:block; }
+  .progring .ringtrack { fill:none; stroke:var(--border); stroke-width:6; }
+  .progring .ringarc { fill:none; stroke:var(--accent); stroke-width:6; stroke-linecap:round;
+    transition:stroke-dashoffset .25s ease; }
+  .progring .ringpct { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-size:17px; font-weight:700; color:var(--text); }
+  .vidplay .loadframe { min-height:130px; }
+  .vidplay .loadframe .loadbody { align-items:stretch; }
+  .vidplay .loadframe video.videl { flex:1 1 auto; }
   /* Icon trong đầu thẻ: phải thắng `button.b` (khai báo sau nên cần specificity cao hơn một lớp) */
   button.b.ico { width:26px; height:22px; padding:0; flex:0 0 auto; font-size:12px; }
   a.link.ico { display:inline-flex; align-items:center; justify-content:center; width:26px; height:22px;
@@ -1185,6 +1210,72 @@ function imgNode(src, alt) {
   img.src = src;
   return img;
 }
+// P36b: bộ khung chờ dùng chung cho B1/B2/B3 (spinner) và B4 (vòng tròn %). Nội dung thật (hoặc
+// skeleton giữ chỗ) nằm trong .loadbody bị làm mờ; .loadover phủ giữa. clearFrame() gỡ cả hai khi
+// nội dung đã về — KHÔNG đụng chữ ký modal nên việc tải không làm modal dựng lại giữa chừng.
+function spinnerNode(label) {
+  const wrap = el("div", "loadspin-wrap");
+  wrap.appendChild(el("div", "spinner"));
+  if (label) wrap.appendChild(el("div", "loadlabel", label));
+  return wrap;
+}
+function skeletonNode(kind) {
+  const sk = el("div", "skeleton");
+  if (kind === "image" || kind === "video") {
+    sk.appendChild(el("div", "skblock"));
+    return sk;
+  }
+  ["82%", "96%", "71%", "89%", "63%"].forEach(function (w) {
+    const ln = el("div", "skline");
+    ln.style.width = w;
+    sk.appendChild(ln);
+  });
+  return sk;
+}
+function loadFrame(inner, opts) {
+  opts = opts || {};
+  const frame = el("div", "loadframe loading");
+  const body = el("div", "loadbody");
+  if (inner) body.appendChild(inner);
+  else body.appendChild(skeletonNode(opts.kind));
+  frame.appendChild(body);
+  const over = el("div", "loadover");
+  over.appendChild(opts.ring || spinnerNode(opts.label));
+  frame.appendChild(over);
+  return frame;
+}
+function clearFrame(frame) {
+  frame.classList.remove("loading");
+  const over = frame.querySelector(":scope > .loadover");
+  if (over) over.remove();
+}
+function progressRing() {
+  const node = el("div", "progring");
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "ringsvg");
+  svg.setAttribute("viewBox", "0 0 80 80");
+  const track = document.createElementNS(SVG_NS, "circle");
+  track.setAttribute("class", "ringtrack");
+  track.setAttribute("cx", "40"); track.setAttribute("cy", "40"); track.setAttribute("r", "34");
+  const arc = document.createElementNS(SVG_NS, "circle");
+  arc.setAttribute("class", "ringarc");
+  arc.setAttribute("cx", "40"); arc.setAttribute("cy", "40"); arc.setAttribute("r", "34");
+  arc.setAttribute("pathLength", "100");
+  arc.setAttribute("stroke-dasharray", "100");
+  arc.setAttribute("stroke-dashoffset", "100");
+  svg.appendChild(track); svg.appendChild(arc);
+  node.appendChild(svg);
+  const pct = el("div", "ringpct", "0%");
+  node.appendChild(pct);
+  return {
+    node: node,
+    set: function (p) {
+      p = Math.max(0, Math.min(100, Math.round(Number(p) || 0)));
+      arc.setAttribute("stroke-dashoffset", String(100 - p));
+      pct.textContent = p + "%";
+    },
+  };
+}
 function toggleMdIcon() {
   return button("🔤", SHOW_MD ? "Đang hiện BẢN ĐÃ RENDER — bấm để xem nguyên văn markdown trong seo.md"
     : "Đang hiện MARKDOWN GỐC — bấm để xem bản đã render (chữ sạch)", () => { SHOW_MD = !SHOW_MD; repaint(); }, "ico");
@@ -1245,7 +1336,8 @@ function textCard(row, tab, key) {
   if (text == null) {
     // file trống thì Python không trả payload nào — B1/B3 vẫn phải mở được ô chữ để gõ từ đầu
     if (cfg && row.copyable && row.copyable[field] === false) body.push(textEditor(row, key, tab, ""));
-    else body.push(el("div", "loading", NOTES.get(key) || "… đang đọc nội dung từ folder story"));
+    else if (NOTES.get(key)) body.push(el("div", "loading", NOTES.get(key)));
+    else body.push(loadFrame(null, { kind: "text", label: "đang đọc nội dung từ folder story" }));
   } else if (tab === "b3" && SHOW_MD) {
     const md = el("div");
     renderMarkdown(String(text), md);
@@ -1284,10 +1376,24 @@ function imageCard(row, key, o) {
   const src = IMAGES.get(key);
   const body = [];
   if (!src) {
-    body.push(el("div", "loading", NOTES.get(key) || o.loading));
+    if (NOTES.get(key)) body.push(el("div", "loading", NOTES.get(key)));
+    else body.push(loadFrame(null, { kind: "image", label: o.loading }));
     if (o.detail) body.push(el("div", "muted", "Ghi chú: " + o.detail));
   } else {
-    body.push(imgNode(src, o.alt));
+    // P36b: URL đã về nhưng BYTES ảnh còn tải qua HTTP /media — spinner trụ tới tận sự kiện load
+    // của chính <img>, không tắt ngay khi URL về. Lỗi mạng thì gỡ spinner, viền đỏ + lời báo.
+    const img = imgNode(src, o.alt);
+    const frame = loadFrame(img, { kind: "image" });
+    const fail = function () {
+      clearFrame(frame);
+      frame.classList.add("bad");
+      const bad = el("div", "loading", "⚠ không tải được ảnh từ /media — kiểm tra folder bài");
+      if (img.parentNode) img.parentNode.replaceChild(bad, img);
+    };
+    img.addEventListener("load", function () { clearFrame(frame); });
+    img.addEventListener("error", fail);
+    if (img.complete) { if (img.naturalWidth > 0) clearFrame(frame); else fail(); }
+    body.push(frame);
     if (o.detail) body.push(el("div", "muted", "Ghi chú: " + o.detail));
   }
   if (o.extra) body.push(o.extra);
@@ -1751,11 +1857,10 @@ function vidPlayer(row) {
   clip.preload = "auto";
   clip.playsInline = true;
   clip.title = name + " — bấm ▶ để xem ngay trong modal";
-  box.appendChild(clip);
-  const bar = el("div", "vidbar");
-  const fill = el("i");
-  bar.appendChild(fill);
-  box.appendChild(bar);
+  // P36b: video nằm trong khung làm mờ + vòng tròn % giữa khung; tải hết thì clearFrame gỡ overlay.
+  const ring = progressRing();
+  const frame = loadFrame(clip, { kind: "video", ring: ring.node });
+  box.appendChild(frame);
   const line = el("div", "ioline", "Đang tải video · 0% · " + name + " · nút mở ở góc thẻ mở tab mới");
   box.appendChild(line);
   let failed = false;
@@ -1773,8 +1878,8 @@ function vidPlayer(row) {
       } catch (_) {}
     }
     if (done) pct = 100;
-    fill.style.width = pct + "%";
-    bar.classList.toggle("done", done);
+    ring.set(pct);
+    if (done) clearFrame(frame);
     line.textContent = (done ? "✓ đã tải hết video (" + name + ")"
                              : "Đang tải video · " + pct + "% · " + name)
       + " · nút mở ở góc thẻ mở tab mới";
@@ -1784,8 +1889,8 @@ function vidPlayer(row) {
   });
   clip.addEventListener("error", function () {
     failed = true;
-    bar.classList.add("bad");
-    fill.style.width = "100%";
+    clearFrame(frame);
+    frame.classList.add("bad");
     line.classList.add("bad");
     line.textContent = "⚠ không tải được video từ /media — kiểm tra folder bài (" + name + ")";
   });
