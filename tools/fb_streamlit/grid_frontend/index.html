@@ -545,6 +545,8 @@ const ICON_PATHS = {
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3v18"/><path d="M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>',
   // P29a: tia sét — icon hạn mức Codex (usage = điện năng còn lại của các bộ AI)
   bolt: '<path d="M13 2 4.5 13.5h6L9.5 22 18 10.5h-6z"/>',
+  // P35a: phễu — icon nút lọc trạng thái cạnh ô tìm (đường phễu cổ điển, nét outline cùng khuôn)
+  funnel: '<path d="M4 4h16l-6 8v6l-4 2v-8z"/>',
 };
 // Dựng MỘT lần lúc tải trang từ hằng số tự viết (không chứa chữ của hàng lưới/URL nào), sau đó nhân bản.
 const ICON_NODE = {};
@@ -597,6 +599,56 @@ let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
 
 function rows() { return Array.isArray(MODEL.rows) ? MODEL.rows : []; }
 
+// P35a: nút phễu cạnh ô tìm — lọc NHANH theo trạng thái bài + status posted/draft.
+// Mỗi lựa chọn là MỘT bộ điều kiện (không chồng lọc); chọn "all" = về trạng thái mặc định.
+// Lọc chạy CLIENT-SIDE trên rows() (như SEARCH) rồi gộp với ô tìm — không gọi Python.
+// Đặt trong window rows()→lsGet để harness node (P24a) chích mã thật vẫn chạy được.
+const GRID_FILTER_OPTIONS = [
+  ["all",          "Tất cả",           "Hiện mọi bài (trạng thái mặc định)."],
+  ["done_posted",  "Xong · Posted",    "B1+B2+B3+B4 đủ (xanh lá) VÀ status = posted (đã đăng báo)."],
+  ["done_draft",   "Xong · Draft",     "B1+B2+B3+B4 đủ (xanh lá) VÀ status chưa posted (draft/chưa đăng)."],
+  ["running",      "Đang chạy",        "Ít nhất một B đang chạy (ô xanh dương nhấp nháy)."],
+  ["waiting",      "Chờ chạy",         "B1-B4 chưa sẵn sàng, không lỗi, không đang chạy — còn việc để ⚡/▶ làm tiếp."],
+  ["error",        "Lỗi",             "Ít nhất một B lỗi (đỏ) — gồm treo >15p, mất file."],
+];
+const FILTER_KEY = "fbgrid:filter:v1";
+let GRID_FILTER = (function _initGridFilter() {
+  // Guard: harness node (P24a) chạy ngoài browser không có window/localStorage -> trả "all".
+  try {
+    if (typeof localStorage === "undefined") return "all";
+    const v = localStorage.getItem(FILTER_KEY);
+    return GRID_FILTER_OPTIONS.some(o => o[0] === v) ? v : "all";
+  } catch (_) { return "all"; }
+})();
+function _gridFilterSave(key) {
+  GRID_FILTER = key;
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(FILTER_KEY, key); } catch (_) {}
+}
+function _stateDone4(row) {
+  // "Xong" = đủ cả 4 B (theo lựa chọn của user, P35a: kể cả B4 video).
+  // refused (vàng) không tính "done" — ô B1/B3 đang từ chối nên phải ▶ lại.
+  const st = row.states || {};
+  if (st.b1 !== "done") return false;
+  if (st.b2 !== "done") return false;
+  if (st.b3 !== "done") return false;
+  return String(row.b4 || "") === "done";
+}
+function filterPredicate(row) {
+  const st = row.states || {};
+  const bad = (["error","stale","missing"].some(k => st.b1===k || st.b2===k || st.b3===k));
+  const run = (st.b1==="running" || st.b2==="running" || st.b3==="running");
+  switch (GRID_FILTER) {
+    case "all":          return true;
+    case "done_posted":  return _stateDone4(row) && String(row.status || "") === "posted";
+    case "done_draft":   return _stateDone4(row) && String(row.status || "") !== "posted";
+    case "running":      return run;
+    case "waiting":      return !bad && !run && !_stateDone4(row);
+    case "error":        return bad;
+    default:
+      return true;
+  }
+}
+
 // Tìm nhanh trong đúng phần đang hiện: id · chủ đề · nguồn B0 · link đã đăng · status.
 // Lọc ngay trong JS để gõ tới đâu lưới thu tới đó, không phải hỏi Python từng ký tự.
 function searchFields(row) {
@@ -608,13 +660,15 @@ function visible() {
   // đọc visible() (lưới, ◂ ▸ modal, ↑ ↓, ô đếm, Export) tự theo đúng thứ tự anh nhìn thấy, không
   // chỗ nào phải biết có chuyện sắp. `slice()` trước `sort()` vì sort sửa tại chỗ — MODEL.rows mà
   // bị lộn thì lượt vẽ sau so chữ ký và các chỗ đọc rows() đổi theo.
+  // P35a: lọc theo GRID_FILTER (trạng thái + status) trước khi search, rồi mới sort.
   const terms = SEARCH.toLowerCase().split(/\s+/).filter(Boolean);
-  const list = terms.length
-    ? rows().filter(row => {
-        const fields = searchFields(row);
-        return terms.every(t => fields.some(f => f.indexOf(t) >= 0));
-      })
-    : rows();
+  let list = rows().filter(filterPredicate);
+  if (terms.length) {
+    list = list.filter(row => {
+      const fields = searchFields(row);
+      return terms.every(t => fields.some(f => f.indexOf(t) >= 0));
+    });
+  }
   const q = new Map(queueIds().map((id, i) => [String(id), i]));
   return list.slice().sort((a, b) => {
     const ai = q.get(String(a.id)), bi = q.get(String(b.id));
@@ -2234,8 +2288,9 @@ function cellSig(row, key) {
 function rowSigs(row) { return COLS.map(c => cellSig(row, c.key)); }
 
 function listSigOf(list) {
-  // màn hình trống thì chữ ký phải theo ô tìm, nếu không "không hàng nào" sẽ bị coi là không đổi
-  return list.length ? list.map(r => String(r.id)).join(",") : "#empty:" + SEARCH.trim().toLowerCase();
+  // màn hình trống thì chữ ký phải theo ô tìm + bộ lọc, nếu không "không hàng nào" sẽ bị coi là không đổi
+  return list.length ? list.map(r => String(r.id)).join(",")
+    : "#empty:" + SEARCH.trim().toLowerCase() + "|" + GRID_FILTER;
 }
 
 function isTypingIn(node, cell) {
@@ -3009,6 +3064,64 @@ function searchBox() {
   return box;
 }
 
+// P35a: nút phễu cạnh ô tìm — mở menu lọc trạng thái (6 lựa chọn, chọn 1 lúc, lọc client-side).
+// Lặp lại nút (repaint) mà menu đang mở thì đóng menu trước (menu gắn vào body, không nằm trong tree lưới).
+function filterButton() {
+  const opt = GRID_FILTER_OPTIONS.find(o => o[0] === GRID_FILTER) || GRID_FILTER_OPTIONS[0];
+  const active = GRID_FILTER !== "all";
+  const b = iconButton("funnel",
+    "Lọc trạng thái — đang: " + opt[1] + ". Bấm để mở danh sách "
+    + "(Xong/Posted · Xong/Draft · Đang chạy · Chờ chạy · Lỗi · Tất cả). "
+    + "Lọc chạy ngay phía client, không gọi Python; kết hợp với ô tìm bên cạnh (AND).",
+    bb => { openFilterMenu(bb); },
+    "act" + (active ? " tog on" : ""));
+  b.id = "filterbtn";
+  b.title = "Lọc: " + opt[1] + " — bấm mở danh sách";
+  return b;
+}
+let FILTER_MENU = null;
+function closeFilterMenu() {
+  if (!FILTER_MENU) return;
+  FILTER_MENU.remove();
+  FILTER_MENU = null;
+  document.removeEventListener("mousedown", onFilterDocDown, true);
+  document.removeEventListener("scroll", closeFilterMenu, true);
+}
+function onFilterDocDown(e) {
+  if (FILTER_MENU && !FILTER_MENU.contains(e.target)) closeFilterMenu();
+}
+function openFilterMenu(anchor) {
+  if (FILTER_MENU && FILTER_MENU.parentElement === anchor) { closeFilterMenu(); return; }
+  closeFilterMenu();
+  const menu = el("div", "menu");
+  menu.style.minWidth = "230px";
+  GRID_FILTER_OPTIONS.forEach(function (o) {
+    const active = GRID_FILTER === o[0];
+    const it = el("button", "i " + (active ? "on" : ""), o[1]);
+    it.type = "button";
+    it.title = o[2];
+    it.dataset.fkey = o[0];
+    if (active) it.title = "✓ " + o[2];
+    it.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      _gridFilterSave(o[0]);
+      closeFilterMenu();
+      CURSOR = "";
+      repaint();
+    });
+    menu.appendChild(it);
+  });
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = Math.max(4, r.left) + "px";
+  menu.style.top = (r.bottom + 4) + "px";
+  menu.style.position = "fixed";
+  document.body.appendChild(menu);
+  FILTER_MENU = menu;
+  document.addEventListener("mousedown", onFilterDocDown, true);
+  document.addEventListener("scroll", closeFilterMenu, true);
+}
+
 // ---- P21h: nhịp đọc folder là TRẠNG THÁI của lưới nên cái nút đứng trong lưới, cạnh ô tìm ----
 // Trước đây nó là `st.toggle` native đứng ngoài + dòng chữ "Tự làm mới grid (5s)". Bỏ widget thì
 // bỏ luôn chữ, nên trạng thái phải đọc bằng CHÍNH NÓ: nền xanh khi BẬT, và title/aria-label nói đủ
@@ -3567,7 +3680,10 @@ function countText() {
   const full = visible();
   const drawn = windowed(full).length;
   const queued = queueIds().length;
+  const fopt = GRID_FILTER_OPTIONS.find(o => o[0] === GRID_FILTER);
+  const fLabel = GRID_FILTER === "all" ? "" : " [lọc: " + fopt[1] + "]";
   return "hiện " + drawn + (drawn < full.length ? "/" + full.length : "") + " bài"
+    + fLabel
     + (queued ? " (" + queued + " trong hàng đợi ở đầu)" : "")
     + (drawn < full.length ? " (mới nhất — ▾ xem bài cũ hơn)" : "")
     + (SEARCH.trim() ? " trong " + rows().length + " bài" : "")
@@ -3761,6 +3877,7 @@ function render(args, force) {
 
   const bar = el("div", "bar");
   bar.appendChild(searchBox());
+  bar.appendChild(filterButton());  // P35a: lọc trạng thái cạnh ô tìm
   bar.appendChild(refreshButton());  // P21h: nút nhịp đọc folder — trước đây là st.toggle đứng NGOÀI lưới
   bar.appendChild(queueAudioButton());  // P27a: chọn file tiếng + giây cho hàng đợi
   bar.appendChild(newsButton());  // P28a: modal News — đăng báo lên website
@@ -3778,8 +3895,12 @@ function render(args, force) {
   if (!rows().length) {
     wrap.appendChild(el("div", "empty", "Workspace này chưa có story nào (hoặc bộ lọc đang che hết) — mở trang Tạo bài, hoặc đổi bộ lọc 'Lọc bài'."));
   } else if (!full.length) {
-    wrap.appendChild(el("div", "empty", "Không bài nào khớp “" + SEARCH.trim() + "” trong " + rows().length
-      + " bài đang hiện — thử từ ngắn hơn (id, một chữ trong chủ đề) hoặc xoá ô tìm."));
+    const fopt = GRID_FILTER_OPTIONS.find(o => o[0] === GRID_FILTER);
+    const filtPart = GRID_FILTER === "all" ? ""
+      : " · không bài nào khớp bộ lọc “" + fopt[1] + "” — bấm nút phễu cạnh ô tìm đổi bộ lọc (hoặc về “Tất cả”)";
+    wrap.appendChild(el("div", "empty", "Không bài nào khớp “" + (SEARCH.trim() || "(không ô tìm)") + "” trong "
+      + rows().length + " bài đang hiện" + filtPart
+      + " — thử từ ngắn hơn (id, một chữ trong chủ đề) hoặc xoá ô tìm."));
   } else {
     const more = showMoreButton(full, list);
     const scroll = el("div", "scroll");
