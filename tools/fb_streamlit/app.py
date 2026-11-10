@@ -1050,12 +1050,14 @@ def page_config(c):
     st.caption(
         f"Mọi cấu hình nằm ngoài thư mục code, trong `{paths.home()}` — "
         f"`{paths.DATA}/fb_tool.db` (Providers, Presets), `{paths.DATA}/workspaces.json` (folder data đã dùng), "
-        f"`{paths.DATA}/{paths.REFS}` (ảnh đang stage), `{paths.DATA}/{audio.AUDIO_DIR}` (bộ sưu tập tiếng), `.env` (API key), `{paths.LOGS}`. "
+        f"`{paths.DATA}/{paths.REFS}` (ảnh đang stage), `{paths.DATA}/{audio.AUDIO_DIR}` (bộ sưu tập tiếng), "
+        f"`{paths.DATA}/news_sites.json` (website đăng báo), `.env` (API key), `{paths.LOGS}`. "
         "Bài viết thì nằm trong **workspace** do bạn chọn (tab Workspace). "
         "Đổi chỗ lưu bằng biến môi trường Windows `FB_TOOL_HOME` (không đặt trong .env)."
     )
-    tab_workspace, tab_providers, tab_presets, tab_audio = st.tabs(
-        ["Workspace (chứa story)", "Providers", "Presets theo chủ đề", "Âm thanh (ghép video B4)"])
+    tab_workspace, tab_providers, tab_presets, tab_audio, tab_website = st.tabs(
+        ["Workspace (chứa story)", "Providers", "Presets theo chủ đề", "Âm thanh (ghép video B4)",
+         "Website (đăng báo)"])
     with tab_workspace:
         page_workspace(c)
     with tab_providers:
@@ -1064,6 +1066,48 @@ def page_config(c):
         page_presets(c)
     with tab_audio:
         page_audio(c)
+    with tab_website:
+        page_website()
+
+
+# P37b: tab "Website (đăng báo)" dưới Cấu hình — anh tự thêm/xóa site để News modal dùng.
+# Trước (P28a) 2 URL hardcoded trong grid.py; nay anh quản lý ở đây, lưu DATA/news_sites.json.
+def page_website():
+    import news_sites as ns
+    st.subheader("Website — mục tiêu đăng báo của News modal (B1 + B2 + B3)")
+    st.caption(
+        f"Danh sách lưu trong `{paths.data_dir() / 'news_sites.json'}` — modal News ở Grid đọc đúng thứ này. "
+        "Anh nhập URL bất kỳ (không giới hạn *.danhngon.pro). Xóa hết thì modal hiện hint "
+        "'chưa có site — thêm trong Cấu hình'."
+    )
+    sites = ns.load()
+    if sites:
+        st.write("Site hiện có:")
+        for s in sites:
+            st.markdown(f"- **{s['label']}** → `{s['url']}`")
+    else:
+        st.info("Chưa có site nào. Thêm bên dưới để modal News đăng được.")
+    with st.form("news_site_add", clear_on_submit=True):
+        n1, n2 = st.columns(2)
+        lbl = n1.text_input("Tên * (hiện trong modal News)", placeholder="US News PV247")
+        url = n2.text_input("URL * (host trang đăng báo)", placeholder="https://usnewspv247.danhngon.pro")
+        if st.form_submit_button("➕ Thêm site"):
+            if not lbl.strip():
+                st.error("Tên site không được để trống.")
+            elif not url.strip():
+                st.error("URL site không được để trống.")
+            else:
+                ns.add(lbl.strip(), url.strip())
+                st.success(f"Đã thêm '{lbl.strip()}'. Modal News sẽ thấy ngay lần mở kế.")
+                st.rerun()
+    if sites:
+        st.subheader("Xóa site")
+        for i, s in enumerate(sites):
+            key = f"news_site_del_{i}_{s['label']}"
+            if st.button("🗑 Xóa", key=key):
+                ns.remove(s["label"], s["url"])
+                st.success(f"Đã xóa '{s['label']}'.")
+                st.rerun()
 
 
 # ---------- page: Grid ----------

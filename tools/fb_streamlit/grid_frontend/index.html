@@ -1739,8 +1739,8 @@ function vidPrecheck(row, f) {
   if (!Number(f.size || 0)) return "File rỗng (0 MB) — chưa ghi gì cả.";
   if (f.size > vidModalMax()) {
     return "“" + f.name + "” " + vidMb(f.size) + " MB vượt trần " + vidMb(vidModalMax())
-      + " MB của ô tải trong modal — dùng mục “🎬 B4 · Video” phía trên lưới (tới " + mib(MODEL.video_max, 200)
-      + " MB) hoặc chép thẳng vào folder " + row.id + "\\";
+      + " MB của ô tải trong modal — chép thẳng file vào folder " + row.id + "\\" + " (mục “🎬 B4 · Video” phía trên lưới đã xóa P37d, tải video lớn qua ô tải trong modal B4 tới "
+      + mib(MODEL.video_max, 200) + " MB)";
   }
   return "";
 }
@@ -2038,8 +2038,8 @@ function videoCard(row) {
       + "Bài đã có video do bạn tải tay phải bấm HAI lần để ghi đè; video do chính nút này ghép thì bấm một lần.",
       "Chọn file rồi bấm “🚀 Tải lên”: file đi từng mẩu " + vidMb(vidChunkBytes()) + " MB qua lưới, "
         + "mẩu cuối về tới nơi mới ghi `video.<đuôi>` vào folder — đang tải mà hủy thì folder còn nguyên.",
-      "Trần của ô TẢI là " + vidMb(vidModalMax()) + " MB vì bytes đi qua message component. Lớn hơn thì dùng mục "
-        + "“🎬 B4 · Video” phía trên lưới (tới " + mib(MODEL.video_max, 200) + " MB) hoặc chép thẳng vào folder bài.",
+      "Trần của ô TẢI là " + vidMb(vidModalMax()) + " MB vì bytes đi qua message component. Lớn hơn thì chép thẳng file vào folder bài "
+        + "(mục “🎬 B4 · Video” phía trên lưới đã xóa P37d, tải video lớn qua ô tải trong modal B4 tới " + mib(MODEL.video_max, 200) + " MB).",
       "Bấm “⛔ Hủy” giữa chừng để bỏ lượt (RAM dọn ngay), “🔁 Tải lại từ đầu” khi một mẩu không được xác nhận.",
       "Ô B4 chỉ lên xanh khi folder THẬT SỰ có file. Ô 🎬 Link video dưới đầu modal chỉ là chữ trong story.json — nó không đổi màu ô.",
       "Tải file mới là ghi đè: một bài giữ MỘT video.",
@@ -2224,10 +2224,8 @@ function modalNode() {
   if (ref.tab === "b4") {
     // P21c: ô tải ngay trong modal lo được file tới trần modal, nên nút này CHỈ còn việc mở mục native
     // cho video lớn hơn — nhãn phải nói thật phần việc còn lại, không phải đường tắt thứ hai.
-    tools.appendChild(button("📂 Mục native (video lớn hơn " + vidMb(vidModalMax()) + " MB)",
-      "Mở mục “🎬 B4 · Video” phía trên lưới với sẵn " + row.id + " — nhận tới " + mib(MODEL.video_max, 200)
-        + " MB vì file từ đó không đi qua message component; chọn file rồi bấm Lưu",
-      bb => { bb.disabled = true; send({ source: "b4_pick", id: row.id }); }, "act"));
+    // P37d: mục "🎬 B4 · Video" native đã xóa — nút b4_pick không còn mở được gì, bỏ nút.
+    // Anh tải video lớn bằng cách copy file thẳng vào folder " + row.id + " (trần " + mib(MODEL.video_max, 200) + " MB).
   }
   if (tools.children.length) modal.appendChild(tools);  // tab không có việc giao nào (Link) thì khỏi hở một thanh rỗng
   // P18d: ô link ngay dưới đầu modal. Tab nào có ô là do LINK_BARS quyết định — thêm chỗ cần ô link

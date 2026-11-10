@@ -1349,8 +1349,8 @@ check("P15b state chỉ có ba đường: chưa có / xong / mất file — khô
       stories.video_state({}, p15b_root / s_b4) == stories.PENDING
       and stories.video_state({"b4": {"state": stories.DONE}}, p15b_root / s_b4) == stories.MISSING)
 out = ga.apply_event(b4_ctx, {"source": "b4_pick", "id": s_b4})
-check("P15b bấm ô B4 chỉ CHỌN bài: log trỏ lên mục native, không sửa file, không touched (khỏi đọc lại workspace)",
-      "🎬 B4 · Video" in out.lines[0] and not out.touched and not out.copy
+check("P37d bấm ô B4 (b4_pick) không còn trỏ lên mục native (đã xóa) — chỉ log + không sửa file, không touched",
+      "🎬 B4 · Video" not in out.lines[0] and "P37d" in out.lines[0] and not out.touched and not out.copy
       and stories.load_story(p15b_root, s_b4)["b4"]["state"] == stories.DONE
       and not list((p15b_root / s_b4).glob("video.*")))
 check("P15b bài không có trong workspace thì event B4 nói rõ lỗi, không tạo folder lạ",
@@ -1379,20 +1379,19 @@ check("P15b sig pill + sig modal tính cả b4/b4meta/video/video_max — vá ô
       and "row.b0meta, row.b4, row.b4meta," in js_b4
       and "String(MODEL.video_max || 0), vidSig()," in js_b4  # P21c: sig tính cả lượt tải video đang chạy
       and "video_max: Number(args.video_max || 0)," in js_b4 and "video_max: MODEL.video_max," in js_b4)
-check("P15b nút 🎬 trong modal B4 chỉ GỬI ID (bytes không đi qua nó) — P21c đổi nhãn thành đúng việc còn lại: mở mục native",
-      'send({ source: "b4_pick", id: row.id })' in js_b4
-      and "Mục native" in js_b4 and 'if (ref.tab === "b4") {' in js_b4
+check("P37d nút native B4 đã xóa — frontend KHÔNG còn send b4_pick (P37d bỏ hẳn, chỉ còn modal B4 P21c)",
+      'send({ source: "b4_pick", id: row.id })' not in js_b4
       and 'if (tab === "b4") return [videoCard(row)];' in js_b4  # P20: B4 = một thẻ mô tả file, không xin nội dung
       and "tabField(tab) === \"b4\"" not in js_b4  # không có nội dung nào xin từ Python cho B4
       and '"b4"' not in str(fbgrid.READ_SOURCES))  # event sửa session_state -> vẽ lại cả trang, không phải tick rẻ
-check("P15b b4_pick được lưới bắt ở cấp app (video_form đứng NGOÀI fragment nên phải rerun cả trang)",
+check("P37d video_form rỗng nhưng render VẪN gọi nó (giữ chỗ cho B4_TARGET_KEY pop ở _body) — publisher_form đã xóa",
       '== "b4_pick"' in inspect.getsource(fbgrid._body) and "B4_TARGET_KEY" in inspect.getsource(fbgrid._body)
-      and "video_form(ctx)" in inspect.getsource(fbgrid.render))
-check("P15b trần video 200 MB + đuôi phổ biến, lưới và form native cùng lấy từ grid_actions (một sự thật)",
+      and "video_form(ctx)" in inspect.getsource(fbgrid.render)
+      and "def publisher_form" not in inspect.getsource(fbgrid))
+check("P37d trần video 200 MB + đuôi phổ biến LẤY từ grid_actions (một sự thật) — không còn form native max_upload_size",
       ga.B4_VIDEO_MAX == 200 * 1024 * 1024 and ".mp4" in ga.VIDEO_SUFFIXES and ".mkv" in ga.VIDEO_SUFFIXES
       and "video_max=ga.B4_VIDEO_MAX" in inspect.getsource(fbgrid.render_component)
-      and fbgrid.VIDEO_TYPES == [s.lstrip(".") for s in ga.VIDEO_SUFFIXES]
-      and "max_upload_size=ga.B4_VIDEO_MAX" in inspect.getsource(fbgrid.video_form))
+      and fbgrid.VIDEO_TYPES == [s.lstrip(".") for s in ga.VIDEO_SUFFIXES])
 
 # --- P6c: phanh luồng nền + một bài chỉ có MỘT nơi chạy ---
 started_c: list[str] = []
@@ -1560,51 +1559,29 @@ at4.session_state["nav_page"] = "Grid"
 at4.run()
 check("page Grid runs (chế độ component mặc định)", not at4.exception and any("Grid story" in (h.value or "") for h in at4.subheader))
 b4_sb = next((s for s in at4.selectbox if s.key == fbgrid.B4_KEY), None)
-check("P15b trang Grid có mục B4 native: selectbox id bài + ô tải file, không có nút chạy AI nào",
-      b4_sb is not None and b4_sb.label == "Bài sẽ nhận video"
-      and any(f.key == fbgrid.B4_FILE_KEY for f in at4.file_uploader)
-      and not any("🎬 Lưu" in b.label for b in at4.button))  # chưa chọn file thì chưa có nút ghi
-check("P15b nhãn selectbox B4 là id THUẦN và ổn định qua hai lượt vẽ (không lấy chủ đề từ cache fragment — AppTest sụp vì 'value not in options')",
-      b4_sb is not None and b4_sb.options == stories.list_story_ids(smoke_root)
-      and not any("·" in str(o) for o in b4_sb.options))
-at4.run()
-b4_sb2 = next((s for s in at4.selectbox if s.key == fbgrid.B4_KEY), None)
-check("P15b lượt vẽ thứ hai vẫn cùng một danh sách + giá trị (không tự đổi nhãn khi cache fragment được điền)",
-      b4_sb2 is not None and not at4.exception
-      and b4_sb2.options == (b4_sb.options if b4_sb else []) and b4_sb2.value == b4_sb2.options[0])
+check("P37d trang Grid KHÔNG còn mục B4 native: không selectbox + không ô tải file + không nút Lưu "
+      "(P37d xóa expander video_form — tải video B4 giờ qua ô tải trong modal B4 của lưới, P21c)",
+      b4_sb is None and not any(f.key == fbgrid.B4_FILE_KEY for f in at4.file_uploader)
+      and not any("🎬 Lưu" in b.label for b in at4.button))
+check("P37d video_form là stub rỗng (không expander) — render gọi nó nhưng không sinh widget",
+      "video_form(ctx)" in inspect.getsource(fbgrid.render)
+      and not any(k in inspect.getsource(fbgrid.video_form) for k in ("st.expander", "file_uploader", "selectbox")))
 _picked = stories.list_story_ids(smoke_root)[-1]
 at4.session_state[fbgrid.B4_TARGET_KEY] = _picked
 at4.run()
-check("P15b bài bấm 🎬 trong modal B4 được seed vào selectbox TRƯỚC khi widget sinh ra (luật P9b) rồi xóa mốc",
-      any(s.key == fbgrid.B4_KEY and s.value == _picked for s in at4.selectbox)
-      and fbgrid.B4_TARGET_KEY not in at4.session_state)
-check("P15b mở mục B4 không sửa file nào (chỉ vẽ form)", not at4.exception
+check("P37d bấm b4_pick trong modal B4 KHÔNG tạo widget native (video_form rỗng) — không còn selectbox B4_KEY "
+      "nào giữ bài (key B4_TARGET_KEY giờ không ai tiêu thụ, bỏ assertion 'đã pop')",
+      not any(s.key == fbgrid.B4_KEY for s in at4.selectbox)
+      and not at4.exception)
+check("P37d mở mục B4 (stub) không sửa file nào — không có file mới, không có state b4", not at4.exception
       and not list((smoke_root / _picked).glob("video.*"))
       and "b4" not in stories.load_story(smoke_root, _picked))
-b4_up = next((f for f in at4.file_uploader if f.key == fbgrid.B4_FILE_KEY), None)
-check("P15b ô tải file B4 vẫn còn ở lượt vẽ sau (không bị fragment làm mất widget)",
-      b4_up is not None and not at4.exception)
-if b4_up is not None:  # thiếu widget thì FAIL đã nói ở trên; để traceback giết cả suite thì mất hết check sau
-    b4_up.set_value(("clip quay tay.mp4", b"FAKE-VIDEO-BYTES", "video/mp4")).run()
-    save_b4 = next((b for b in at4.button if b.key == "grid_b4_save"), None)
-    check("P15b chọn file xong mới hiện nút Lưu, nhãn nói thẳng file nào sẽ thành gì cho bài nào",
-          save_b4 is not None and not at4.exception
-          and f"→ {_picked}/video.mp4" in save_b4.label and "clip quay tay.mp4" in save_b4.label)
-    if save_b4 is not None:
-        save_b4.click().run()
-    check("P15b bấm 🎬 Lưu: bytes từ widget native vào thẳng folder bài, tên gốc không thành đường dẫn",
-          not at4.exception and (smoke_root / _picked / "video.mp4").read_bytes() == b"FAKE-VIDEO-BYTES"
-          and not (smoke_root / _picked / "clip quay tay.mp4").exists()
-          and stories.load_story(smoke_root, _picked)["b4"]["state"] == stories.DONE
-          and not list((smoke_root / _picked).glob(".*")))
-    check("P15b lưu xong có dòng log của chính request đó trong lưới (lần tải đầu tiên nói tên file + MB)",
-          any("video.mp4" in line and "xanh lá" in line
-              for line in at4.session_state.get(fbgrid.LOG_KEY, {}).get("lines", [])))
-    _at_row = next(r for r in fbgrid.rows_for(ga.build_ctx(db.connect(), smoke_root)) if r["id"] == _picked)
-    check("P15b ô B4 của bài trong lưới lên xanh lá ngay lượt đọc folder kế tiếp",
-          _at_row["b4"] == stories.DONE and _at_row["video"] == "video.mp4"
-          and _at_row["bucket"] != "error")
-    (smoke_root / _picked / "video.mp4").unlink()
+# P37d: ô tải file B4 (widget native B4_FILE_KEY) đã xóa — không còn ở lượt vẽ nào,
+# bytes video B4 giờ tải qua ô tải trong MODAL B4 của lưới (P21c chunks), không qua widget native.
+check("P37d ô tải file B4 (widget native B4_FILE_KEY) không còn ở trang Grid — chỉ còn modal B4 (P21c)",
+      not any(f.key == fbgrid.B4_FILE_KEY for f in at4.file_uploader)
+      and not at4.exception
+      and not any(b.key == "grid_b4_save" for b in at4.button))
 
 # --- P2c AppTest: Grid native + event từ component đi qua dispatcher ---
 grid_sid = stories.create_story(smoke_root, "Grid smoke", input_text="")["id"]
@@ -4231,9 +4208,9 @@ _ceiling21 = ga.B4_MODAL_MAX
 ga.B4_MODAL_MAX = 8 * 1024 * 1024  # hạ trần tạm để test đường từ chối khỏi phải gửi 33 MB
 _over21 = ga.video_chunk(vid_ctx, None, _vid(0, b"AB", 50 * 1048576))[1]
 ga.B4_MODAL_MAX = _ceiling21
-check("P21c vượt trần modal thì từ chối ngay MẨU ĐẦU (không cho tải dở rồi mới báo) và chỉ đường mục native",
+check("P21c vượt trần modal thì từ chối ngay MẨU ĐẦU (không cho tải dở rồi mới báo) và chỉ đường copy file",
       _over21["done"] is True and "vượt trần 8 MB" in str(_over21.get("error"))
-      and "🎬 B4 · Video" in str(_over21.get("error")) and "200 MB" in str(_over21.get("error"))
+      and "chép thẳng file vào folder bài" in str(_over21.get("error")) and "200 MB" in str(_over21.get("error"))
       and (vid_root / s_vid / "video.mp4").read_bytes() == b"".join(vid_parts))
 _check21 = ga.video_chunk(vid_ctx, None, _vid(0, b"ABCDEFGH", 4))[1]
 check("P21c tổng byte nhận được LỚN HƠN file khai báo là lượt hỏng — dừng lại chứ không ghi file dư",
@@ -7564,6 +7541,39 @@ check("P36c khi WAITING hết hạn (6s) KHÔNG chỉ xóa rồi im lặng: sche
       and "ensureOne(row, fields[0])" in _p36c_reissue
       and "requestModal(row, fields, w.tab)" in _p36c_reissue)
 # --- hết P36c ---
+
+# --- P37d: Website (đăng báo) ra Cấu hình + bỏ 2 expander + bỏ giới hạn domain ---
+_p37d_app = (Path(__file__).resolve().parent / "app.py").read_text(encoding="utf-8")
+_p37d_grid = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+_p37d_wp = (Path(__file__).resolve().parent / "web_publisher.py").read_text(encoding="utf-8")
+_p37d_ns = (Path(__file__).resolve().parent / "news_sites.py").read_text(encoding="utf-8")
+import news_sites as ns
+_p37d_sites = ns.load()
+check("P37d news_sites: seed 2 site cũ (US News PV247 + News PH Van), lưu DATA/news_sites.json, dedup + normalize URL",
+      any(s["label"] == "US News PV247" and s["url"] == "https://usnewspv247.danhngon.pro" for s in _p37d_sites)
+      and any(s["label"] == "News PH Van" and s["url"] == "https://newsphvan.danhngon.pro" for s in _p37d_sites)
+      and 'NEWS_SITES = "news_sites.json"' in _p37d_ns and "json.dumps" in _p37d_ns)
+check("P37d tab 'Website (đăng báo)' đứng thứ 5 trong Cấu hình + page_website đọc news_sites (anh thêm/xóa site)",
+      '"Website (đăng báo)"' in _p37d_app
+      and "def page_website()" in _p37d_app and "ns.load()" in _p37d_app and "ns.add(" in _p37d_app and "ns.remove(" in _p37d_app
+      and "tab_website" in _p37d_app)
+check("P37d _news_payload đọc news_sites.load() (KHÔNG còn 2 URL literal) — modal News lấy site từ Cấu hình",
+      "import news_sites as ns" in _p37d_grid and "ns.load()" in _p37d_grid
+      and '"value": "https://usnewspv247.danhngon.pro"' not in _p37d_grid.split("def _news_payload")[1].split("\n\n")[0])
+check("P37d 2 expander đã xóa: publisher_form biến mất khỏi grid.py + video_form là stub rỗng (không expander/upload)",
+      "def publisher_form" not in _p37d_grid
+      and 'st.expander("🌐 Đăng báo' not in _p37d_grid
+      and 'st.expander("🎬 B4 · Video' not in _p37d_grid
+      and "video_form(ctx)" in _p37d_grid
+      and "def video_form" in _p37d_grid
+      and "st.file_uploader" not in _p37d_grid)
+check("P37d bỏ giới hạn domain *.danhngon.pro: constants PUBLIC_DOMAIN_SUFFIX/BASE_HOST đã xóa, "
+      "normalized_site + validate_public_url chỉ còn kiểm HTTPS hợp lệ (anh thêm site tùy ý ở Cấu hình ▸ Website)",
+      "PUBLIC_DOMAIN_SUFFIX" not in _p37d_wp
+      and "BASE_HOST" not in _p37d_wp
+      and "endswith('.danhngon.pro')" not in _p37d_wp
+      and "Chỉ hỗ trợ website thuộc danhngon.pro" not in _p37d_wp)
+# --- hết P37d ---
 
 # cleanup test rows
 c = db.connect()

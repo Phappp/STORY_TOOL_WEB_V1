@@ -22,10 +22,9 @@ import stories
 
 DEFAULT_SITE = 'https://usnewspv247.danhngon.pro'
 ADMIN_URL = DEFAULT_SITE + '/admin/posts'
-BASE_HOST = 'usnewspv247.danhngon.pro'
-# The admin account can publish to a different public site (the supplied Posts HTML uses newsphvan.danhngon.pro).
-# Permit only genuine HTTPS blog URLs under the configured publishing platform.
-PUBLIC_DOMAIN_SUFFIX = '.danhngon.pro'
+# P37d: giới hạn domain *.danhngon.pro (trước ép 2 constants) đã bỏ — anh thêm site tùy ý trong
+# Cấu hình ▸ Website (news_sites.json). DEFAULT_SITE chỉ là fallback khi event webpub_* không
+# mang `site` (modal News luôn gửi site từ danh sách cấu hình).
 CONFIG_NAME = '.web-publisher-selectors.json'
 PROFILE_NAME = '.web-publisher-browser'
 
@@ -46,7 +45,11 @@ DEFAULT_SELECTORS = {
 
 
 def normalized_site(raw: str) -> str:
-    """Accept a website origin, /login, /admin/dashboard or /admin/posts URL."""
+    """Accept a website origin, /login, /admin/dashboard or /admin/posts URL.
+
+    P37d: KHÔNG giới hạn domain *.danhngon.pro nữa — anh thêm site tùy ý trong Cấu hình ▸ Website
+    (news_sites.json). Chỉ còn yêu cầu HTTPS + host hợp lệ + không có user/pass/query/port/fragment.
+    """
     raw = (raw or '').strip()
     if not raw:
         raise PublishError('Chưa nhập website.')
@@ -56,9 +59,6 @@ def normalized_site(raw: str) -> str:
     host = (parsed.hostname or '').lower()
     if parsed.scheme != 'https' or not host or parsed.username or parsed.password or parsed.port or parsed.query or parsed.fragment:
         raise PublishError('Website phải là URL HTTPS hợp lệ, không chứa mật khẩu, query hay port.')
-    # Safety boundary: publishing only on the intended platform hosts.
-    if not (host == 'danhngon.pro' or host.endswith('.danhngon.pro')):
-        raise PublishError('Chỉ hỗ trợ website thuộc danhngon.pro.')
     return f'https://{host}'
 
 
@@ -72,8 +72,9 @@ def login_url(site: str) -> str:
 
 def profile_name(site: str) -> str:
     host = urlparse(normalized_site(site)).hostname or ''
-    # Retain the pre-existing login profile for the original website.
-    return PROFILE_NAME if host == BASE_HOST else PROFILE_NAME + '-' + re.sub(r'[^a-z0-9.-]', '_', host)
+    # P37d: giữ đúng login profile cũ của site mặc định (DEFAULT_SITE), site khác theo host riêng.
+    default_host = urlparse(DEFAULT_SITE).hostname or ''
+    return PROFILE_NAME if host == default_host else PROFILE_NAME + '-' + re.sub(r'[^a-z0-9.-]', '_', host)
 
 
 class PublishError(RuntimeError):
@@ -116,10 +117,16 @@ def load_selectors(root: Path) -> dict[str, str]:
 
 
 def validate_public_url(candidate: str) -> str:
+    """P37d: KHÔNG ép *.danhngon.pro — chỉ kiểm tra URL HTTPS hợp lệ + không có user/pass.
+
+    Trước (P28a) ép host phải endswith .danhngon.pro vì chỉ 2 site cố định. Nay anh tự thêm site
+    trong Cấu hình ▸ Website (news_sites.json) nên không thể hardcode domain. Link được đối chiếu
+    theo CHUỖI (title / slug) chứ không theo domain, nên bỏ domain là không tăng nguy cơ đăng trùng.
+    """
     url = (candidate or '').strip()
     parsed = urlparse(url)
-    if (parsed.scheme != 'https' or not parsed.hostname or not parsed.hostname.endswith(PUBLIC_DOMAIN_SUFFIX)
-            or not parsed.path.startswith('/blog/') or parsed.username or parsed.password):
+    if (parsed.scheme != 'https' or not parsed.hostname
+            or parsed.username or parsed.password):
         raise PublishError('Không xác minh được URL bài công khai; không tự đoán link.')
     return url
 

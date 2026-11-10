@@ -1997,8 +1997,8 @@ def video_chunk(ctx: Ctx, buf, event: dict) -> tuple:
             return None, {**out, "done": True,
                           "error": f"video {round(total / 1048576, 1)} MB vượt trần "
                                    f"{B4_MODAL_MAX // 1048576} MB của ô tải trong modal — "
-                                   f"dùng mục “🎬 B4 · Video” phía trên lưới (tới "
-                                   f"{B4_VIDEO_MAX // 1048576} MB) hoặc chép thẳng vào folder bài."}
+                                   f"chép thẳng file vào folder bài (tới "
+                                   f"{B4_VIDEO_MAX // 1048576} MB). P37d: mục native “🎬 B4 · Video” đã xóa."}
         buf = {"up": up, "sid": sid, "name": name[:200], "suffix": suffix,
                "total": total, "got": 0, "parts": [], "at": time.time()}
     try:
@@ -2218,7 +2218,8 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "b4_pick":
             # Cú bấm trong modal B4 chỉ CHỌN bài sẽ nhận video; bytes vào bằng widget native, không qua event.
             stories.load_story(ctx.root, sid)
-            out.lines = [f"{sid}: đã chọn để nhận video — mở mục \"🎬 B4 · Video\" phía trên lưới để chọn file từ ổ đĩa."]
+            # P37d: mục native "🎬 B4 · Video" đã xóa — b4_pick giờ chỉ log; anh copy file vào folder.
+            out.lines = [f"{sid}: đã chọn để nhận video — copy file video vào folder {sid} (mục native đã xóa P37d)."]
         elif source == "webpub_login":
             # P28a: modal News — mở Chromium cho đăng nhập thủ công (không ghi file story).
             import web_publisher as wp
