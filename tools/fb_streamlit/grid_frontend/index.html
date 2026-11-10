@@ -80,6 +80,11 @@
   .newsitem .nrebtn { margin-top:4px; font-size:10.5px; padding:2px 8px; border-radius:4px;
     background:var(--btn); color:var(--text); border:1px solid var(--border); cursor:pointer; }
   .newsitem .nrebtn:hover { background:var(--btn-h); }
+  /* P38a: hàng progress (chữ + spinner khi chưa xong) + banner cảnh báo site trống */
+  .newsprog { display:flex; align-items:center; gap:8px; }
+  .newsprog .spinner { width:16px; height:16px; border-width:2px; }
+  .newswarn { padding:6px 10px; border-radius:6px; background:var(--missing); color:var(--missing-t);
+    border:1px solid var(--border); font-size:11px; margin-bottom:6px; }
   .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
   .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }
@@ -2092,11 +2097,24 @@ function modalBody(row, tab, key) {
   resultCards(row, tab, key).forEach(c => { if (c) body.appendChild(c); });
   // P34a: thẻ "Bản dịch (tiếng Việt)" — chỉ cho B1/B3, nằm DƯỚI thẻ kết quả thật. Nội dung đọc từ
   // cache "Dịch" (do nút 🇻🇳 nạp từ response translate), KHÔNG ghi file. Chưa bấm dịch thì giấu hẳn.
+  // P38b: khi còn request "Dịch" CHƯA về (WAITING giữ entry, CONTENT/NOTES chưa có) → hiện khung
+  // "đang dịch" có spinner + làm mờ, tránh anh tưởng nút chết trong lúc API đang chạy.
   if (["b1", "b3"].indexOf(tab) >= 0) {
     const dkey = contentKey(row, "Dịch");
     const dtext = CONTENT.get(dkey);
     const dnote = NOTES.get(dkey);
-    if (dtext != null || dnote != null) {
+    let pending = false;
+    WAITING.forEach(w => {
+      if (String(w.id) === String(row.id) && (w.fields || [w.field]).indexOf("Dịch") >= 0) pending = true;
+    });
+    if (pending && dtext == null && dnote == null) {
+      const tcard = el("div", "mcards");
+      tcard.appendChild(el("div", "muted", "🇻🇳 Đang dịch " + (STEP_TITLE[tab] || tab) + " sang tiếng Việt… (không ghi file, chỉ hiện UI)"));
+      tcard.appendChild(loadFrame(null, { kind: "text", label: "đang gọi bộ Dịch "
+        + ((Array.isArray(MODEL.defaults.translate) && MODEL.defaults.translate.length)
+           ? "· " + MODEL.defaults.translate.join(" → ") : "· chưa chọn bộ") }));
+      body.appendChild(tcard);
+    } else if (dtext != null || dnote != null) {
       const tcard = el("div", "mcards");
       if (dtext != null && String(dtext).trim()) {
         tcard.appendChild(el("div", "muted", "🇻🇳 Bản dịch (tiếng Việt) — chỉ hiện UI, không ghi file, đóng modal là mất"));
@@ -3566,17 +3584,21 @@ function newsModalNode() {
     left.appendChild(pubBtn);
   }
 
-  // Progress label (từ response, nếu có)
+  // Progress label (từ response, nếu có) + spinner khi danh sách chưa "đủ xanh" (P38a: tránh đơ)
   const prog = newsResp.progress;
   if (prog) {
-    left.appendChild(el("span", "newslbl", String(prog)));
+    const allOk = (newsResp.results || []).length > 0 && (newsResp.results || []).every(rr => rr.ok);
+    const progRow = el("div", "newsprog");
+    progRow.appendChild(el("span", "newslbl", String(prog)));
+    if (!allOk) progRow.appendChild(spinnerNode("đang xử lý từng bài…"));
+    left.appendChild(progRow);
   }
   body.appendChild(left);
 
   // ---- CỘT PHẢI: trạng thái LIVE của từng story (đọc từ row.web_publish, sống qua polling) ----
   const right = el("div", "newscol right");
   right.appendChild(el("span", "newslbl", "Tiến trình từng bài — đọc thẳng từ story.json, cập nhật mỗi 2s"));
-  const idSet = new Set(ids.map(String));
+  // P38a: bỏ idSet (dead code — không ai dùng)
   // Map sid -> row (để đọc web_publish + topic)
   const rowById = {};
   rows().forEach(r => { rowById[String(r.id)] = r; });
@@ -3633,8 +3655,11 @@ function newsModalNode() {
         };
         box.appendChild(rb);
       }
-    } else if (errTxt && (wp.state === "needs_review" || cls === "fail")) {
+    } else if (errTxt) {
+      // P38a: hiện lý do cho MỌI case fail/review (tránh ô "Lỗi" rỗng không giải thích được)
       box.appendChild(el("span", "ioline bad", String(errTxt).slice(0, 160)));
+    } else if (cls === "fail" && !errTxt) {
+      box.appendChild(el("span", "ioline bad", "Lỗi — chưa có lý do (Chromium chưa kịp ghi). Mở '🌐' để bấm lại."));
     } else if (wp.state === "saving") {
       box.appendChild(el("span", "ioline ok", "Chờ Chromium xác nhận Save…"));
     } else if (anyRunning) {
@@ -3643,6 +3668,12 @@ function newsModalNode() {
     right.appendChild(box);
   });
 
+  // P38a: cảnh báo khi chưa chọn site (danh sách Cấu hình ▸ Website trống) — tránh bấm đăng rỗng
+  const siteSelVal = siteSel ? siteSel.value : "";
+  if (!siteSelVal) {
+    right.prepend(el("div", "newswarn",
+      "⚠ Chưa có site đăng báo — thêm trong Cấu hình ▸ Website rồi mở lại modal."));
+  }
   // Tóm tắt phía trên
   const summary = el("span", "newslbl");
   summary.textContent =
