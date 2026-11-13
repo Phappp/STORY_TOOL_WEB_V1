@@ -937,15 +937,17 @@ def export_json(ctx: Ctx, raw) -> tuple[str, list[str]]:
 
 
 def export_csv(ctx: Ctx, raw) -> tuple[str, list[str]]:
-    """Cột A = link nguồn, cột B = link đã đăng — đúng hai cột mà ô Import CSV đọc lại được."""
+    """CSV: id, caption, SEO (định dạng Unicode đậm cho Facebook)."""
+    from formats import to_fb_unicode
     ids, notes = export_ids(ctx, raw)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["link_nguồn", "link_da_dang"])
+    writer.writerow(["id", "caption", "seo"])
     for sid in ids:
-        story = stories.load_story(ctx.root, sid)
-        writer.writerow([clean_url(story.get("source") or (story.get("b0") or {}).get("url")),
-                         clean_url(story.get("link"))])
+        caption = stories.step_text(ctx.root, sid, "b1")
+        seo_md = stories.step_text(ctx.root, sid, "b3")
+        seo_fb = to_fb_unicode(seo_md) if seo_md else ""
+        writer.writerow([sid, caption, seo_fb])
     return buf.getvalue(), notes
 
 
@@ -964,7 +966,7 @@ PREVIEW_IMGS = 3  # ảnh THẬT hiện mỗi bài — nhiều hơn là gửi c�
 DETAIL_CAP_CHARS = 4000  # caption ĐẦY ĐỦ của MỘT dòng khi bấm "chi tiết" — đủ dài cho bài scrape, vẫn có trần
 DETAIL_IMGS = 12  # ảnh hiện trong thẻ chi tiết (nhiều hơn ô gọn) — một dòng thôi nên gửi hết không nặng DOM
 PREVIEW_CAP_CHARS = 420  # chữ cắt ở đây chỉ để đọc tại chỗ; bản ghi vào folder vẫn nguyên văn
-EXPORT_KINDS = {"json": "JSON (import lại được)", "csv": "CSV 2 cột (link nguồn · link đã đăng)"}
+EXPORT_KINDS = {"json": "JSON (import lại được)", "csv": "CSV 3 cột: id, caption, seo (Unicode đậm FB)"}
 
 
 def preview_caption(caption) -> tuple[str, bool]:
