@@ -123,82 +123,143 @@ def save_preset_pref(ctx: ga.Ctx) -> None:
 
 
 def workspace_bar(ctx: ga.Ctx) -> None:
-    """3 dropdown provider + 1 dropdown preset đặt ở đầu grid — prefs của workspace là sự thật duy nhất.
+    """Panel cấu hình workspace: Provider (B1/B2/B3/Dịch) + Preset — gom vào expander gọn.
+
+    Phase-F: layout mới — expander collapsible, provider theo hàng có label ngắn,
+    Preset nằm cùng khối thay vì cột 4 rời. Logic và session_state keys KHÔNG thay đổi:
+    PROV_KEYS[step], PRESET_KEY, on_change callbacks giữ nguyên hoàn toàn.
 
     Bài nào được chọn riêng trong modal (prov_pick) thì quyền ưu tiên cao hơn chỗ này; riêng preset
     thì KHÔNG có ngoại lệ: preset chung thắng mọi preset_id trong story.json.
-    Trước đây mỗi lượt vẽ lại so giá trị widget với file rồi ghi chênh lệch xuống file — nhưng widget
-    có thể mang giá trị của workspace khác hoặc giá trị trình duyệt khôi phục, nên prefs bị xoá âm
-    thầm ngay sau khi chọn ("vừa gán provider đã reset"). Nay file chỉ đổi khi anh bấm đổi.
     """
     names = ga.provider_names(ctx)
     stored = ga.pref_providers(ctx.root)
     note = st.session_state.pop("grid_pref_note", None)
-    if note:
-        st.caption(note)
-    cols = st.columns([1, 1, 1, 1.4])
-    for col, step in zip(cols[:3], ga.ALL_STEPS, strict=True):
+
+    # --- Prep: sync/validate từng bước (giống logic cũ, chỉ tách ra trước expander) ---
+    for step in list(ga.ALL_STEPS) + ["translate"]:
         wanted = [str(n) for n in (stored.get(step) or [])]
         gone = [n for n in wanted if n not in names]
-        if gone:  # provider đã bị xóa ở Cấu hình -> bỏ khỏi prefs, đừng âm thầm chờ một bộ không còn
-            note = ga.set_pref_providers(ctx.root, step, [n for n in wanted if n in names])
-            if note:
-                st.caption(note)
-            ctx.defaults.pop(step, None)
+        if gone:
+            n2 = ga.set_pref_providers(ctx.root, step, [n for n in wanted if n in names])
+            if n2 and not note:
+                note = n2
+            if step in ctx.defaults:
+                ctx.defaults.pop(step, None)
             wanted = [n for n in wanted if n in names]
         st.session_state[PROV_KEYS[step]] = wanted
-        col.multiselect(f"Provider {STEP_LABELS[step].replace('▶ ', '')} (chọn được nhiều bộ)", names,
-                        key=PROV_KEYS[step],
-                        on_change=lambda s=step: save_provider_pref(ctx, s),
-                        help=("Bài chưa chọn riêng thì bước này chạy bằng những provider đặt ở đây. "
-                              "Nhiều bộ = chia việc: mỗi bộ chỉ chạy MỘT lượt một lúc, bộ đang bận "
-                              "thì bài nhảy sang bộ kế đang rảnh (thứ tự ưu tiên = thứ tự anh xếp). "
-                              "Bỏ trống = bước đó CHƯA CÓ provider — bấm chạy sẽ báo lỗi, không tự "
-                              "lấy bộ mặc định; chọn ở đây hoặc chọn riêng trong modal bài. "
-                              f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
-                              if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
-
-    # P34a: ô "Dịch" — bộ OpenAI-like DÀNH RIÊNG cho việc dịch B1/B3 sang tiếng Việt (chỉ hiện UI,
-    # không ghi file, không đổi màu ô, không tốn lượt B1/B3). Pool độc lập với 3 ô B1/B2/B3 nên chọn
-    # ở đây không đụng provider chạy pipeline. Bộ đầu tiên anh chọn được dùng khi bấm "🇻🇳 Dịch".
-    tr_key = "translate"
-    tr_wanted = [str(n) for n in (stored.get(tr_key) or [])]
-    tr_gone = [n for n in tr_wanted if n not in names]
-    if tr_gone:
-        ga.set_pref_providers(ctx.root, tr_key, [n for n in tr_wanted if n in names])
-        tr_wanted = [n for n in tr_wanted if n in names]
-    st.session_state[PROV_KEYS[tr_key]] = tr_wanted
-    st.columns([0.6])[0].multiselect("Provider Dịch (B1/B3 → tiếng Việt, chỉ hiện UI)", names,
-                                      key=PROV_KEYS[tr_key],
-                                      on_change=lambda: save_provider_pref(ctx, "translate"),
-                                      help=("Chọn bộ dùng cho nút '🇻🇳 Dịch' trong modal B1/B3 — dịch nội dung tab "
-                                            "đang mở sang tiếng Việt, CHỈ HIỆN TRÊN UI (không ghi caption.txt/"
-                                            "seo.md, không đổi màu ô, không tốn lượt B1/B3). Bộ đầu tiên được dùng. "
-                                            "Nên chọn bộ OpenAI-like (API); bộ Codex CLI không có service chat để dịch. "
-                                            f"Lưu trong `{ga.PREFS_FILE}` của workspace này."
-                                            if names else " (chưa có provider nào — thêm ở Cấu hình ▸ Providers)"))
 
     pid = ga.pref_preset(ctx.root)
-    if pid is not None and pid not in ctx.presets:  # preset đã bị xóa ở Cấu hình -> bỏ khỏi prefs
-        note = ga.set_pref_preset(ctx.root, None)
-        if note:
-            st.caption(note)
+    if pid is not None and pid not in ctx.presets:
+        n2 = ga.set_pref_preset(ctx.root, None)
+        if n2 and not note:
+            note = n2
         ctx.shared_preset = None
         pid = None
-    # option là CHUỖI id (không phải int) để giá trị ghi vào session_state ở trên nằm trong danh sách
-    options = [PRESET_NONE_LABEL] + sorted({str(i) for i in ctx.presets},
-                                           key=lambda s: str(ctx.presets[int(s)]["name"]).lower())
-    st.session_state[PRESET_KEY] = str(pid) if pid in ctx.presets else PRESET_NONE_LABEL
-    cols[3].selectbox("Preset chung (cả workspace)", options,
-                      format_func=lambda v: PRESET_NONE_LABEL if v == PRESET_NONE_LABEL
-                      else str(ctx.presets[int(v)]["name"]),
-                      key=PRESET_KEY,
-                      on_change=lambda: save_preset_pref(ctx),
-                      help=("Bài nào cũng bị bộ prompt của ô này đè lên: MỌI bài trong workspace "
-                            "chạy theo preset chọn ở đây, kể cả bài đã ghi preset_id riêng trong "
-                            "story.json (chỉ còn là dấu vết). Bỏ chọn thì mỗi bài lại theo preset_id "
-                            f"của nó. Lưu trong `{ga.PREFS_FILE}` của workspace này."
-                            if ctx.presets else " (chưa có preset nào — tạo ở Cấu hình ▸ Presets)"))
+
+    # Tên preset đang chọn để hiện trên label expander
+    preset_name = str(ctx.presets[pid]["name"]) if pid in ctx.presets else "chưa chọn"
+    # Tóm tắt provider đang chọn cho label expander
+    def _prov_summary(step: str) -> str:
+        sel = st.session_state.get(PROV_KEYS[step]) or []
+        if not sel:
+            return "⚠ chưa chọn"
+        return "·".join(str(n)[:10] for n in sel[:2]) + ("…" if len(sel) > 2 else "")
+
+    b1s = _prov_summary("b1")
+    b3s = _prov_summary("b3")
+    expander_label = f"⚙ Workspace · B1: {b1s}  B3: {b3s}  · Preset: {preset_name}"
+
+    with st.expander(expander_label, expanded=not bool(names)):
+        if note:
+            st.caption(note)
+
+        if not names:
+            st.warning("Chưa có provider nào — mở **Cấu hình ▸ Providers** để thêm.")
+        else:
+            st.markdown(
+                "<div style='font-size:11px;color:#5a7499;text-transform:uppercase;"
+                "letter-spacing:.06em;margin-bottom:4px'>🔁 Pipeline chạy batch (B1 / B2 / B3)</div>",
+                unsafe_allow_html=True,
+            )
+            _PIPELINE_HELP = (
+                "Bài chưa chọn riêng thì bước này chạy bằng những provider đặt ở đây. "
+                "Nhiều bộ = chia việc song song: mỗi bộ chỉ chạy MỘT bài một lúc, "
+                "bộ đang bận thì bài tiếp nhảy sang bộ kế đang rảnh (thứ tự = thứ tự anh xếp). "
+                "Bỏ trống = bước đó CHƯA CÓ provider — bấm chạy sẽ báo lỗi. "
+                "Chọn ở đây (cả workspace) hoặc ghi đè riêng trong modal từng bài."
+                f" Lưu trong `{ga.PREFS_FILE}`."
+            )
+
+            # Hàng header
+            hcols = st.columns([1, 3, 3, 3])
+            hcols[0].markdown("<div style='font-size:11px;color:#5a7499;font-weight:700'>Bước</div>", unsafe_allow_html=True)
+            hcols[1].markdown("<div style='font-size:11px;color:#5a7499;font-weight:700'>B1 · Caption</div>", unsafe_allow_html=True)
+            hcols[2].markdown("<div style='font-size:11px;color:#5a7499;font-weight:700'>B2 · Ảnh</div>", unsafe_allow_html=True)
+            hcols[3].markdown("<div style='font-size:11px;color:#5a7499;font-weight:700'>B3 · SEO</div>", unsafe_allow_html=True)
+
+            # Hàng multiselect
+            row = st.columns([1, 3, 3, 3])
+            row[0].markdown(
+                "<div style='font-size:11px;color:#5a7499;padding-top:8px'>Provider<br><span style='color:#334d6a'>(nhiều bộ OK)</span></div>",
+                unsafe_allow_html=True,
+            )
+            for col, step in zip(row[1:], ga.ALL_STEPS, strict=True):
+                with col:
+                    st.multiselect(
+                        STEP_LABELS[step],
+                        names,
+                        key=PROV_KEYS[step],
+                        on_change=lambda s=step: save_provider_pref(ctx, s),
+                        help=_PIPELINE_HELP,
+                        label_visibility="collapsed",
+                        placeholder=f"Chọn provider {step.upper()}…",
+                    )
+
+            st.divider()
+
+            # Hàng Dịch + Preset cùng dòng
+            st.markdown(
+                "<div style='font-size:11px;color:#5a7499;text-transform:uppercase;"
+                "letter-spacing:.06em;margin-bottom:4px'>🌐 Dịch & Preset</div>",
+                unsafe_allow_html=True,
+            )
+            bot = st.columns([3, 3])
+            with bot[0]:
+                st.multiselect(
+                    "🇻🇳 Provider Dịch",
+                    names,
+                    key=PROV_KEYS["translate"],
+                    on_change=lambda: save_provider_pref(ctx, "translate"),
+                    help=(
+                        "Bộ dùng cho nút '🇻🇳 Dịch' trong modal B1/B3 — dịch nội dung sang tiếng Việt, "
+                        "CHỈ HIỆN TRÊN UI (không ghi file, không đổi màu ô, không tốn lượt B). "
+                        "Bộ đầu tiên được ưu tiên. Nên chọn bộ OpenAI-like; Codex CLI không dịch được."
+                        f" Lưu trong `{ga.PREFS_FILE}`."
+                    ),
+                    placeholder="Chọn provider dịch…",
+                )
+
+            with bot[1]:
+                options = [PRESET_NONE_LABEL] + sorted(
+                    {str(i) for i in ctx.presets},
+                    key=lambda s: str(ctx.presets[int(s)]["name"]).lower(),
+                )
+                st.session_state[PRESET_KEY] = str(pid) if pid in ctx.presets else PRESET_NONE_LABEL
+                st.selectbox(
+                    "📋 Preset chung",
+                    options,
+                    format_func=lambda v: PRESET_NONE_LABEL if v == PRESET_NONE_LABEL
+                    else str(ctx.presets[int(v)]["name"]),
+                    key=PRESET_KEY,
+                    on_change=lambda: save_preset_pref(ctx),
+                    help=(
+                        "Preset chung đè lên preset_id của MỌI bài trong workspace. "
+                        "Bỏ chọn thì mỗi bài theo preset_id riêng của nó."
+                        f" Lưu trong `{ga.PREFS_FILE}`."
+                        if ctx.presets else " (chưa có preset nào — tạo ở Cấu hình ▸ Presets)"
+                    ),
+                )
 
 
 def _when(ts: float) -> str:
