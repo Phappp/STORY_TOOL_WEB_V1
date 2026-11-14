@@ -5,12 +5,17 @@ Mỗi hàm tự ghi trạng thái vào story.json trước/sau khi gọi provide
 """
 
 import hashlib
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import audio
 import fb_import
 import images
 import prompts
@@ -88,6 +93,59 @@ def text_hash(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8")).hexdigest()[:16]
 
 
+def _extract_frame_from_video(root: Path, sid: str, url: str, data: dict) -> int:
+    """Video/reel không có album ảnh -> tải video tạm, cắt frame ở giây 2 bằng ffmpeg, lưu vào refs/.
+    Trả về số frame lưu được (0 hoặc 1)."""
+    import audio
+    import tempfile
+    import subprocess
+
+    ffmpeg = audio.ffmpeg_info().get("ffmpeg")
+    if not ffmpeg or not os.path.isfile(ffmpeg):
+        return 0  # không có ffmpeg -> bỏ qua
+
+    # 1. Tải video bằng yt-dlp ra file tạm
+    ytdlp = shutil.which(os.getenv("YTDLP_BIN", "yt-dlp").strip() or "yt-dlp")
+    if not ytdlp:
+        return 0
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        video_path = Path(tmpdir) / "video.%(ext)s"
+        cmd_dl = [ytdlp, "--no-update", "-f", "best[ext=mp4]/best", "-o", str(video_path), url]
+        try:
+            subprocess.run(cmd_dl, capture_output=True, timeout=120, check=True)
+        except Exception:
+            return 0
+
+        # Tìm file video vừa tải
+        downloaded = list(Path(tmpdir).glob("video.*"))
+        if not downloaded:
+            return 0
+        video_file = downloaded[0]
+
+        # 2. Cắt frame ở giây 2
+        frame_path = Path(tmpdir) / "frame_2s.jpg"
+        cmd_ff = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", "2", "-i", str(video_file),
+            "-vframes", "1", "-q:v", "2", str(frame_path)
+        ]
+        try:
+            subprocess.run(cmd_ff, capture_output=True, timeout=30, check=True)
+        except Exception:
+            return 0
+
+        if not frame_path.is_file() or frame_path.stat().st_size == 0:
+            return 0
+
+        # 3. Lưu vào refs/ của bài
+        try:
+            stories.save_ref(root, sid, frame_path, url=f"frame@2s:{url}")
+            return 1
+        except Exception:
+            return 0
+
+
 def run_b0(root: Path, sid: str, url: str, extract=None, download=None) -> tuple[dict | None, str]:
     """B0: link FB -> input.txt (caption trích được) + refs/ (ảnh) + story['b0']. Trả (data|None, log).
 
@@ -126,6 +184,13 @@ def run_b0(root: Path, sid: str, url: str, extract=None, download=None) -> tuple
             saved += 1
         except Exception:
             failed += 1
+
+    # P41e: video/reel không có album ảnh -> tự cắt frame ở giây 2 làm ref cho B2
+    if data.get("method") == "yt-dlp" and data.get("duration") and not (data.get("images") or []):
+        frame_saved = _extract_frame_from_video(root, sid, url, data)
+        if frame_saved:
+            saved += frame_saved
+
     note = str(data.get("note") or "")
     if failed:
         note = (note + f" · không tải được {failed} ảnh")[:300]
