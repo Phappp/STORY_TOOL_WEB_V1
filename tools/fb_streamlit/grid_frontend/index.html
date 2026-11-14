@@ -427,6 +427,22 @@
   .udonut .ufg.none { stroke:#5a6b80; }
   .udonut text { font-size:10px; font-weight:700; fill:#f5f9ff; }
   .unote { color:#8fa4c0; font-size:10.5px; margin-top:5px; }
+  /* Phase-B: row highlight khi có step đang chạy trong luồng nền */
+  tbody tr.has-running td { background:rgba(37,99,235,0.07); }
+  tbody tr.has-running:hover td { background:rgba(37,99,235,0.14); }
+  tbody tr.has-running.queued td { background:rgba(37,99,235,0.07); }
+  /* Phase-B: chấm sáng nhỏ khi step flow-running — bắt mắt mà không cần đọc màu */
+  button.sq .sq-dot { display:inline-block; width:5px; height:5px; border-radius:50%;
+    background:currentColor; margin-right:3px; opacity:.85;
+    animation:sqdotpulse 1s ease-in-out infinite; vertical-align:middle; }
+  @keyframes sqdotpulse {
+    0%, 100% { opacity:.4; transform:scale(.85); }
+    50%       { opacity:1; transform:scale(1.15); }
+  }
+  /* Phase-B: empty state đẹp hơn */
+  .empty { padding:36px 20px; color:var(--muted); text-align:center; display:flex;
+    flex-direction:column; align-items:center; gap:10px; }
+  .empty::before { content:"📂"; font-size:32px; opacity:.5; display:block; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation:none!important; transition:none!important; } }
   button.q { min-width:28px; padding:0; }
   button.q.on { background:var(--queued); color:var(--queued-t); border-color:var(--queued-b); font-weight:700; }
@@ -1149,7 +1165,14 @@ function stepsCell(row) {
     const b = el("button", "b sq " + state + (flow ? " flow-" + ((row.flow || {})[step]) : "")
       + (b4aud ? " b4aud" : ""));
     b.type = "button";
-    b.textContent = step.toUpperCase();
+    // Phase-B: chấm sáng nhỏ khi step đang chạy — giúp nhận biết nhanh không cần đọc màu
+    const isFlowRunning = flow && (row.flow || {})[step] === "running";
+    if (isFlowRunning) {
+      const dot = el("span", "sq-dot");
+      b.appendChild(dot);
+    }
+    const lbl = document.createTextNode(step.toUpperCase());
+    b.appendChild(lbl);
     b.dataset.id = String(row.id);
     b.dataset.step = step;
     b.dataset.flash = "sq:" + row.id + ":" + step;
@@ -2614,6 +2637,8 @@ function rowClasses(row) {
   if (row.queued) cls.push("queued");
   if (SELECTED.has(String(row.id))) cls.push("sel");
   if (String(row.id) === CURSOR) cls.push("cursor");
+  // Phase-B: highlight toàn hàng khi có step đang chạy trong luồng nền
+  if (Object.values(row.flow || {}).some(s => s === "running")) cls.push("has-running");
   return cls.join(" ");
 }
 
@@ -4559,15 +4584,20 @@ function render(args, force) {
   const wrap = el("div", "wrap" + (expandedMode() ? " expanded" : ""));
 
   const bar = el("div", "bar");
+  // Phase-B: helper tạo separator giữa các nhóm nút
+  function barSep() { return el("span", "bar-sep"); }
   bar.appendChild(searchBox());
   bar.appendChild(filterButton());  // P35a: lọc trạng thái cạnh ô tìm
   bar.appendChild(refreshButton());  // P21h: nút nhịp đọc folder — trước đây là st.toggle đứng NGOÀI lưới
+  bar.appendChild(barSep());
   bar.appendChild(queueAudioButton());  // P27a: chọn file tiếng + giây cho hàng đợi
   bar.appendChild(newsButton());  // P28a: modal News — đăng báo lên website
   bar.appendChild(ioButton());  // P22b: import/export nằm cạnh ô tìm — không còn mục native nào nữa
+  bar.appendChild(barSep());
   bar.appendChild(queueButton());
   bar.appendChild(queueMarkPostedButton());  // P41f: đánh dấu cả hàng đợi = posted
   bar.appendChild(errorsButton());
+  bar.appendChild(barSep());
   bar.appendChild(expandButton());
   bar.appendChild(usageButton());  // P29a: hạn mức Codex — hover hiện vòng tròn % còn lại
   bar.appendChild(statsBar());
