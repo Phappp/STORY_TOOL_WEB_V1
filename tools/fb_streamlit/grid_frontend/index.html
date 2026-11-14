@@ -430,6 +430,9 @@
   button.b:hover { background:var(--btn-h); }
   button.b:disabled { opacity:.5; cursor:default; }
   button.b[data-sent="1"] { opacity:.45; pointer-events:none; }
+  button.b.loading { opacity:.6; cursor:wait; }
+  button.b.loading svg { animation:spin 1s linear infinite; }
+  @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
   button.play { padding:2px 5px; height:22px; margin-left:4px; }
   button.act { margin-right:2px; }
   /* P21h: nút bật/tắt trong thanh — trạng thái là MÀU NỀN, không phải chữ (chữ đã bỏ theo anh).
@@ -604,7 +607,7 @@ function markSent() {
   document.querySelectorAll("button.b").forEach(b => { if (!b.closest(".overlay")) b.dataset.sent = "1"; });
 }
 function unmarkSent() {
-  document.querySelectorAll("button.b").forEach(b => { delete b.dataset.sent; });
+  document.querySelectorAll("button.b").forEach(b => { delete b.dataset.sent; delete b.dataset.loading; b.classList.remove("loading"); });
 }
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -718,6 +721,7 @@ const GRID_FILTER_OPTIONS = [
   ["running",      "Đang chạy",        "Ít nhất một B đang chạy (ô xanh dương nhấp nháy)."],
   ["waiting",      "Chờ chạy",         "B1-B4 chưa sẵn sàng, không lỗi, không đang chạy — còn việc để ⚡/▶ làm tiếp."],
   ["error",        "Lỗi",             "Ít nhất một B lỗi (đỏ) — gồm treo >15p, mất file."],
+  ["queued",       "Hàng đợi",         "Các bài đang có cờ queued = true (tím), theo đúng thứ tự ▶."],
 ];
 const FILTER_KEY = "fbgrid:filter:v1";
 let GRID_FILTER = (function _initGridFilter() {
@@ -752,6 +756,7 @@ function filterPredicate(row) {
     case "running":      return run;
     case "waiting":      return !bad && !run && !_stateDone4(row);
     case "error":        return bad;
+    case "queued":       return row.queued === true;
     default:
       return true;
   }
@@ -4222,6 +4227,24 @@ function queueButton() {
   return b;
 }
 
+function queueMarkPostedButton() {
+  // P41f: đánh dấu TẤT CẢ bài trong hàng đợi = posted một lần — icon check, có loading
+  const title = "Đánh dấu TẤT CẢ bài đang có cờ queued là 'Đã đăng' (status = posted) — không thể hoàn tác, dùng cẩn thận.";
+  const b = iconButton("check", title, () => {
+    if (b.dataset.loading === "1") return; // đang loading
+    const count = queueIds().length;
+    if (!count) return;
+    if (!confirm("Đánh dấu TẤT CẢ " + count + " bài trong hàng đợi = posted?\nHành động này không thể hoàn tác.")) return;
+    b.dataset.loading = "1";
+    b.classList.add("loading");
+    b.title = "Đang xử lý...";
+    send({ source: "mark_posted_queue" });
+  }, "qmp");
+  b.id = "queuemarkposted";
+  b.disabled = true;
+  return b;
+}
+
 function errorsButton() {
   const b = button("⚠ Xếp lỗi: 0", "Đánh dấu mọi bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt",
     () => send({ source: "queue_add_errors" }));
@@ -4384,6 +4407,17 @@ function updateBar() {
       + "nhiều bài cùng lúc nếu có nhiều bộ rảnh. "
       + "B nào đã xanh lá (xong) được BỎ QUA, không ghi đè.";
   }
+  const mp = document.getElementById("queuemarkposted");
+  if (mp) {
+    const ids = queueIds();
+    const wasLoading = mp.dataset.loading === "1";
+    mp.disabled = ids.length === 0 || wasLoading;
+    // iconButton không có textContent, cập nhật title và aria-label
+    const title = "Đánh dấu TẤT CẢ " + ids.length + " bài đang có cờ queued là 'Đã đăng' (status = posted) — không thể hoàn tác, dùng cẩn thận.";
+    mp.title = title;
+    mp.setAttribute("aria-label", title);
+    // Loading state được xóa khi nhận response (xem ingestResponse / markSent)
+  }
   const e = document.getElementById("queueerr");
   if (e) {
     const n = errorCount();
@@ -4522,6 +4556,7 @@ function render(args, force) {
   bar.appendChild(newsButton());  // P28a: modal News — đăng báo lên website
   bar.appendChild(ioButton());  // P22b: import/export nằm cạnh ô tìm — không còn mục native nào nữa
   bar.appendChild(queueButton());
+  bar.appendChild(queueMarkPostedButton());  // P41f: đánh dấu cả hàng đợi = posted
   bar.appendChild(errorsButton());
   bar.appendChild(expandButton());
   bar.appendChild(usageButton());  // P29a: hạn mức Codex — hover hiện vòng tròn % còn lại

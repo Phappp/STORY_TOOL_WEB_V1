@@ -4408,14 +4408,15 @@ def _append_calls(segs):
     # "P28a: modal News..." chứa từ newsButton làm index() khớp nhầm định nghĩa, không khớp call).
     out = []
     for name in ("filterButton", "refreshButton", "queueAudioButton", "newsButton", "ioButton",
-                 "queueButton", "errorsButton", "expandButton", "usageButton", "statsBar"):
+                 "queueButton", "queueMarkPostedButton", "errorsButton", "expandButton", "usageButton", "statsBar"):
         out.append(segs.index("bar.appendChild(" + name + "()"))
     return out
-check("P21d thanh nút đúng thứ tự tìm · lọc (P35a) · nhịp đọc (P21h) · import · ▶ · ⚠ · mở rộng · stats; "
+check("P21d thanh nút đúng thứ tự tìm · lọc (P35a) · nhịp đọc (P21h) · import · ▶ · ⚠ · ✓ hàng đợi · mở rộng · stats; "
       "P27a thêm nút '🎧 Chọn file + giây' (queue audio) trước ioButton; "
-      "P28a thêm nút News (globe); P29a thêm nút hạn mức Codex (usage) giữa mở rộng và stats "
-      "— 11 item (10 nút + ô đếm), không ô chọn tất cả",
-      _p21d_bar.count("bar.appendChild(") == 11
+      "P28a thêm nút News (globe); P29a thêm nút hạn mức Codex (usage) giữa mở rộng và stats; "
+      "P41f thêm nút '✓ Đã đăng hàng đợi' sau ▶ Bắt đầu "
+      "— 12 item (11 nút + ô đếm), không ô chọn tất cả",
+      _p21d_bar.count("bar.appendChild(") == 12
       and "pickAll" not in _p21d_bar
       and "filterButton" in _p21d_bar
       and _append_calls(_p21d_bar) == sorted(_append_calls(_p21d_bar)))
@@ -7592,7 +7593,7 @@ check("P34a frontend: nút '🇻🇳 Dịch sang tiếng Việt' (b1/b3) + event
 
 # --- P35a: icon phễu lọc trạng thái cạnh ô tìm (client-side, 6 lựa chọn, không gọi Python) ---
 _p35a_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
-check("P35a frontend: icon funnel + GRID_FILTER_OPTIONS (6 mức: all/done_posted/done_draft/running/waiting/error) "
+check("P35a frontend: icon funnel + GRID_FILTER_OPTIONS (7 mức: all/done_posted/done_draft/running/waiting/error/queued) "
       "persist localStorage FILTER_KEY",
       "funnel:" in _p35a_fe
       and "const GRID_FILTER_OPTIONS = [" in _p35a_fe

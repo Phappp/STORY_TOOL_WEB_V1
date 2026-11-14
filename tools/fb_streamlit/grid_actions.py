@@ -2212,6 +2212,16 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "mark_posted":
             stories.update_story(ctx.root, sid, status="posted")
             out.lines, out.touched = [f"{sid}: status = posted."], [sid]
+        elif source == "mark_posted_queue":
+            # P41f: đánh dấu ĐÃ ĐĂNG cho TẤT CẢ bài trong hàng đợi cùng lúc
+            ids = _queued_ids(ctx.root)
+            if not ids:
+                out.lines = ["Không có bài nào trong hàng đợi."]
+            else:
+                for qid in ids:
+                    stories.update_story(ctx.root, qid, status="posted")
+                out.lines = [f"Đã đánh dấu {len(ids)} bài trong hàng đợi = posted."]
+                out.touched = ids
         elif source == "link_save":
             url = clean_url(event.get("value"))
             stories.update_story(ctx.root, sid, link=url)
