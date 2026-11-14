@@ -5,27 +5,31 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Story grid</title>
 <style>
-  /* P8ii: lưới chuyển sang nền tối theo đúng bảng màu của grid status legacy FX97
-     (bg #101821, header #1b2838, border #2d3b4f, accent #69a8ef). Mỗi trạng thái có ba biến:
-     nền --x, chữ --x-t, viền --x-b — bộ xanh lá/xanh dương/tím/đỏ/cam lấy nguyên từ .stage-* của họ,
-     vì màu pastel sáng trên nền tối bệt hết vào nhau, còn chữ xám trên nền trắng thì mờ. */
+  /* Phase-A: Pro Dark palette — nâng cấp từ legacy FX97 lên SaaS-grade.
+     Tăng độ sâu nền, contrast chữ, vivid hơn cho status colors.
+     Mỗi trạng thái vẫn giữ 3 biến: --x (nền), --x-t (chữ), --x-b (viền). */
   :root {
-    --bg:#101821; --text:#dbe4ef; --muted:#93a3b8; --border:#2d3b4f;
-    --header:#1b2838; --panel:#1b2838; --hover:#152029; --field:#0d1520; --btn:#22303f; --btn-h:#2a3a4b;
-    --pending:#273343; --pending-t:#b8c9dc; --pending-b:#42526a;
-    --queued:#2c2450; --queued-t:#cbbcff; --queued-b:#6b57c8;
-    --done:#123e31; --done-t:#8cf6ba; --done-b:#236d58;
-    --running:#173b64; --running-t:#acd8ff; --running-b:#3679b9;
-    --error:#552a32; --error-t:#ffb8c0; --error-b:#a95560;
-    --missing:#4d3a12; --missing-t:#ffd98a; --missing-b:#7a5a1e;
-    --accent:#69a8ef;
+    --bg:#09101e; --text:#dde6f3; --muted:#8fa5c4; --border:#1e2d42;
+    --border-soft:#0f1a28;
+    --header:#111d32; --panel:#111d32; --hover:#1c2a46; --field:#070e1b; --btn:#1a2840; --btn-h:#243551;
+    --text-2:#8fa5c4; --text-3:#5a7499;
+    --pending:#1e2d42; --pending-t:#a8bdd6; --pending-b:#334d6a;
+    --queued:#221c48; --queued-t:#c4b5fd; --queued-b:#5b46b8;
+    --done:#0d3324; --done-t:#4ade80; --done-b:#166534;
+    --running:#0f2a52; --running-t:#60a5fa; --running-b:#2563eb;
+    --error:#3f1d24; --error-t:#f87171; --error-b:#9b2335;
+    --missing:#3a2a0d; --missing-t:#fbbf24; --missing-b:#6b4c0a;
+    --accent:#4f8ef7;
   }
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; background:transparent; color:var(--text);
-    font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif; font-size:13px; }
-  .wrap { border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--bg); }
-  .bar { display:flex; gap:10px; align-items:center; padding:7px 10px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
-  .bar .count { color:var(--muted); margin-left:auto; }
+    font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif; font-size:13px;
+    line-height:1.5; -webkit-font-smoothing:antialiased; letter-spacing:-0.01em; }
+  .wrap { border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--bg);
+    box-shadow:0 4px 24px rgba(0,0,0,.35); }
+  .bar { display:flex; gap:6px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
+  .bar .count { color:var(--muted); margin-left:auto; font-size:12px; }
+  .bar-sep { width:1px; height:18px; background:var(--border); margin:0 4px; flex-shrink:0; align-self:center; opacity:.7; }
   .stat { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:650;
     background:var(--pending); color:var(--pending-t); border:1px solid var(--pending-b); }
   .stat.waiting { background:var(--pending); color:var(--pending-t); border-color:var(--pending-b); }
@@ -149,13 +153,17 @@
   .wrap.expanded .scroll { flex:1 1 auto; min-height:0; max-height:none; }
   table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; }
   thead th { position:sticky; top:0; z-index:3; background:var(--header); text-align:left;
-    font-weight:600; padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap; user-select:none; }
+    font-weight:700; padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap;
+    user-select:none; letter-spacing:0.04em; font-size:11px; color:var(--text-3);
+    text-transform:uppercase; }
   th.resizable { position:relative; }
   th .grip { position:absolute; right:0; top:0; width:7px; height:100%; cursor:col-resize; }
   th .grip:hover, th .grip.dragging { background:rgba(105,168,239,.4); }
-  tbody td { padding:6px 8px; border-bottom:1px solid var(--border); vertical-align:middle;
+  tbody td { padding:6px 8px; border-bottom:1px solid var(--border-soft); vertical-align:middle;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; height:38px; }
-  tbody tr:hover td { background:var(--hover); }
+  tbody tr:hover td { background:var(--hover); transition:background 80ms ease; }
+  tbody tr:nth-child(even) td { background:var(--border-soft); }
+  tbody tr:nth-child(even):hover td { background:var(--hover); }
   tbody tr.queued td { background:#241d3a; }  /* tím nhạt bản #2c2450 của legacy, đủ nhận ra hàng đang xếp */
   th.c, td.c { text-align:center; }
   th.steps, td.steps, th.q, td.q, th.img, td.img, th.status, td.status { text-align:center; }
@@ -365,9 +373,9 @@
   /* 4 pill trạng thái B0 B1 B2 B3 trong một cột — cùng cỡ .stage-pill của legacy (radius 6, cao 24,
      chữ 11-12, weight 650, viền cùng tông). Vuông 26x22 chữ 10px trước đây quá nhỏ mà không có viền
      nên trên nền tối bốn ô gần như tan vào nhau. */
-  button.sq { min-width:32px; height:24px; padding:0 5px; margin-right:3px; border-radius:6px;
+  button.sq { min-width:32px; height:26px; padding:0 5px; margin-right:3px; border-radius:6px;
     border:1px solid var(--pending-b); font-size:11px; font-weight:650; background:var(--pending);
-    color:var(--pending-t); cursor:pointer; }
+    color:var(--pending-t); cursor:pointer; transition:filter 80ms ease; }
   button.sq:hover { filter:brightness(1.14); }
   button.sq.done { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
   button.sq.running { background:var(--running); color:var(--running-t); border-color:var(--running-b); }
@@ -426,8 +434,9 @@
     background:var(--pending); color:var(--pending-t); border:1px solid var(--pending-b); }
   .badge.posted { background:var(--done); color:var(--done-t); border-color:var(--done-b); }
   button.b { border:1px solid var(--border); background:var(--btn); border-radius:6px; cursor:pointer;
-    font:inherit; height:24px; line-height:1; color:#c7d5e5; padding:2px 6px; }
-  button.b:hover { background:var(--btn-h); }
+    font:inherit; height:26px; line-height:1; color:#c7d5e5; padding:2px 8px;
+    transition:background 80ms ease, border-color 80ms ease; }
+  button.b:hover { background:var(--btn-h); border-color:var(--accent); }
   button.b:disabled { opacity:.5; cursor:default; }
   button.b[data-sent="1"] { opacity:.45; pointer-events:none; }
   button.b.loading { opacity:.6; cursor:wait; }
@@ -450,9 +459,10 @@
   .more:hover { color:var(--text); border-color:var(--accent); }
   .muted { color:var(--muted); }
   /* ô tìm kiếm ngay trên grid — lọc client-side, không gửi event mỗi lần gõ */
-  .bar input.find { height:24px; width:210px; font:inherit; font-size:12px; padding:1px 6px;
-    border:1px solid var(--border); border-radius:6px; background:var(--field); color:var(--text); }
-  .bar input.find:focus { outline:2px solid rgba(105,168,239,.45); border-color:var(--accent); }
+  .bar input.find { height:26px; width:220px; font:inherit; font-size:12px; padding:1px 8px;
+    border:1px solid var(--border); border-radius:6px; background:var(--field); color:var(--text);
+    transition:border-color 100ms ease, box-shadow 100ms ease; }
+  .bar input.find:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 2px rgba(79,142,247,.2); }
   /* menu ⋮ của hàng: gắn vào body + position:fixed để không bị khung .scroll cắt mất */
   .menu { position:fixed; z-index:50; background:var(--panel); border:1px solid var(--border); border-radius:8px;
     box-shadow:0 8px 22px rgba(0,0,0,.5); padding:4px; display:flex; flex-direction:column; min-width:230px; }

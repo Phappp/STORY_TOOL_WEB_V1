@@ -981,6 +981,16 @@ def video_form(ctx: ga.Ctx) -> None:
 def render(ctx: ga.Ctx) -> None:
     st.subheader("Grid story")
     st.markdown(NO_DIM_CSS, unsafe_allow_html=True)
+    # Phase-A: đồng bộ nền Streamlit với palette Pro Dark của grid component
+    _SAAS_CSS = (
+        "<style>"
+        ".stApp { background: #09101e !important; }"
+        "section[data-testid='stSidebar'] { background: #09101e !important; }"
+        ".stApp header { background: #09101e !important; border-bottom: 1px solid #1e2d42 !important; }"
+        "div[data-testid='stDecoration'] { display: none !important; }"
+        "</style>"
+    )
+    st.markdown(_SAAS_CSS, unsafe_allow_html=True)
     st.caption(f"Workspace: `{ctx.root}` — mỗi ô là file thật trong folder story (`caption.txt`, `image.png`, `seo.md`).")
     refresh_state(ctx.root)  # P21h: không còn widget ở đây — chỉ nạp prefs của workspace vừa mở
     pending_mode = st.session_state.pop("grid_mode_pending", None)  # nút ↩ trong bảng chẩn đoán: đổi TRƯỚC khi radio sinh ra
