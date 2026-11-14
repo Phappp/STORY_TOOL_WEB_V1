@@ -169,6 +169,15 @@ h3 { border-bottom: 1px solid #1e2d42; padding-bottom: 6px; margin-bottom: 12px 
 st.markdown(_GLOBAL_CSS, unsafe_allow_html=True)
 
 KIND_LABELS = {"openai": "API OpenAI-compatible (OpenRouter, top-tools…)", "codex_cli": "Codex CLI (local)"}
+KIND_SHORT  = {"openai": "API", "codex_cli": "Codex CLI"}
+
+# Các bước AI trong pipeline tạo bài — thứ tự hiển thị trong provider panel
+_PIPELINE_STEPS = [
+    ("input",   "Input"),
+    ("caption", "B1 · Caption"),
+    ("keyword", "B2 · Ảnh"),
+    ("seo",     "B3 · SEO"),
+]
 
 
 # ---------- helpers ----------
@@ -192,6 +201,17 @@ def model_picker(provider, key):
     return st.text_input("Model (provider này chưa có danh sách — tự nhập)", key=f"{key}_input")
 
 
+def _model_picker_inline(provider, step_key, col):
+    """Model picker gọn trong 1 cột của provider panel."""
+    models = prov.parse_models(provider)
+    with col:
+        if models:
+            return st.selectbox("Model", models, key=f"gen_model_{step_key}_select",
+                                label_visibility="collapsed")
+        return st.text_input("Model", key=f"gen_model_{step_key}_input",
+                              placeholder="nhập model…", label_visibility="collapsed")
+
+
 def step_provider_model(rows, step):
     pid = st.session_state.get(f"gen_provider_{step}")
     provider = rows.get(pid) if pid in rows else None
@@ -199,7 +219,115 @@ def step_provider_model(rows, step):
     return provider, model
 
 
-def collect_refs() -> list:
+def provider_panel(c):
+    """Panel gộp chọn Provider + Model cho cả 4 bước pipeline — render 1 lần ở đầu trang Tạo bài.
+
+    Giữ nguyên các session_state key (gen_provider_{step}, gen_model_{step}_select/input)
+    để generation_controls() đọc lại mà không render thêm widget nào.
+    """
+    rows = provider_rows(c)
+    if not rows:
+        st.warning("Chưa có provider nào — mở **Cấu hình ▸ Providers** để thêm.")
+        return
+
+    provider_ids = list(rows.keys())
+    default_id = next((p["id"] for p in rows.values() if p["is_default"]), provider_ids[0])
+
+    def _fmt(pid):
+        r = rows[pid]
+        return f"{r['name']}  [{KIND_SHORT[r['kind']]}]"
+
+    # Seed session_state lần đầu (tránh widget chưa có giá trị)
+    for step_key, _ in _PIPELINE_STEPS:
+        k = f"gen_provider_{step_key}"
+        if k not in st.session_state or st.session_state[k] not in rows:
+            st.session_state[k] = default_id
+
+    sync_all = st.checkbox(
+        "Dùng 1 provider cho tất cả bước",
+        key="provider_sync_all",
+        help="Tick → đổi provider ở bước Input sẽ áp cho cả pipeline. Bỏ tick để chọn riêng từng bước.",
+    )
+
+    # Nếu sync_all: gán giá trị bước input cho cả 3 bước còn lại
+    if sync_all:
+        ref_pid = st.session_state.get("gen_provider_input", default_id)
+        for step_key, _ in _PIPELINE_STEPS:
+            st.session_state[f"gen_provider_{step_key}"] = ref_pid
+
+    st.markdown(
+        "<div style='font-size:11px;color:#5a7499;text-transform:uppercase;"
+        "letter-spacing:.06em;margin-bottom:2px'>🔧 Cấu hình AI · Provider & Model</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Header hàng
+    hcols = st.columns([1.1, 2.4, 2.4])
+    hcols[0].markdown("<div style='font-size:11px;color:#5a7499;font-weight:700'>Bước</div>", unsafe_allow_html=True)
+    hcols[1].markdown("<div style='font-size:11px;color:#5a7499;font-weight:700'>Provider</div>", unsafe_allow_html=True)
+    hcols[2].markdown("<div style='font-size:11px;color:#5a7499;font-weight:700'>Model</div>", unsafe_allow_html=True)
+
+    for step_key, step_label in _PIPELINE_STEPS:
+        row_cols = st.columns([1.1, 2.4, 2.4])
+        row_cols[0].markdown(
+            f"<div style='font-size:12px;color:#94a3b8;padding-top:8px'>{step_label}</div>",
+            unsafe_allow_html=True,
+        )
+        with row_cols[1]:
+            cur_idx = provider_ids.index(st.session_state.get(f"gen_provider_{step_key}", default_id))
+            st.selectbox(
+                step_label,
+                provider_ids,
+                index=cur_idx,
+                format_func=_fmt,
+                key=f"gen_provider_{step_key}",
+                label_visibility="collapsed",
+                disabled=sync_all and step_key != "input",
+            )
+        provider = rows[st.session_state[f"gen_provider_{step_key}"]]
+        if provider["kind"] == "codex_cli":
+            row_cols[2].markdown(
+                "<div style='font-size:11px;color:#5a7499;padding-top:8px'>— (Codex CLI)</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            _model_picker_inline(provider, step_key, row_cols[2])
+
+    st.divider()
+
+
+def generation_controls(c):
+    """Đọc provider + model từ session_state đã được set bởi provider_panel().
+
+    Không render thêm widget — chỉ trả về (provider_row, model_str) cho bước active_step.
+    Nếu provider_panel chưa chạy (trang khác gọi trực tiếp), fallback render selectbox như cũ.
+    """
+    rows = provider_rows(c)
+    if not rows:
+        st.warning("Chưa có provider nào — mở Cấu hình ▸ Providers để thêm.")
+        return None, ""
+    step = st.session_state.get("active_step", "x")
+    pid = st.session_state.get(f"gen_provider_{step}")
+    if pid and pid in rows:
+        # provider_panel đã render — đọc trực tiếp, không render widget nào thêm
+        provider = rows[pid]
+        model = "" if provider["kind"] == "codex_cli" else (
+            st.session_state.get(f"gen_model_{step}_select") or
+            st.session_state.get(f"gen_model_{step}_input") or ""
+        )
+        return provider, model
+    # Fallback: provider_panel chưa chạy (gọi từ ngoài page_create)
+    default_id = next((p["id"] for p in rows.values() if p["is_default"]), list(rows)[0])
+    pid = st.selectbox(
+        "Provider",
+        list(rows.keys()),
+        index=list(rows).index(default_id),
+        format_func=lambda i: f"{rows[i]['name']} ({KIND_LABELS[rows[i]['kind']]})",
+        key=f"gen_provider_{step}",
+    )
+    provider = rows[pid]
+    model = "" if provider["kind"] == "codex_cli" else model_picker(provider, f"gen_model_{step}")
+    return provider, model
     """Ảnh tham chiếu cho B2: ảnh từ B0 (đã lưu local) + URL + upload."""
     refs = [Path(p) for p in st.session_state.get("b0_ref_paths", []) if Path(p).exists()]
     url = (st.session_state.get("img_ref_url") or "").strip()
@@ -251,26 +379,6 @@ def attach_single_image(root: Path, sid: str, src, method: str = "stock", source
     image = steps.save_image(root, sid, src, method=method, source_url=source_url)
     st.session_state["saved_images"] = json.loads(stories.post_view(root, sid)["images"])
     return image
-
-
-def generation_controls(c):
-    """Provider + model cho bước hiện tại; trả về (provider_row, model_str)."""
-    rows = provider_rows(c)
-    if not rows:
-        st.warning("Chưa có provider nào — mở Cấu hình ▸ Providers để thêm.")
-        return None, ""
-    default_id = next((p["id"] for p in rows.values() if p["is_default"]), list(rows)[0])
-    pid = st.selectbox(
-        "Provider",
-        list(rows.keys()),
-        index=list(rows).index(default_id),
-        format_func=lambda i: f"{rows[i]['name']} ({KIND_LABELS[rows[i]['kind']]})",
-        key=f"gen_provider_{st.session_state.get('active_step', 'x')}",
-    )
-    provider = rows[pid]
-    step = st.session_state.get("active_step", "x")
-    model = "" if provider["kind"] == "codex_cli" else model_picker(provider, f"gen_model_{step}")
-    return provider, model
 
 
 # ---------- page: Tạo bài ----------
@@ -434,6 +542,9 @@ def page_create(c):
                    f"Đổi ô trên là chọn luôn cho CẢ workspace.")
 
     b0_import_block()
+
+    # Phase-E: Provider panel gộp — render 1 lần, generation_controls() chỉ đọc session_state
+    provider_panel(c)
 
     st.subheader("Input — nội dung gốc")
     st.session_state["active_step"] = "input"
