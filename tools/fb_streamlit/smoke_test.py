@@ -2060,11 +2060,11 @@ at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-csv", "source": "export_r
                                    "format": "csv", "ids": made[:2]}
 at_im.run()
 csv_exp = captured.get("io_response") or {}
-check("P22b export CSV 2 cột: đọc lại bằng parse_import vẫn ra đúng 2 link nguồn",
+check("P22b export CSV 4 cột (id, caption, seo, link): 2 bài + tiêu đề đúng thứ tự",
       not at_im.exception and csv_exp.get("format") == "csv" and csv_exp.get("count") == 2
       and str(csv_exp.get("name") or "").endswith(".csv")
-      and str(csv_exp.get("text") or "").startswith("link_nguồn,link_da_dang")
-      and len(ga.parse_import((csv_exp.get("text") or "").encode("utf-8"), "x.csv")[0]) == 2)
+      and str(csv_exp.get("text") or "").startswith("id,caption,seo,link")
+      and len([x for x in str(csv_exp.get("text") or "").splitlines() if x.strip()]) == 3)
 captured.clear()
 at_im.session_state[fbgrid.KEY] = {"event_id": "evt-io-badkind", "source": "export_request",
                                    "format": "xlsx", "ids": made[:1]}
@@ -4051,9 +4051,9 @@ check("P22a ảnh chép thẳng vào refs/ (không có link gốc) vẫn đượ
       any("chỉ có trong refs/" in n for n in _p22_notes2)
       and [m.get("local") for m in json.loads(_p22_json2)[0]["media"]] == ["refs/ref_1.jpg", "refs/ref_2.jpg"])
 _p22_csv, _ = ga.export_csv(_p22_ctx, [_p22_ids[0]])
-check("P22a export CSV = đúng hai cột mà ô Import đọc lại (link_nguồn, link_da_dang) — vòng tròn khép kín",
-      _p22_csv.splitlines()[0] == "link_nguồn,link_da_dang"
-      and "pfbid0AAA" in _p22_csv and "https://scontent" not in _p22_csv)
+check("P22a export CSV = 4 cột id/caption/seo/link (bản news), có id bài và không lẫn link ảnh",
+      _p22_csv.splitlines()[0] == "id,caption,seo,link"
+      and _p22_ids[0] in _p22_csv and "https://scontent" not in _p22_csv)
 _p22_weird = ga.build_ctx(db.connect(), stories.validate_root(_p22_box / "bàn ăn"))
 check("P22a tên file export mang tên workspace + mốc giờ, giữ dấu tiếng Việt, khoảng trắng/ký tự Windows cấm thay gạch",
       re.match(r"^fbtool-ws-\d{8}-\d{6}\.json$", ga.export_name(_p22_ctx, "json")) is not None
@@ -7297,9 +7297,11 @@ try:
           and "nurl" in _p27a_fe
           and "Cần đối soát" in _p27a_fe
           and 'right.prepend(summary)' in _p27a_fe)
-    check("P31a grid_actions webpub_start: lỗi không phải 'saving/needs_review/done' "
-          "phải được ghi web_publish.state=error để preview hiện đúng",
-          '"state": "error", "site": site' in _p27a_ga_src)
+    _p41a_nr = (Path(__file__).resolve().parent / "news_runner.py").read_text(encoding="utf-8")
+    check("P31a/P41a lỗi trước khi publish_one kịp đánh dấu `saving` vẫn ghi "
+          "web_publish.state=error để preview hiện đúng (nay ở runner nền)",
+          '"state": "error", "site": job.site' in _p41a_nr
+          and 'pub.get("state") not in ("saving", "needs_review", "done")' in _p41a_nr)
     check("P31a modal News tự cập nhật khi grid đang mở: nhánh patchCells gọi paintNews() "
           "trước restoreView/finishCopy nên cột phải đổi đúng theo state LIVE mới nhận",
           ("syncModal();\n    syncIo();\n    if (NEWS_OPEN) paintNews();\n    restoreView(view);"
@@ -7313,25 +7315,27 @@ try:
           and '"Xử lý…"' in _p27a_fe
           and 'ioline ok", "B1–B3 đang chạy — chưa đăng được' in _p27a_fe
           and '.newsitem .nstate.processing' in _p27a_fe
-          and 'xử lý " + processing' in _p27a_fe)
+          and 'xử lý " + counts.processing' in _p27a_fe)
     _p32a_wp = (Path(__file__).resolve().parent / "web_publisher.py").read_text(encoding="utf-8")
     check("P32a web publisher ẩn Chromium khi xử lý: browser_context/publish_one/reconcile_auto "
           "mặc định headed=False (headless), riêng login thủ công vẫn headed=True để thao tác đăng nhập",
           'def browser_context(root: Path, playwright, headed: bool = False, *, site: str = DEFAULT_SITE):' in _p32a_wp
-          and 'def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAULT_SITE) -> str:' in _p32a_wp
-          and 'def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = False) -> str:' in _p32a_wp
+          and 'def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAULT_SITE,' in _p32a_wp
+          and 'on_stage=None' in _p32a_wp
+          and 'def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = False,' in _p32a_wp
           and 'def login(root: Path, *, site: str = DEFAULT_SITE, headed: bool = True) -> None:' in _p32a_wp)
     _p32b_wp = (Path(__file__).resolve().parent / "web_publisher.py").read_text(encoding="utf-8")
     _p32b_ga = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
     check("P32b modal News 'Đăng lại' — bài đã có link: web_publisher có republish() "
           "lưu link cũ vào history rồi xóa link + gọi publish_one; "
           "grid_actions có event webpub_republish; frontend có nút .nrebtn + send webpub_republish",
-          "def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE)" in _p32b_wp
+          "def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE," in _p32b_wp
+          and "on_stage=None" in _p32b_wp
           and "'previous_link': old_link" in _p32b_wp
           and "republishing': True" in _p32b_wp
           and "pub.get('republishing')" in _p32b_wp
           and 'elif source == "webpub_republish":' in _p32b_ga
-          and "nrebtn" in _p27a_fe
+          and ("nrebtn" in _p27a_fe or "nbtn" in _p27a_fe)
           and "webpub_republish" in _p27a_fe
           and "↻ Đăng lại" in _p27a_fe
           and "publishableIds" in _p27a_fe)
@@ -7340,6 +7344,147 @@ finally:
     stories._recents_path = _p27a_rec
     shutil.rmtree(_p27a_box, ignore_errors=True)
 # --- hết P27a ---
+
+# --- P41a/b/c: đăng báo chạy nền tuần tự + modal News tiến trình thật + chỉ hàng đợi ---
+_p41_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+_p41_ga = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+_p41_grid = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+_p41_wp = (Path(__file__).resolve().parent / "web_publisher.py").read_text(encoding="utf-8")
+_p41_nr = (Path(__file__).resolve().parent / "news_runner.py").read_text(encoding="utf-8")
+
+check("P41a news_runner: một worker tuần tự + snapshot đọc được (busy/kind/site/ids/current/done/total/"
+      "percent/elapsed/items/login), submit/cancel/login_async; cancel chỉ đặt cờ (không cắt giữa Save)",
+      "class NewsRunner" in _p41_nr and "def submit(" in _p41_nr and "def snapshot(" in _p41_nr
+      and "def cancel(" in _p41_nr and "def login_async(" in _p41_nr
+      and '"cancel_requested": bool(job and job.cancel_requested)' in _p41_nr
+      and "không cắt giữa lúc Save" in _p41_nr
+      and '"items": {}' in _p41_nr and '"login": dict(self._login)' in _p41_nr)
+
+check("P41a web_publisher báo stage THẬT qua on_stage ở publish_one/republish/reconcile_auto "
+      "(mốc Playwright: Posts, form, B1, B3, B2, Published, Save, đối soát link)",
+      "def _stage(on_stage, label: str, pct: int)" in _p41_wp
+      and "def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAULT_SITE," in _p41_wp
+      and "def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE, on_stage=None)" in _p41_wp
+      and "def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = False," in _p41_wp
+      and "_stage(on_stage, 'Mở Chromium', 8)" in _p41_wp
+      and "_stage(on_stage, 'Điền Title B1', 28)" in _p41_wp
+      and "_stage(on_stage, 'Upload ảnh B2', 62)" in _p41_wp
+      and "_stage(on_stage, 'Bấm Save', 86)" in _p41_wp
+      and "_stage(on_stage, 'Đối soát link sau Save', 96)" in _p41_wp)
+
+check("P41a grid_actions: webpub_start/login/republish giao runner nền rồi trả lời ngay; "
+      "có webpub_cancel; grid.py đẩy news_job mỗi tick + ép đọc lại folder khi runner đang ghi",
+      'nr.RUNNER.submit(ids, ctx.root, site, kind="publish")' in _p41_ga
+      and "nr.RUNNER.login_async(ctx.root, site)" in _p41_ga
+      and "nr.RUNNER.cancel()" in _p41_ga
+      and 'elif source == "webpub_cancel":' in _p41_ga
+      and "news_job=news.RUNNER.snapshot()" in _p41_grid
+      and "news_rows=_news_rows(all_rows)" in _p41_grid
+      and "news_was_busy" in _p41_grid
+      and "grid_news_busy" in _p41_grid)
+
+check("P41c chỉ xử lý row ĐANG Ở TRONG HÀNG ĐỢI: webpub_start/republish/retry/reconcile/new_post/"
+      "link đều lọc _queued_ids; modal có badge needs_review+error và 5 phút kẹt saving",
+      "queued = set(_queued_ids(ctx.root))" in _p41_ga
+      and 'elif source in ("webpub_retry", "webpub_reconcile", "webpub_new_post"):' in _p41_ga
+      and 'elif source == "webpub_link":' in _p41_ga
+      and "newsBadgeCount" in _p41_fe
+      and "c.review + c.error" in _p41_fe
+      and "MODEL.news_rows" in _p41_fe
+      and "age > 300" in _p41_fe
+      and "Kẹt · cần đối soát" in _p41_fe)
+
+check("P41b modal News: thanh % tổng (done/total), elapsed/site/bài đang chạy, chip lọc, "
+      "stage + % từng bài, giữ site/filter/scroll qua repaint, auto-scroll khi current đổi, "
+      "login không khóa Streamlit, nút Dừng sau bài hiện tại",
+      "news_job: {}" in _p41_fe
+      and '"nbar" +' in _p41_fe and "newshead" in _p41_fe
+      and "NEWS_SITE" in _p41_fe and "NEWS_FILTER" in _p41_fe and "NEWS_SCROLL" in _p41_fe
+      and "NEWS_CURRENT" in _p41_fe
+      and "nstagebar" in _p41_fe and "newsItemOf" in _p41_fe
+      and "Dừng sau bài hiện tại" in _p41_fe
+      and "webpub_cancel" in _p41_fe
+      and "Cho đăng mới" in _p41_fe and "webpub_new_post" in _p41_fe
+      and "webpub_link" in _p41_fe and "Đối soát" in _p41_fe)
+
+# Functional: executor giả -> tuần tự, stage/pct cập nhật, cancel chỉ dừng bài kế tiếp.
+import tempfile  # noqa: E402  (chỉ dùng cho test P41)
+import news_runner as _p41_runner  # noqa: E402
+
+_p41_box = Path(tempfile.mkdtemp())
+try:
+    _p41_a = stories.create_story(_p41_box, topic="A")["id"]
+    _p41_b = stories.create_story(_p41_box, topic="B")["id"]
+    stories.update_story(_p41_box, _p41_a, queued=True)
+    stories.update_story(_p41_box, _p41_b, queued=True)
+
+    def _p41_exec(root, sid, site, kind, on_stage):
+        on_stage("Mốc thật", 55)
+        return "https://news.test/" + sid
+
+    _p41_r = _p41_runner.NewsRunner(executor=_p41_exec)
+    _p41_msg = _p41_r.submit([_p41_a, _p41_b], _p41_box, "https://news.test", "publish")
+    _p41_deadline = time.time() + 5
+    while _p41_r.snapshot()["busy"] and time.time() < _p41_deadline:
+        time.sleep(0.02)
+    _p41_snap = _p41_r.snapshot()
+    check("P41a functional: submit 2 bài -> chạy tuần tự, done=2/total=2/percent=100, "
+          "mỗi item done + URL, không còn busy",
+          "Đã nhận 2 bài" in _p41_msg and not _p41_snap["busy"]
+          and _p41_snap["done"] == 2 and _p41_snap["total"] == 2 and _p41_snap["percent"] == 100
+          and _p41_snap["items"][_p41_a]["state"] == "done"
+          and _p41_snap["items"][_p41_a]["url"].endswith(_p41_a))
+
+    _p41_started = threading.Event()
+    _p41_release = threading.Event()
+
+    def _p41_slow(root, sid, site, kind, on_stage):
+        _p41_started.set()
+        _p41_release.wait(3)
+        return "u"
+
+    _p41_r2 = _p41_runner.NewsRunner(executor=_p41_slow)
+    _p41_r2.submit([_p41_a, _p41_b], _p41_box, "https://news.test", "publish")
+    _p41_started.wait(3)
+    _p41_cancel_msg = _p41_r2.cancel()
+    _p41_release.set()
+    _p41_deadline = time.time() + 5
+    while _p41_r2.snapshot()["busy"] and time.time() < _p41_deadline:
+        time.sleep(0.02)
+    _p41_snap2 = _p41_r2.snapshot()
+    check("P41a functional: cancel giữa bài 1 -> bài 1 chạy xong, bài 2 cancelled, "
+          "cancel_requested=true và có lời nhắn 'không cắt giữa lúc Save'",
+          "không cắt giữa lúc Save" in _p41_cancel_msg
+          and _p41_snap2["items"][_p41_a]["state"] == "done"
+          and _p41_snap2["items"][_p41_b]["state"] == "cancelled"
+          and _p41_snap2["cancel_requested"] is True)
+    _p41_r.stop()
+    _p41_r2.stop()
+
+    # Integration: event grid -> runner nền (không chạy Playwright), chỉ nhận bài trong hàng đợi.
+    _p41_ctx = ga.build_ctx(db.connect(), _p41_box)
+    _p41_old_exec = _p41_runner.RUNNER.executor
+    _p41_runner.RUNNER.executor = _p41_exec
+    try:
+        _p41_c = stories.create_story(_p41_box, topic="C")["id"]
+        _p41_nq = stories.create_story(_p41_box, topic="NQ")["id"]
+        stories.update_story(_p41_box, _p41_c, queued=True)
+        _p41_out = ga.apply_event(_p41_ctx, {"source": "webpub_start",
+                                             "site": "https://news.test",
+                                             "ids": [_p41_a, _p41_c, _p41_nq]})
+        _p41_deadline = time.time() + 5
+        while _p41_runner.RUNNER.snapshot()["busy"] and time.time() < _p41_deadline:
+            time.sleep(0.02)
+        _p41_snap3 = _p41_runner.RUNNER.snapshot()
+        check("P41a/P41c integration: webpub_start trả lời NGAY (không chặn), chỉ nhận 2/3 bài "
+              "đang ở hàng đợi, runner nền đăng xong và bỏ bài ngoài hàng đợi",
+              any("Đã nhận 2 bài" in ln for ln in _p41_out.lines)
+              and any("Bỏ 1 bài" in ln for ln in _p41_out.lines)
+              and _p41_snap3["done"] == 2 and not _p41_snap3["busy"])
+    finally:
+        _p41_runner.RUNNER.executor = _p41_old_exec
+finally:
+    shutil.rmtree(_p41_box, ignore_errors=True)
 
 
 # --- P29a: icon hạn mức Codex trên grid — hover hiện tên tài khoản + vòng tròn % còn lại ---

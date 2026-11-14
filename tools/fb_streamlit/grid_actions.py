@@ -2132,6 +2132,8 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
                                           f"(bấm ⚡ Chạy hàng đợi)."], [sid]
         elif source == "queue_remove":
             stories.update_story(ctx.root, sid, queued=False, queued_at=None)
+            import news_runner as nr
+            nr.RUNNER.cancel_ids([sid])
             out.lines, out.touched = [f"{sid}: bỏ khỏi hàng đợi."], [sid]
         elif source in ("queue_add_many", "queue_remove_many"):
             # P40a: kéo-thả nhiều hàng cùng lúc — một event thay vì N event (mỗi event là một lượt
@@ -2178,10 +2180,16 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
                 out.lines.append(f"Đã bỏ {removed} bài khỏi hàng đợi." if removed
                                  else "Không có bài nào trong lựa chọn đang ở hàng đợi.")
                 out.touched = ids
+                if removed:
+                    import news_runner as nr
+                    nr.RUNNER.cancel_ids(ids)
         elif source == "queue_clear":
             ids = [s for s in stories.list_story_ids(ctx.root) if stories.load_story(ctx.root, s).get("queued")]
             for qid in ids:
                 stories.update_story(ctx.root, qid, queued=False, queued_at=None)
+            if ids:
+                import news_runner as nr
+                nr.RUNNER.cancel_ids(ids)
             out.lines = [f"Đã bỏ {len(ids)} bài khỏi hàng đợi." if ids else "Hàng đợi đang trống — chưa có bài nào để bỏ."]
             out.touched = ids
         elif source == "set_provider":
@@ -2271,57 +2279,81 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             # P37d: mục native "🎬 B4 · Video" đã xóa — b4_pick giờ chỉ log; anh copy file vào folder.
             out.lines = [f"{sid}: đã chọn để nhận video — copy file video vào folder {sid} (mục native đã xóa P37d)."]
         elif source == "webpub_login":
-            # P28a: modal News — mở Chromium cho đăng nhập thủ công (không ghi file story).
+            # P28a/P41c: modal News — mở Chromium cho đăng nhập thủ công trong THREAD RIÊNG
+            # (login chờ anh đóng cửa sổ nên gọi thẳng ở đây là đứng cả Streamlit).
+            import news_runner as nr
             import web_publisher as wp
             site = str(event.get("site") or wp.DEFAULT_SITE)
-            try:
-                wp.login(ctx.root, site=site)
-                out.lines = [f"Đã đóng cửa sổ đăng nhập cho {site}. Đảm bảo đã đăng nhập trước khi tiếp tục."]
-            except Exception as exc:
-                out.lines = [f"Lỗi mở Chromium: {exc}"]
+            line = nr.RUNNER.login_async(ctx.root, site)
+            out.lines = [line]
+            out.news = {"notice": line}
         elif source == "webpub_start":
-            # P28a: modal News — đăng tuần tự từng bài đủ B1+B2+B3 lên website.
+            # P41a: modal News — giao lô đăng cho runner nền rồi TRẢ LỜI NGAY; grid đọc
+            # snapshot mỗi 2s để vẽ tiến trình thật. P41c: chỉ nhận bài đang ở hàng đợi.
+            import news_runner as nr
             import web_publisher as wp
             site = str(event.get("site") or wp.DEFAULT_SITE)
-            ids = event.get("ids") or []
-            results = []
-            for pub_id in ids:
-                pub_id = str(pub_id)
-                try:
-                    url = wp.publish_one(ctx.root, pub_id, site=site)
-                    results.append({"sid": pub_id, "ok": True, "url": url})
-                    out.lines.append(f"{pub_id}: {url}")
-                except Exception as exc:
-                    detail = str(exc)
-                    # P31a: lỗi xảy ra trước khi publish_one kịp đánh dấu `saving` cũng phải sống
-                    # trong story.json để modal News cột phải hiện "Lỗi" qua các tick sau.
-                    current = stories.load_story(ctx.root, pub_id)
-                    current_pub = dict(current.get("web_publish") or {})
-                    if current_pub.get("state") not in ("saving", "needs_review", "done"):
-                        stories.update_story(ctx.root, pub_id,
-                                             web_publish={"state": "error", "site": site,
-                                                          "reason": detail[:1000], "at": time.time()})
-                    results.append({"sid": pub_id, "ok": False, "err": detail})
-                    out.lines.append(f"{pub_id}: {detail}")
-            done = sum(1 for r in results if r["ok"])
-            out.lines.append(f"Đã đăng {done}/{len(results)} bài lên website.")
-            out.touched = [r["sid"] for r in results]
-            out.news = {"results": results, "progress": f"{done}/{len(results)} bài"}
+            raw = [str(i) for i in (event.get("ids") or []) if str(i)]
+            queued = set(_queued_ids(ctx.root))
+            ids = [i for i in raw if i in queued]
+            dropped = len(raw) - len(ids)
+            if not ids:
+                out.lines = ["Không có bài nào ĐANG TRONG HÀNG ĐỢI để đăng."]
+            else:
+                line = nr.RUNNER.submit(ids, ctx.root, site, kind="publish")
+                out.lines = [line]
+                if dropped:
+                    out.lines.append(f"Bỏ {dropped} bài không còn trong hàng đợi.")
+                out.news = {"notice": line}
         elif source == "webpub_republish":
-            # P32a: modal News — đăng lại bài ĐÃ CÓ LINK (link cũ lưu trong history, link mới ghi story.json)
+            # P32a/P41a: đăng lại bài ĐÃ CÓ LINK — cũng qua runner nền, tuần tự.
+            import news_runner as nr
             import web_publisher as wp
             site = str(event.get("site") or wp.DEFAULT_SITE)
             pub_id = str(event.get("id") or sid)
-            try:
-                url = wp.republish(ctx.root, pub_id, site=site)
-                out.lines = [f"{pub_id}: đã đăng lại — link cũ đã lưu history, link mới: {url}"]
-                out.touched = [pub_id]
-                out.news = {"results": [{"sid": pub_id, "ok": True, "url": url}],
-                            "progress": f"1/1 bài"}
-            except Exception as exc:
-                out.lines = [f"{pub_id}: {exc}"]
-                out.news = {"results": [{"sid": pub_id, "ok": False, "err": str(exc)}],
-                            "progress": f"0/1 bài"}
+            if pub_id not in set(_queued_ids(ctx.root)):
+                out.lines = [f"{pub_id}: không còn trong hàng đợi — không đăng lại."]
+            else:
+                line = nr.RUNNER.submit([pub_id], ctx.root, site, kind="republish")
+                out.lines = [line]
+                out.news = {"notice": line}
+        elif source in ("webpub_retry", "webpub_reconcile", "webpub_new_post"):
+            # P41c: ba việc sửa lỗi chỉ áp dụng cho bài ĐANG Ở TRONG HÀNG ĐỢI.
+            import news_runner as nr
+            import web_publisher as wp
+            site = str(event.get("site") or wp.DEFAULT_SITE)
+            raw = [str(i) for i in (event.get("ids") or []) if str(i)]
+            queued = set(_queued_ids(ctx.root))
+            ids = [i for i in raw if i in queued]
+            kind = {"webpub_retry": "retry", "webpub_reconcile": "reconcile",
+                    "webpub_new_post": "new_post"}[source]
+            label = {"retry": "thử lại", "reconcile": "đối soát",
+                     "new_post": "cho đăng mới"}[kind]
+            if not ids:
+                out.lines = [f"Không có bài nào ĐANG TRONG HÀNG ĐỢI để {label}."]
+            else:
+                line = nr.RUNNER.submit(ids, ctx.root, site, kind=kind)
+                out.lines = [line]
+                out.news = {"notice": line}
+        elif source == "webpub_link":
+            # P41c: anh dán link công khai đã kiểm tra tay cho bài cần đối soát.
+            import web_publisher as wp
+            pub_id = str(event.get("id") or sid)
+            if pub_id not in set(_queued_ids(ctx.root)):
+                out.lines = [f"{pub_id}: không còn trong hàng đợi — không ghi link."]
+            else:
+                try:
+                    wp.reconcile(ctx.root, pub_id, str(event.get("url") or ""))
+                    out.lines = [f"{pub_id}: đã ghi link và đánh dấu Đã đăng."]
+                    out.touched = [pub_id]
+                except Exception as exc:
+                    out.lines = [f"{pub_id}: {exc}"]
+        elif source == "webpub_cancel":
+            # P41a: dừng SAU bài đang chạy — không cắt giữa lúc Save.
+            import news_runner as nr
+            line = nr.RUNNER.cancel()
+            out.lines = [line]
+            out.news = {"notice": line}
         elif source == "translate":
             # P34a: dịch B1/B3 sang tiếng Việt — CHỈ hiện trên UI (kênh copy), không ghi caption.txt/seo.md
             # cũng không đụng story.json. Dùng đúng provider anh chọn ở ô "Dịch" đầu lưới.

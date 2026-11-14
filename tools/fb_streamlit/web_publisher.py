@@ -81,6 +81,16 @@ class PublishError(RuntimeError):
     pass
 
 
+def _stage(on_stage, label: str, pct: int) -> None:
+    """Báo tiến trình THẬT cho runner (P41a) — lỗi callback không được làm hỏng lượt đăng."""
+    if on_stage is None:
+        return
+    try:
+        on_stage(label, pct)
+    except Exception:
+        pass
+
+
 @dataclass(frozen=True)
 class Materials:
     sid: str
@@ -621,11 +631,14 @@ def _find_url_after_save(page, sel: dict[str, str], title: str, *, site: str = D
     )
 
 
-def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = False) -> str:
+def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: bool = False,
+                   on_stage=None) -> str:
     """Recover public URL without republishing a post already saved on site."""
     root = Path(root)
     story = stories.load_story(root, sid)
+    _stage(on_stage, 'Kiểm tra trạng thái đối soát', 5)
     if story.get('link'):
+        _stage(on_stage, 'Đã có link', 100)
         return validate_public_url(story['link'])
     pub = story.get('web_publish') or {}
     if pub.get('state') not in ('saving', 'needs_review'):
@@ -638,20 +651,24 @@ def reconcile_auto(root: Path, sid: str, *, site: str | None = None, headed: boo
     if not title:
         raise PublishError(f'{sid}: thiếu Caption B1 để tìm bài.')
     sel = load_selectors(root)
+    _stage(on_stage, 'Mở Chromium', 12)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         context = browser_context(root, p, headed=headed, site=original_site)
         try:
             page = context.pages[0] if context.pages else context.new_page()
+            _stage(on_stage, 'Đọc bảng Posts', 35)
             url = _find_url_after_save(page, sel, title, site=original_site, image_url=pub.get('image_url') or '')
+            _stage(on_stage, 'Đối chiếu link', 90)
         finally:
             context.close()
     stories.update_story(root, sid, link=url,
                          web_publish={'state': 'done', 'site': original_site, 'url': url, 'at': time.time()})
+    _stage(on_stage, 'Xong', 100)
     return url
 
 
-def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE) -> str:
+def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE, on_stage=None) -> str:
     """Đăng lại một bài đã có link: giữ link cũ trong history, xóa link hiện tại,
     tạo bài mới trên website và ghi link mới.
 
@@ -660,6 +677,7 @@ def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE) -> str:
     """
     root = Path(root)
     site = normalized_site(site)
+    _stage(on_stage, 'Lưu link cũ vào history', 3)
     story = stories.load_story(root, sid)
     old_link = story.get('link') or ''
     if not old_link:
@@ -674,7 +692,7 @@ def republish(root: Path, sid: str, *, site: str = DEFAULT_SITE) -> str:
                          web_publish={'state': 'ready', 'site': site, 'at': time.time(),
                                       'previous_link': old_link, 'republishing': True},
                          web_publish_history=history[-30:])
-    url = publish_one(root, sid, site=site)
+    url = publish_one(root, sid, site=site, on_stage=on_stage)
     return url
 
 
@@ -701,14 +719,19 @@ def reset_needs_review_for_new_post(root: Path, sid: str, *, site: str) -> None:
                                       'previous_attempt_may_exist': True})
 
 
-def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAULT_SITE) -> str:
+def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAULT_SITE,
+                on_stage=None) -> str:
     """Synchronous, conservative single-post publisher.
 
     Any uncertain save becomes `needs_review` and is blocked on rerun. This
     protects against duplicate posts if website saved but link extraction failed.
+
+    P41a: `on_stage(stage, pct)` báo tiến trình THẬT ở từng mốc Playwright; runner nền
+    dùng nó để modal News vẽ thanh tiến trình, không phải thanh % giả.
     """
     root = Path(root)
     site = normalized_site(site)
+    _stage(on_stage, 'Kiểm tra bài + file B1/B2/B3', 3)
     story = stories.load_story(root, sid)
     pub = story.get('web_publish') or {}
     if pub.get('state') in ('saving', 'needs_review', 'done'):
@@ -721,10 +744,12 @@ def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAU
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise PublishError('Chưa cài Playwright. Chạy: pip install playwright && python -m playwright install chromium') from exc
+    _stage(on_stage, 'Mở Chromium', 8)
     with sync_playwright() as p:
         context = browser_context(root, p, headed=headed, site=site)
         try:
             page = context.pages[0] if context.pages else context.new_page()
+            _stage(on_stage, 'Tải trang Posts', 12)
             page.goto(posts_url(site), wait_until='domcontentloaded', timeout=45000)
             # The admin is a Vue SPA: DOMContentLoaded often fires before Posts renders.
             # Never treat an immediate locator.count() == 0 as proof of missing login.
@@ -745,27 +770,34 @@ def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAU
                     f'URL thực tế: {actual_url}; tiêu đề tab: {heading}; nội dung: {visible_text}. '
                     'Kiểm tra tài khoản, quyền tạo bài và profile Chromium đang dùng.'
                 ) from exc
+            _stage(on_stage, 'Mở form Create post', 18)
             _one(page, sel['new_post'], 'New post').click()
             page.locator('form.post-editor-form').wait_for(timeout=30000)
             stage = 'Điền Title B1'
+            _stage(on_stage, 'Điền Title B1', 28)
             _one(page, sel['title'], 'Title').fill(item.title)
             # Important: do not block Description on an unfinished image upload.
             stage = 'Nhập Description B3 (TinyMCE)'
+            _stage(on_stage, 'Nhập Description B3', 45)
             _fill_editor(page, sel, item.article)
             stage = 'Upload Featured Image B2'
+            _stage(on_stage, 'Upload ảnh B2', 62)
             _upload_image(page, sel, item.image)
             uploaded_image_url = _uploaded_image_url(page)
             if not uploaded_image_url:
                 raise PublishError('Ảnh B2 chưa được lưu vào form; không Save.')
             stage = 'Bật Published'
+            _stage(on_stage, 'Bật Published', 72)
             _publish_checkbox(page, sel)
             stage = 'Kiểm tra Description trước Save'
+            _stage(on_stage, 'Kiểm tra Description', 78)
             # Final content sanity check immediately before Save.
             editor_text = page.frame_locator(sel['description_iframe']).locator('body#tinymce').inner_text()
             if len(editor_text.strip()) < 30:
                 raise PublishError('Description (B3) trống trước Save; không đăng.')
             # Deliberately do not touch SEO Title / SEO Keywords / SEO Description.
             stage = 'Kiểm tra điều kiện nút Save'
+            _stage(on_stage, 'Kiểm tra nút Save', 82)
             button = page.locator(sel['save'])
             button.wait_for(state='visible', timeout=15000)
             if button.count() != 1 or not button.is_enabled():
@@ -773,11 +805,15 @@ def publish_one(root: Path, sid: str, *, headed: bool = False, site: str = DEFAU
             # Mark attempted BEFORE clicking: after a click network outcome can be
             # ambiguous and needs_review protects against duplicate posts.
             stage = 'Bấm Save và đợi xác nhận'
+            _stage(on_stage, 'Bấm Save', 86)
             stories.update_story(root, sid, web_publish={'state':'saving', 'site':site, 'image_url':uploaded_image_url, 'at':time.time()})
             _submit_and_confirm(page, sel)
+            _stage(on_stage, 'Đợi website xác nhận', 92)
             stage = 'Đối soát Link sau Save'
+            _stage(on_stage, 'Đối soát link sau Save', 96)
             url = _find_url_after_save(page, sel, item.title, site=site, image_url=uploaded_image_url)
             stories.update_story(root, sid, link=url, web_publish={'state':'done','site':site,'url':url,'at':time.time()})
+            _stage(on_stage, 'Xong', 100)
             return url
         except Exception as exc:
             detail = f'Bước {locals().get("stage", "Mở Posts/Create post")}: {exc}'

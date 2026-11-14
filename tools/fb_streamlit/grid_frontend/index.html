@@ -85,6 +85,60 @@
   .newsprog .spinner { width:16px; height:16px; border-width:2px; }
   .newswarn { padding:6px 10px; border-radius:6px; background:var(--missing); color:var(--missing-t);
     border:1px solid var(--border); font-size:11px; margin-bottom:6px; }
+  /* P41b: modal News rộng hơn + thanh tiến trình tổng + chip lọc + tiến trình từng bài */
+  .modal.newsmodal { width:min(1000px, 100%); }
+  .newshead { display:flex; flex-direction:column; gap:6px; padding:8px 10px; margin-bottom:2px;
+    border-radius:6px; background:var(--field); border:1px solid var(--border); }
+  .newshead .nhtop { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .newshead .nhsite { color:var(--accent); font-size:11px; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; max-width:340px; }
+  .newshead .nhmeta { color:var(--muted); font-size:11px; margin-left:auto; }
+  .nbar { height:9px; border-radius:999px; background:var(--bg); border:1px solid var(--border);
+    overflow:hidden; }
+  .nbar > i { display:block; height:100%; width:0; border-radius:999px;
+    background:linear-gradient(90deg,#3b82f6,#22c55e); transition:width .35s ease; }
+  .nbar.review > i { background:linear-gradient(90deg,#c9a24a,#f0c46a); }
+  .nbar.fail > i { background:linear-gradient(90deg,#b45309,#ef4444); }
+  .npulse { display:inline-block; width:7px; height:7px; border-radius:50%;
+    background:var(--running-t); box-shadow:0 0 0 0 rgba(59,130,246,.55);
+    animation:newspulse 1.4s infinite; }
+  @keyframes newspulse { 70% { box-shadow:0 0 0 7px rgba(59,130,246,0); }
+    100% { box-shadow:0 0 0 0 rgba(59,130,246,0); } }
+  .nbadge { position:absolute; top:-4px; right:-5px; min-width:14px; height:14px; padding:0 3px;
+    border-radius:999px; background:var(--error-b); color:#ffe4e6; font-size:9px; line-height:14px;
+    text-align:center; font-weight:700; pointer-events:none; }
+  .newsbtnwrap { position:relative; display:inline-flex; }
+  .newsbtnwrap .npulse { position:absolute; left:-2px; bottom:-2px; }
+  .newsfilters { display:flex; gap:4px; flex-wrap:wrap; }
+  .nchip { font-size:10.5px; padding:2px 8px; border-radius:999px; background:var(--btn);
+    color:var(--muted); border:1px solid var(--border); cursor:pointer; }
+  .nchip.on { background:var(--running); color:var(--running-t); border-color:var(--running-b); }
+  .nitem { display:flex; flex-direction:column; gap:4px; padding:7px 8px; border-radius:6px;
+    background:var(--field); border:1px solid var(--border); font-size:12px; }
+  .nitem.running { border-color:var(--running-b); background:var(--running); }
+  .nitem.fail { border-color:var(--error-b); }
+  .nitem.review { border-color:#c9a24a; background:#3a3116; }
+  .nitem.done { border-color:var(--done-b); }
+  .nitem .nrow1 { display:flex; align-items:center; gap:6px; }
+  .nitem .nrow1 .nid { flex:1 1 auto; min-width:0; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; }
+  .nitem .nstage { color:var(--muted); font-size:10.5px; }
+  .nstagebar { height:5px; border-radius:999px; background:var(--bg); border:1px solid var(--border);
+    overflow:hidden; }
+  .nstagebar > i { display:block; height:100%; width:0; background:var(--running-t); }
+  .nacts { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+  .nacts .nbtn { font-size:10.5px; padding:2px 7px; border-radius:4px; background:var(--btn);
+    color:var(--text); border:1px solid var(--border); cursor:pointer; }
+  .nacts .nbtn:hover { background:var(--btn-h); }
+  .nacts .nbtn:disabled { opacity:.45; cursor:not-allowed; }
+  .nacts .ninput { flex:1 1 160px; min-width:120px; font-size:11px; padding:2px 6px;
+    border-radius:4px; background:var(--bg); color:var(--text); border:1px solid var(--border); }
+  .nnotice { padding:5px 8px; border-radius:5px; background:var(--running); color:var(--running-t);
+    border:1px solid var(--running-b); font-size:11px; }
+  .nok { color:var(--done-t); font-size:11px; }
+  .nbad { color:var(--error-t); font-size:11px; }
+  .nconfirm { padding:7px 9px; border-radius:6px; background:#3a3116; border:1px solid #c9a24a;
+    color:#ffd98a; font-size:11px; display:flex; flex-direction:column; gap:6px; }
   .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
   .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }
@@ -642,7 +696,7 @@ function menuItem(icon, label, fn, cls, manual) {
   return { node: b, label: text };
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {}, news: {}, news_response: {}, codex_usage: {} };
+let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {}, news: {}, news_response: {}, news_job: {}, news_rows: [], codex_usage: {} };
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
 let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
@@ -3605,79 +3659,228 @@ function queueIds() {
   return (MODEL.queue_ids || []).map(String);
 }
 
-// P28a: modal News — trái: website + login + publish, phải: tiến trình + kết quả.
-// Nút icon globe chỉ ENABLE khi có ≥1 bài trong hàng đợi ĐỦ B1+B2+B3 (xong, không link cũ).
+// P28a/P41b: modal News — trái: website + login + thao tác, phải: hàng đợi + tiến trình THẬT.
+// Icon globe chỉ làm việc với bài ĐANG Ở TRONG HÀNG ĐỢI (P41c); badge đếm needs_review + error.
 let NEWS_OPEN = false;
 let NEWS_TARGET_IDS = [];  // story đã chọn cho lượt đăng — giữ qua saving/done để preview không biến mất
-const NEWS_RESULTS = {};  // sid -> {ok, url, err} — sống qua repaint, xóa khi đóng modal
-function closeNews() { NEWS_OPEN = false; NEWS_TARGET_IDS = []; paintNews(); }
+const NEWS_RESULTS = {};  // giữ chỗ cho response cũ — không còn dùng để vẽ state (state đọc từ story.json)
+let NEWS_SITE = "";       // chọn site sống qua mọi lần repaint 2s
+let NEWS_FILTER = "all";  // chip lọc ở cột phải
+let NEWS_SCROLL = 0;      // scroll cột phải — giữ khi modal bị dựng lại
+let NEWS_CURRENT = "";    // bài đang đăng — chỉ auto-scroll khi nó ĐỔI
+let NEWS_NOTICE = "";     // thông báo một lần (đã nhận việc / đã dừng…)
+const NEWS_DRAFT = {};    // sid -> link anh đang gõ tay (repaint 2s không xóa)
+let NEWS_CONFIRM_NEW = false;  // hộp xác nhận "Cho đăng mới" cho bài needs_review
+let NEWS_CONFIRM_IDS = [];     // đúng những bài sẽ đăng mới nếu anh xác nhận
+function closeNews() {
+  NEWS_OPEN = false; NEWS_TARGET_IDS = []; NEWS_CONFIRM_NEW = false; NEWS_CONFIRM_IDS = []; NEWS_NOTICE = "";
+  paintNews();
+}
+
+function newsJob() {
+  return MODEL.news_job && typeof MODEL.news_job === "object" ? MODEL.news_job : {};
+}
+function newsBusy() { return newsJob().busy === true; }
+function newsItemOf(sid) {
+  const items = newsJob().items;
+  return (items && typeof items === "object" && items[String(sid)]) || {};
+}
 
 function _newsPubIds() {
-  // Mọi bài trong hàng đợi: chưa có link (đăng mới) HOẶC đã có link (đăng lại).
-  // Chỉ loại bài B1/B2/B3 đang lỗi (không đủ điều kiện đăng).
-  const qids = queueIds();
-  const idSet = new Set(qids);
-  const all = rows();
-  const out = [];
-  for (const row of all) {
-    const id = String(row.id);
-    if (!idSet.has(id)) continue;
-    const st = row.states || {};
-    // Loại bài B1/B2/B3 lỗi (không thể đăng được)
-    if (st.b1 === "error" || st.b2 === "error" || st.b3 === "error") continue;
-    out.push(id);
+  // P41c: CHỈ bài đang ở trong hàng đợi. Không mở rộng sang row ngoài hàng đợi dù có web_publish.
+  return newsQueueRows().map(r => String(r.id));
+}
+
+function newsQueueRows() {
+  // Giữ đúng thứ tự hàng đợi (#), không phụ thuộc thứ tự rows() đang vẽ.
+  // P41c: news_rows do Python gửi riêng nên bài bị bộ lọc lưới che vẫn thao tác được.
+  const base = (Array.isArray(MODEL.news_rows) && MODEL.news_rows.length) ? MODEL.news_rows : rows();
+  const byId = {};
+  base.forEach(r => { byId[String(r.id)] = r; });
+  return queueIds().map(id => byId[String(id)]).filter(Boolean);
+}
+
+function newsStatus(row) {
+  const st = row.states || {};
+  const wp = row.web_publish || {};
+  const it = newsItemOf(row.id);
+  const hasLink = !!(row.link || (wp.state === "done" && wp.url));
+  const allDone = st.b1 === "done" && st.b2 === "done" && st.b3 === "done";
+  const anyRunning = st.b1 === "running" || st.b2 === "running" || st.b3 === "running";
+  const stepErr = st.b1 === "error" || st.b2 === "error" || st.b3 === "error";
+  const age = wp.at ? (Date.now() / 1000 - Number(wp.at)) : 0;
+  const itemRunning = it.state === "running";
+  // P41c: "saving" quá 5 phút mà runner không còn giữ bài này = kẹt (app từng bị tắt giữa Save).
+  const stale = wp.state === "saving" && !itemRunning && age > 300;
+  let cls = "idle", txt = "Chờ B1/B2/B3", reason = "", publish = false, retry = false;
+  let review = false, reconcile = false, republish = false;
+  if (itemRunning || it.state === "waiting") {
+    if (itemRunning) { cls = "saving"; txt = "Đang đăng"; }
+    else { cls = "processing"; txt = "Trong lượt này"; }
   }
+  if (wp.state === "error") { cls = "fail"; txt = "Lỗi"; reason = wp.reason || it.error || ""; }
+  if (wp.state === "saving") {
+    if (stale) { cls = "review"; txt = "Kẹt · cần đối soát";
+      reason = "Đã quá 5 phút không có lượt đăng nào chạy bài này — Save có thể đã xong nhưng chưa lấy được link."; }
+    else if (!itemRunning) { cls = "saving"; txt = "Đang lưu…"; }
+    reconcile = true;
+  }
+  if (wp.state === "needs_review") {
+    cls = "review"; txt = "Cần đối soát";
+    reason = wp.reason || "Lần Save trước chưa xác minh được link — không đăng lại để tránh trùng.";
+    review = true; reconcile = true;
+  }
+  if (wp.state === "done" || hasLink) {
+    cls = "done"; txt = "Đã đăng ✓"; republish = true;
+  }
+  if (stepErr && wp.state !== "done" && wp.state !== "needs_review" && wp.state !== "saving") {
+    cls = "fail"; txt = "Lỗi B1/B2/B3";
+    reason = "B1/B2/B3 đang lỗi — sửa/chạy lại bước đó trước khi đăng.";
+  }
+  if (cls === "idle" && allDone && !hasLink) {
+    cls = "ready"; txt = "Sẵn sàng"; publish = true;
+  }
+  if (cls === "idle" && anyRunning) {
+    cls = "processing"; txt = "Xử lý…";
+    reason = "B1–B3 đang chạy — chưa đăng được";
+  }
+  if (wp.state === "error" && allDone && !hasLink) retry = true;
+  return {cls, txt, reason, publish, retry, review, reconcile, republish, hasLink, allDone,
+          stale, anyRunning, item: it};
+}
+
+function newsCounts(list) {
+  const out = {done: 0, review: 0, error: 0, ready: 0, processing: 0, saving: 0,
+               publish: [], retry: [], reviewIds: [], reconcile: [], doneIds: []};
+  (list || []).forEach(row => {
+    const s = newsStatus(row);
+    if (s.cls === "done") out.done++;
+    else if (s.cls === "review") out.review++;
+    else if (s.cls === "fail") out.error++;
+    else if (s.cls === "ready") out.ready++;
+    else if (s.cls === "saving") out.saving++;
+    else out.processing++;
+    if (s.publish) out.publish.push(String(row.id));
+    if (s.retry) out.retry.push(String(row.id));
+    if (s.review) out.reviewIds.push(String(row.id));
+    if (s.reconcile) out.reconcile.push(String(row.id));
+    if (s.republish) out.doneIds.push(String(row.id));
+  });
   return out;
+}
+
+function newsBadgeCount() {
+  const c = newsCounts(newsQueueRows());
+  return c.review + c.error;
+}
+
+function newsLoginBusy() {
+  const st = String((newsJob().login || {}).state || "");
+  return st === "opening" || st === "open";
+}
+
+function newsEnabled() {
+  return _newsPubIds().length > 0 || newsBusy() || newsLoginBusy();
 }
 
 function newsButton() {
   const ids = _newsPubIds();
+  const badge = newsBadgeCount();
+  const wrap = el("span", "newsbtnwrap");
   const b = iconButton("globe",
-    ids.length
-      ? "Mở modal News — " + ids.length + " bài trong hàng đợi (chưa có link, chưa lỗi B1–B3)"
-      : "Chưa có bài nào đủ điều kiện (hết hàng đợi, tất cả đã có link, hoặc B1–B3 lỗi)",
+    newsEnabled()
+      ? "Mở modal News — " + ids.length + " bài trong hàng đợi"
+        + (badge ? " · " + badge + " bài cần đối soát/lỗi" : "")
+      : "Hàng đợi trống — thêm bài bằng nút ▶ rồi mở News",
     () => { NEWS_OPEN = true; paintNews(); },
     "act i");
   b.id = "newsbtn";
-  b.disabled = ids.length === 0;
-  return b;
+  b.disabled = !newsEnabled();
+  wrap.appendChild(b);
+  if (badge > 0) wrap.appendChild(el("span", "nbadge", badge > 99 ? "99+" : String(badge)));
+  if (newsBusy()) wrap.appendChild(el("span", "npulse"));
+  return wrap;
 }
 
 function paintNews() {
   const root = document.getElementById("root");
   if (!root) return;  // DOM chưa sẵn
   const old = root.querySelector(":scope > .overlay.newsmodal");
+  const oldRight = old && old.querySelector(".newscol.right");
+  if (oldRight) NEWS_SCROLL = oldRight.scrollTop;
   const fresh = newsModalNode();
   if (!fresh) { if (old) old.remove(); return; }
   if (old) old.replaceWith(fresh); else root.appendChild(fresh);
+  const right = fresh.querySelector(".newscol.right");
+  if (right) {
+    right.scrollTop = NEWS_SCROLL;
+    right.addEventListener("scroll", () => { NEWS_SCROLL = right.scrollTop; });
+  }
+  // Chỉ auto-scroll khi bài đang đăng ĐỔI — không giật màn hình mỗi 2 giây.
+  const cur = String(newsJob().current || "");
+  if (cur && cur !== NEWS_CURRENT) {
+    const box = fresh.querySelector('.nitem[data-sid="' + cur + '"]');
+    if (box) box.scrollIntoView({block: "nearest"});
+  }
+  NEWS_CURRENT = cur;
+}
+
+function newsFilterMatch(s) {
+  if (NEWS_FILTER === "ready") return s.cls === "ready" || s.cls === "processing";
+  if (NEWS_FILTER === "review") return s.cls === "review" || s.cls === "saving";
+  if (NEWS_FILTER === "fail") return s.cls === "fail";
+  if (NEWS_FILTER === "done") return s.cls === "done";
+  return true;
 }
 
 function newsModalNode() {
   if (!NEWS_OPEN) return null;
-  let ids = _newsPubIds();
-  // Sau khi gửi, row có thể đã done/link nên _newsPubIds() không còn trả lại nó;
-  // giữ danh sách target để cột phải tiếp tục hiển thị done/lỗi/needs_review.
-  if (NEWS_OPEN && NEWS_TARGET_IDS.length) ids = NEWS_TARGET_IDS.slice();
-  if (!ids.length) { NEWS_OPEN = false; return null; }
+  const queueRows = newsQueueRows();
+  if (!queueRows.length) { NEWS_OPEN = false; return null; }
+  const ids = queueRows.map(r => String(r.id));
   if (!NEWS_TARGET_IDS.length) NEWS_TARGET_IDS = ids.slice();
   const newsResp = MODEL.news_response && typeof MODEL.news_response === "object" ? MODEL.news_response : {};
+  if (typeof newsResp.notice === "string" && newsResp.notice) NEWS_NOTICE = newsResp.notice;
+  const job = newsJob();
+  const counts = newsCounts(queueRows);
   const overlay = el("div", "overlay newsmodal");
   const modal = el("div", "modal newsmodal");
   const head = el("div", "mhead");
-  head.appendChild(el("span", "mid", "🌐 News · " + ids.length + " bài trong hàng đợi"));
+  head.appendChild(el("span", "mid", "🌐 News · " + counts.done + "/" + queueRows.length + " bài"));
   head.appendChild(helpChip([
     "Đăng báo lên website: B1 → Title, B2 → Featured Image, B3 → Description.",
-    "Xử lý đăng/chạy nền bằng Chromium ẩn (headless); chỉ nút Đăng nhập mới mở cửa sổ để thao tác.",
-    "Cột phải hiện TRẠNG THÁI THẬT trong story.json (đang lưu / cần đối soát / xong / lỗi) — "
-      + "sống qua polling 2s, không phải chỉ kết quả lượt bấm cuối."
+    "P41a: việc đăng chạy ở thread nền, tuần tự từng bài; thanh tiến trình lấy mốc THẬT từ Playwright.",
+    "P41c: chỉ thao tác trên bài ĐANG Ở TRONG HÀNG ĐỢI. needs_review + lỗi hiện badge trên icon.",
+    "Dừng = chạy xong bài hiện tại rồi mới dừng — không bao giờ cắt giữa lúc Save."
   ]));
   head.appendChild(iconButton("cross", "Đóng (Esc)", closeNews, "act"));
   modal.appendChild(head);
+
+  // ---- THANH TỔNG: done/total · % · elapsed · site · bài đang chạy ----
+  const overall = el("div", "newshead");
+  const top = el("div", "nhtop");
+  if (newsBusy()) top.appendChild(el("span", "npulse"));
+  top.appendChild(el("span", "newslbl", newsBusy()
+    ? ("Đang đăng " + (job.done || 0) + "/" + (job.total || queueRows.length) + " bài")
+    : ("Hàng đợi: " + queueRows.length + " bài · xong " + counts.done)));
+  if (job.site) top.appendChild(el("span", "nhsite", String(job.site)));
+  const pct = newsBusy() ? Number(job.percent || 0) : (queueRows.length ? Math.round(counts.done * 100 / queueRows.length) : 0);
+  const curRow = queueRows.find(r => String(r.id) === String(job.current || ""));
+  top.appendChild(el("span", "nhmeta",
+    pct + "%" + (newsBusy() ? " · " + Number(job.elapsed || 0).toFixed(1) + "s" : "")
+    + (curRow ? " · " + String(curRow.id) + ": " + String(newsItemOf(curRow.id).stage || "") : "")));
+  overall.appendChild(top);
+  const bar = el("div", "nbar" + (counts.error && !newsBusy() ? " fail" : counts.review && !newsBusy() ? " review" : ""));
+  const fill = el("i");
+  fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  bar.appendChild(fill);
+  overall.appendChild(bar);
+  modal.appendChild(overall);
+
   const body = el("div", "mbody");
 
   // ---- CỘT TRÁI: thao tác ----
   const left = el("div", "newscol left");
-  // Site selector
   left.appendChild(el("span", "newslbl", "Website"));
   const newsPayload = MODEL.news && typeof MODEL.news === "object" ? MODEL.news : {};
   const siteOpts = Array.isArray(newsPayload.sites) ? newsPayload.sites : [];
@@ -3697,130 +3900,217 @@ function newsModalNode() {
     opt.value = "https://usnewspv247.danhngon.pro";
     siteSel.appendChild(opt);
   }
+  const knownSites = Array.from(siteSel.options).map(o => o.value);
+  if (NEWS_SITE && knownSites.includes(NEWS_SITE)) siteSel.value = NEWS_SITE;
+  else NEWS_SITE = siteSel.value;
+  siteSel.addEventListener("change", () => { NEWS_SITE = siteSel.value; });
   left.appendChild(siteSel);
 
-  // Login button
-  const loginBtn = button("🔐 Đăng nhập (Chromium)",
+  // Login — mở Chromium ở thread riêng, không khóa Streamlit.
+  const loginBusy = newsLoginBusy();
+  const loginBtn = button(loginBusy ? "🔐 Đang mở Chromium…" : "🔐 Đăng nhập (Chromium)",
     "Mở Chromium để đăng nhập website (chỉ cần lần đầu hoặc khi session hết hạn)",
     function() { send({ source: "webpub_login", site: siteSel.value }); },
     "act");
+  loginBtn.disabled = loginBusy;
   left.appendChild(loginBtn);
+  const loginMsg = String((job.login || {}).message || "");
+  if (loginMsg) left.appendChild(el("span", "newslbl", loginMsg));
 
-  // Publish button — chỉ gửi bài CHƯA có link (bài đã có link dùng nút "Đăng lại" riêng)
-  const rowByIdForPub = {};
-  rows().forEach(r2 => { rowByIdForPub[String(r2.id)] = r2; });
-  const publishableIds = ids.filter(sid => {
-    const r2 = rowByIdForPub[String(sid)];
-    return r2 && !r2.link;
-  });
-  if (publishableIds.length) {
+  // Nút chính: đang chạy -> Dừng; rảnh -> Đăng các bài đủ điều kiện.
+  const publishableIds = counts.publish;
+  if (newsBusy()) {
+    const cancelReq = job.cancel_requested === true;
+    const stop = button(cancelReq ? "⏹ Đang dừng sau bài hiện tại…" : "⏹ Dừng sau bài hiện tại",
+      "Bài đang chạy sẽ được chạy cho xong (không cắt giữa Save); các bài sau không bắt đầu.",
+      function() { send({ source: "webpub_cancel" }); }, "act");
+    stop.disabled = cancelReq;
+    left.appendChild(stop);
+  } else {
     const pubBtn = button("🚀 Đăng " + publishableIds.length + " bài",
-      "Đăng tuần tự từng bài CHƯA CÓ LINK lên website — bài đã có link dùng nút ↻ Đăng lại",
+      "Đăng tuần tự từng bài CHƯA CÓ LINK, đủ B1+B2+B3, đang ở trong hàng đợi",
       function() {
+        if (!publishableIds.length) return;
         NEWS_TARGET_IDS = ids.slice();
         send({ source: "webpub_start", site: siteSel.value, ids: publishableIds });
       }, "act");
+    pubBtn.disabled = !publishableIds.length;
     left.appendChild(pubBtn);
   }
 
-  // Progress label (từ response, nếu có) + spinner khi danh sách chưa "đủ xanh" (P38a: tránh đơ)
+  // Việc sửa lỗi — cũng chỉ cho bài đang ở trong hàng đợi.
+  if (!newsBusy() && counts.retry.length) {
+    const rb = button("↻ Thử lại " + counts.retry.length + " lỗi",
+      "Đưa các bài lỗi về ready rồi đăng lại tuần tự",
+      function() { send({ source: "webpub_retry", site: siteSel.value, ids: counts.retry }); }, "act");
+    left.appendChild(rb);
+  }
+  if (!newsBusy() && counts.reconcile.length) {
+    const cb = button("🔎 Đối soát " + counts.reconcile.length + " bài",
+      "Mở Posts, tìm lại link của bài đã Save nhưng chưa lấy được URL — KHÔNG tạo bài mới",
+      function() { send({ source: "webpub_reconcile", site: siteSel.value, ids: counts.reconcile }); }, "act");
+    left.appendChild(cb);
+  }
+  if (!newsBusy() && counts.reviewIds.length) {
+    const nb = button("🆕 Cho đăng mới " + counts.reviewIds.length + " bài",
+      "CHỈ dùng khi anh đã kiểm tra website: bài cũ có thể đã tồn tại, đăng mới sẽ tạo bài thứ hai",
+      function() { NEWS_CONFIRM_NEW = true; NEWS_CONFIRM_IDS = counts.reviewIds.slice(); paintNews(); }, "act");
+    left.appendChild(nb);
+  }
+  if (NEWS_CONFIRM_NEW && NEWS_CONFIRM_IDS.length) {
+    const confirm = el("div", "nconfirm");
+    confirm.appendChild(el("span", null,
+      "⚠ " + NEWS_CONFIRM_IDS.length + " bài đang needs_review — lần Save trước CÓ THỂ đã tạo bài trên website. "
+      + "Cho đăng mới sẽ tạo bài THỨ HAI. Chỉ tiếp tục khi anh đã kiểm tra website và chắc bài cũ không tồn tại."));
+    const acts = el("div", "nacts");
+    acts.appendChild(button("Tôi hiểu — đăng mới", "Tạo bài mới và lưu lần đăng cũ vào history",
+      function() {
+        const picked = NEWS_CONFIRM_IDS.slice();
+        NEWS_CONFIRM_NEW = false; NEWS_CONFIRM_IDS = [];
+        send({ source: "webpub_new_post", site: siteSel.value, ids: picked });
+      }, "act"));
+    acts.appendChild(button("Hủy", "Không làm gì", function() { NEWS_CONFIRM_NEW = false; NEWS_CONFIRM_IDS = []; paintNews(); }, "act"));
+    confirm.appendChild(acts);
+    left.appendChild(confirm);
+  }
+
+  if (NEWS_NOTICE) left.appendChild(el("div", "nnotice", NEWS_NOTICE));
   const prog = newsResp.progress;
   if (prog) {
+    // giữ tương thích payload cũ (progress/results) — runner mới dùng news_job
     const allOk = (newsResp.results || []).length > 0 && (newsResp.results || []).every(rr => rr.ok);
     const progRow = el("div", "newsprog");
     progRow.appendChild(el("span", "newslbl", String(prog)));
     if (!allOk) progRow.appendChild(spinnerNode("đang xử lý từng bài…"));
     left.appendChild(progRow);
   }
+
+  // Thống kê nhanh
+  left.appendChild(el("span", "newslbl",
+    "Tổng " + queueRows.length + " · sẵn sàng " + counts.ready + " · đang lưu " + counts.saving
+    + " · xử lý " + counts.processing + " · cần đối soát " + counts.review
+    + " · lỗi " + counts.error + " · xong " + counts.done));
   body.appendChild(left);
 
-  // ---- CỘT PHẢI: trạng thái LIVE của từng story (đọc từ row.web_publish, sống qua polling) ----
+  // ---- CỘT PHẢI: chip lọc + từng bài (state sống + stage thật) ----
   const right = el("div", "newscol right");
-  right.appendChild(el("span", "newslbl", "Tiến trình từng bài — đọc thẳng từ story.json, cập nhật mỗi 2s"));
-  // P38a: bỏ idSet (dead code — không ai dùng)
-  // Map sid -> row (để đọc web_publish + topic)
-  const rowById = {};
-  rows().forEach(r => { rowById[String(r.id)] = r; });
-  // Kết quả lượt bấm gần nhất (từ news_response) — bổ sung cho state thật, không thay thế nó
-  const respResults = {};
-  (newsResp.results || []).forEach(r => { respResults[String(r.sid)] = r; });
+  const summary = el("span", "newslbl");
+  summary.textContent =
+    "Tổng: " + ids.length + " · " +
+    "xong " + counts.done + " · đang lưu " + counts.saving + " · xử lý " + counts.processing +
+    " · cần đối soát " + counts.review + " · lỗi " + counts.error + " · sẵn sàng " + counts.ready;
+  right.prepend(summary);
+  const filters = el("div", "newsfilters");
+  const chips = [["all", "Tất cả " + ids.length], ["ready", "Chờ đăng " + (counts.ready + counts.processing)],
+                 ["review", "Cần đối soát " + (counts.review + counts.saving)],
+                 ["fail", "Lỗi " + counts.error], ["done", "Xong " + counts.done]];
+  chips.forEach(([key, label]) => {
+    const chip = el("button", "nchip" + (NEWS_FILTER === key ? " on" : ""), label);
+    chip.type = "button";
+    chip.onclick = function() { NEWS_FILTER = key; paintNews(); };
+    filters.appendChild(chip);
+  });
+  right.prepend(filters);
 
-  let saving = 0, review = 0, done = 0, fail = 0, ready = 0, processing = 0;
-  ids.forEach(sid => {
-    sid = String(sid);
-    const row = rowById[sid] || {};
-    const wp = row.web_publish || {};
-    const st = row.states || {};
+  let shown = 0;
+  queueRows.forEach(row => {
+    const sid = String(row.id);
+    const s = newsStatus(row);
+    if (!newsFilterMatch(s)) return;
+    shown++;
     const topic = String(row.topic || "");
-    const r = respResults[sid];
-    const anyRunning = st.b1 === "running" || st.b2 === "running" || st.b3 === "running";
-    const hasLink = !!(row.link || (wp.state === "done" && wp.url));
-    let cls, stateTxt;
-    if (wp.state === "saving")            { cls="saving"; stateTxt="Đang lưu…";      saving++; }
-    else if (wp.state === "needs_review"){ cls="review"; stateTxt="Cần đối soát";    review++; }
-    else if (wp.state === "done" || hasLink) { cls="done"; stateTxt="Đã đăng ✓";    done++; }
-    else if (wp.state === "error")       { cls="fail";   stateTxt="Lỗi";             fail++; }
-    else if (r && !r.ok)                 { cls="fail";   stateTxt="Lỗi (lượt này)";  fail++; }
-    else if (r && r.ok && r.url)         { cls="done";   stateTxt="Đã đăng ✓";       done++; }
-    else if (anyRunning)                 { cls="processing"; stateTxt="Xử lý…";     processing++; }
-    else                                  { cls="ready";  stateTxt="Sẵn sàng";        ready++; }
-
-    const box = el("div", "newsitem " + cls);
-    // Dòng 1: id + state pill
-    const line1 = el("div", "newsline1");
-    line1.appendChild(el("span", "nid", sid + (topic ? " · " + topic.slice(0, 40) : "")));
-    const pill = el("span", "nstate " + cls, stateTxt);
-    line1.appendChild(pill);
+    const it = s.item || {};
+    const box = el("div", "newsitem nitem " + (s.cls === "fail" ? "fail" : s.cls) + (s.cls === "saving" || s.cls === "processing" ? " running" : ""));
+    box.dataset.sid = sid;
+    const line1 = el("div", "nrow1 newsline1");
+    line1.appendChild(el("span", "nid", sid + (topic ? " · " + topic.slice(0, 44) : "")));
+    line1.appendChild(el("span", "nstate " + s.cls, s.txt));
+    const el2 = el("span", null, "");
+    if (it.elapsed) el2.textContent = Number(it.elapsed).toFixed(1) + "s";
+    line1.appendChild(el2);
     box.appendChild(line1);
-    // Dòng 2: url hoặc lý do lỗi / lý do cần đối soát
-    const url = wp.url || (r && r.ok ? r.url : "");
-    const errTxt = wp.reason || (r && !r.ok ? String(r.err || "").slice(0, 160) : "");
+
+    // Thanh stage THẬT của bài đang chạy (hoặc kết quả cuối của lượt vừa xong).
+    if (it.state && it.state !== "waiting") {
+      const stage = el("div", "nstage", String(it.stage || "") + (it.pct != null ? " · " + it.pct + "%" : ""));
+      box.appendChild(stage);
+      const sb = el("div", "nstagebar");
+      const sf = el("i");
+      sf.style.width = Math.max(0, Math.min(100, Number(it.pct || 0))) + "%";
+      sb.appendChild(sf);
+      box.appendChild(sb);
+    }
+
+    const url = row.link || (s.cls === "done" ? (row.web_publish || {}).url : "");
     if (url) {
       const a = document.createElement("a");
       a.className = "nurl"; a.href = String(url);
       a.target = "_blank"; a.rel = "noopener noreferrer";
-      a.textContent = String(url).replace(/^https?:\/\//, "").slice(0, 70);
+      a.textContent = String(url).replace(/^https?:\/\//, "").slice(0, 80);
       a.title = String(url);
       box.appendChild(a);
-      // Nút "Đăng lại" cho bài đã có link (wp.done hoặc row.link)
-      if (wp.state === "done" || row.link) {
-        const site = siteSel ? siteSel.value : "";
-        const rb = document.createElement("button");
-        rb.className = "nrebtn";
-        rb.textContent = "↻ Đăng lại";
-        rb.title = "Tạo bài MỚI trên website — link cũ được lưu vào history";
-        rb.onclick = function() {
-          send({ source: "webpub_republish", id: sid, site: site });
-        };
-        box.appendChild(rb);
-      }
-    } else if (errTxt) {
-      // P38a: hiện lý do cho MỌI case fail/review (tránh ô "Lỗi" rỗng không giải thích được)
-      box.appendChild(el("span", "ioline bad", String(errTxt).slice(0, 160)));
-    } else if (cls === "fail" && !errTxt) {
-      box.appendChild(el("span", "ioline bad", "Lỗi — chưa có lý do (Chromium chưa kịp ghi). Mở '🌐' để bấm lại."));
-    } else if (wp.state === "saving") {
-      box.appendChild(el("span", "ioline ok", "Chờ Chromium xác nhận Save…"));
-    } else if (anyRunning) {
+    }
+    const reason = s.reason || it.error || "";
+    if (reason) box.appendChild(el("span", "nbad", String(reason).slice(0, 220)));
+    else if (s.cls === "saving" && !it.state) {
+      box.appendChild(el("span", "nok", "Chờ Chromium xác nhận Save…"));
+    } else if (s.anyRunning) {
       box.appendChild(el("span", "ioline ok", "B1–B3 đang chạy — chưa đăng được"));
     }
+
+    // Hành động từng bài — chỉ bài trong hàng đợi, và chỉ khi runner đang rảnh.
+    const acts = el("div", "nacts");
+    const idle = !newsBusy();
+    if (s.publish && idle) {
+      acts.appendChild(button("🚀 Đăng", "Đăng riêng bài này", function() {
+        NEWS_TARGET_IDS = [sid];
+        send({ source: "webpub_start", site: siteSel.value, ids: [sid] });
+      }, "nbtn"));
+    }
+    if (s.retry && idle) {
+      acts.appendChild(button("↻ Thử lại", "Đưa bài về ready và đăng lại", function() {
+        send({ source: "webpub_retry", site: siteSel.value, ids: [sid] });
+      }, "nbtn"));
+    }
+    if (s.reconcile && idle) {
+      acts.appendChild(button("🔎 Đối soát", "Tìm lại link trên Posts, không tạo bài mới", function() {
+        send({ source: "webpub_reconcile", site: siteSel.value, ids: [sid] });
+      }, "nbtn"));
+    }
+    if (s.review && idle) {
+      acts.appendChild(button("🆕 Đăng mới", "CẢNH BÁO: có thể tạo bài trùng — modal sẽ hỏi lại", function() {
+        NEWS_CONFIRM_NEW = true; NEWS_CONFIRM_IDS = [sid]; paintNews();
+      }, "nbtn"));
+      const inp = document.createElement("input");
+      inp.className = "ninput";
+      inp.type = "url";
+      inp.placeholder = "Dán link công khai đã kiểm tra…";
+      inp.value = NEWS_DRAFT[sid] || "";
+      inp.oninput = function() { NEWS_DRAFT[sid] = inp.value; };
+      acts.appendChild(inp);
+      acts.appendChild(button("Lưu link", "Xác nhận link thật của bài đã Save — đánh dấu Đã đăng", function() {
+        const val = String(NEWS_DRAFT[sid] || inp.value || "").trim();
+        if (!val) { NEWS_NOTICE = sid + ": chưa nhập link."; paintNews(); return; }
+        delete NEWS_DRAFT[sid];
+        send({ source: "webpub_link", id: sid, url: val, site: siteSel.value });
+      }, "nbtn"));
+    }
+    if (s.republish && idle) {
+      acts.appendChild(button("↻ Đăng lại", "Tạo bài MỚI trên website — link cũ được lưu vào history", function() {
+        send({ source: "webpub_republish", id: sid, site: siteSel.value });
+      }, "nbtn"));
+    }
+    if (acts.childNodes.length) box.appendChild(acts);
     right.appendChild(box);
   });
+  if (!shown) right.appendChild(el("span", "newslbl", "Không có bài nào khớp chip lọc này."));
 
-  // P38a: cảnh báo khi chưa chọn site (danh sách Cấu hình ▸ Website trống) — tránh bấm đăng rỗng
+  // P38a: cảnh báo khi chưa chọn site — tránh bấm đăng rỗng
   const siteSelVal = siteSel ? siteSel.value : "";
   if (!siteSelVal) {
     right.prepend(el("div", "newswarn",
       "⚠ Chưa có site đăng báo — thêm trong Cấu hình ▸ Website rồi mở lại modal."));
   }
-  // Tóm tắt phía trên
-  const summary = el("span", "newslbl");
-  summary.textContent =
-    "Tổng: " + ids.length + " · " +
-    "xong " + done + " · đang lưu " + saving + " · xử lý " + processing +
-    " · cần đối soát " + review + " · lỗi " + fail + " · sẵn sàng " + ready;
-  right.prepend(summary);
-
   body.appendChild(right);
   modal.appendChild(body);
   overlay.appendChild(modal);
@@ -4107,9 +4397,9 @@ function updateBar() {
   // tới lần dựng lại cả lưới kế tiếp, tức là nói dối về chính cái vừa bật.
   const r = document.getElementById(REFRESH_BTN_ID);
   if (r) paintRefresh(r);
-  // P28a: nút News disabled khi không còn bài đủ B1+B2+B3 trong hàng đợi (hoặc tất cả đã có link)
+  // P41c: nút News chỉ tắt khi hàng đợi trống VÀ không có lượt đăng/login nào đang chạy
   const nb = document.getElementById("newsbtn");
-  if (nb) nb.disabled = _newsPubIds().length === 0;
+  if (nb) nb.disabled = !newsEnabled();
 }
 
 let drag = null;
@@ -4179,6 +4469,8 @@ function render(args, force) {
     audio: args.audio && typeof args.audio === "object" ? args.audio : {},
     news: args.news && typeof args.news === "object" ? args.news : {},
     news_response: args.news_response && typeof args.news_response === "object" ? args.news_response : {},
+    news_job: args.news_job && typeof args.news_job === "object" ? args.news_job : {},
+    news_rows: Array.isArray(args.news_rows) ? args.news_rows : [],
     codex_usage: args.codex_usage && typeof args.codex_usage === "object" ? args.codex_usage : {},
   };
   if (MODEL.workspace !== wasWorkspace) { REFRESH_PENDING = null; SHOWN = PAGE_ROWS; }  // đổi workspace: không có cú bấm nào đang chờ nữa, cửa sổ vẽ về 20

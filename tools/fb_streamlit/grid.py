@@ -15,6 +15,7 @@ import streamlit.components.v1 as components
 import db
 import grid_actions as ga
 import grid_runner as gr
+import news_runner as news
 import providers as prov
 import stories
 import web_publisher as wp
@@ -513,6 +514,26 @@ def _news_payload() -> dict:
     ]}
 
 
+def _news_rows(all_rows: list[dict]) -> list[dict]:
+    """P41c: hàng đợi ĐẦY ĐỦ cho modal News — kể cả bài đang bị bộ lọc lưới che.
+
+    Chỉ mang trường modal cần, để tick 2 giây không gửi lại cả bảng lưới lần nữa.
+    """
+    keep = set(ga.queue_ids(all_rows))
+    by_id = {str(r.get("id")): r for r in all_rows}
+    out = []
+    for sid in keep:
+        row = by_id.get(str(sid))
+        if row is None:
+            continue
+        out.append({"id": str(row.get("id")),
+                    "topic": str(row.get("topic") or ""),
+                    "states": dict(row.get("states") or {}),
+                    "web_publish": dict(row.get("web_publish") or {}),
+                    "link": str(row.get("link") or "")})
+    return out
+
+
 def _codex_usage_payload() -> dict:
     """P29a: số usage cho icon Codex trên grid — đọc bản CLI tự ghi (token + session log), không spawn process.
 
@@ -739,6 +760,10 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     # P28a: modal News — danh sách website + kết quả đăng báo (đi 1 lần rồi xóa)
                     news=_news_payload(),
                     news_response=news_resp,
+                    # P41a: tiến trình ĐĂNG THẬT của runner nền — đọc mỗi tick, sống qua repaint
+                    news_job=news.RUNNER.snapshot(),
+                    # P41c: hàng đợi đầy đủ (kể cả bài bị bộ lọc lưới che) — modal chỉ thao tác trên đây
+                    news_rows=_news_rows(all_rows),
                     # P29a: icon usage Codex góc phải — bản CACHED CLI tự ghi, ~mươi ms/tick
                     codex_usage=_codex_usage_payload(),
                     default=None, key=KEY)
@@ -914,9 +939,14 @@ def _body(ctx: ga.Ctx) -> None:
     cached = st.session_state.get(PAYLOAD_KEY)
     if cached and int(cached.get("run") or -1) != app_run:
         cached = None  # cả trang vừa vẽ lại (load trang, đổi filter, đổi kiểu hiển thị) -> phải đọc mới
+    news_job = news.RUNNER.snapshot()
+    news_was_busy = bool(st.session_state.get("grid_news_busy"))
+    if news_job["busy"] or news_was_busy:
+        cached = None  # runner News đang ghi story.json: phải đọc lại để kịp thấy done/lỗi/needs_review
     if scan_needed(snap, event, cached, was_busy):
         cached = {"run": app_run, "at": time.monotonic(), "all_rows": rows_for(ctx)}
         st.session_state[PAYLOAD_KEY] = cached
+    st.session_state["grid_news_busy"] = news_job["busy"]
     all_rows = mark_flow(cached["all_rows"], snap)  # dấu bài do luồng nền giữ là bộ nhớ, khỏi đọc folder
     choice = str(st.session_state.get("grid_filter") or ga.FILTERS[0])
     rows = ga.filter_rows(all_rows, choice)
