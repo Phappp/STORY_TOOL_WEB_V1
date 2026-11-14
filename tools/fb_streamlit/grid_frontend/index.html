@@ -111,6 +111,8 @@
   .nbadge { position:absolute; top:-4px; right:-5px; min-width:14px; height:14px; padding:0 3px;
     border-radius:999px; background:var(--error-b); color:#ffe4e6; font-size:9px; line-height:14px;
     text-align:center; font-weight:700; pointer-events:none; }
+  /* Phase-D: badge màu amber cho errors queue — phân biệt với badge đỏ của news */
+  .nbadge.errbadge { background:var(--queued-b,#78350f); color:var(--queued-t,#fbbf24); }
   .newsbtnwrap { position:relative; display:inline-flex; }
   .newsbtnwrap .npulse { position:absolute; left:-2px; bottom:-2px; }
   .newsfilters { display:flex; gap:4px; flex-wrap:wrap; }
@@ -680,6 +682,10 @@ const ICON_PATHS = {
   bolt: '<path d="M13 2 4.5 13.5h6L9.5 22 18 10.5h-6z"/>',
   // P35a: phễu — icon nút lọc trạng thái cạnh ô tìm (đường phễu cổ điển, nét outline cùng khuôn)
   funnel: '<path d="M4 4h16l-6 8v6l-4 2v-8z"/>',
+  // Phase-D: tai nghe — icon nút Audio Queue (headphone outline, hai vòng tai + thanh nối)
+  headphone: '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
+  // Phase-D: tam giác cảnh báo — icon nút Errors Queue (outline tam giác + chấm chấm than)
+  alerttri: '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
 };
 // Dựng MỘT lần lúc tải trang từ hằng số tự viết (không chứa chữ của hàng lưới/URL nào), sau đó nhân bản.
 const ICON_NODE = {};
@@ -3683,16 +3689,30 @@ function audioModalNode() {
 }
 
 function queueAudioButton() {
+  // Phase-D: icon-only headphone + badge số bài — không text thừa, tooltip đủ nghĩa
   const ids = queueIds();
-  const b = button("🎧 Audio",
+  const wrap = el("span", "newsbtnwrap");
+  const b = iconButton("headphone",
     ids.length
-      ? "Mở modal chọn file tiếng + số giây cho " + ids.length + " bài đang trong hàng đợi"
+      ? "Audio: chọn file tiếng + số giây cho " + ids.length + " bài trong hàng đợi"
       : "Không có bài nào trong hàng đợi — thêm bằng nút ▶",
     () => { AUDIO_OPEN = true; paintAudio(); },
     "act");
   b.id = "b4queueaudio";
   if (!ids.length) b.disabled = true;
-  return b;
+  wrap.appendChild(b);
+  if (ids.length) {
+    const badge = el("span", "nbadge");
+    badge.id = "b4audiobadge";
+    badge.textContent = ids.length > 99 ? "99+" : String(ids.length);
+    wrap.appendChild(badge);
+  } else {
+    const badge = el("span", "nbadge");
+    badge.id = "b4audiobadge";
+    badge.style.display = "none";
+    wrap.appendChild(badge);
+  }
+  return wrap;
 }
 
 function queueIds() {
@@ -4253,7 +4273,8 @@ function errorCount() { return (MODEL.error_ids || []).length; }
 function queueButton() {
   // P21g: nhãn ngắn "Bắt đầu: N" — chữ "N bài" không thêm thông tin nào mà chiều ngang thanh nút thì
   // có (P21f đã đổi các nút icon, bước này chỉ siết chữ). Con số vẫn là phần tử quan trọng nhất.
-  const b = button("▶ Bắt đầu: 0", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #. Chọn nhiều hàng (Ctrl/Shift-click) rồi kéo lên vùng thả để xếp/bỏ hàng loạt.", () => {
+  // Phase-D: rút ngắn label — icon ▶ + số bài, tooltip vẫn đầy đủ
+  const b = button("▶ 0", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #. Chọn nhiều hàng (Ctrl/Shift-click) rồi kéo lên vùng thả để xếp/bỏ hàng loạt.", () => {
     const ids = queueIds();
     if (ids.length) send({ source: "batch_run", ids });
   });
@@ -4281,11 +4302,18 @@ function queueMarkPostedButton() {
 }
 
 function errorsButton() {
-  const b = button("⚠ Xếp lỗi: 0", "Đánh dấu mọi bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt",
+  // Phase-D: icon alerttri + badge số lỗi — không text thừa
+  const wrap = el("span", "newsbtnwrap");
+  const b = iconButton("alerttri", "Đánh dấu mọi bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt",
     () => send({ source: "queue_add_errors" }));
   b.id = "queueerr";
   b.disabled = true;
-  return b;
+  wrap.appendChild(b);
+  const badge = el("span", "nbadge errbadge");
+  badge.id = "queueerrbadge";
+  badge.style.display = "none";
+  wrap.appendChild(badge);
+  return wrap;
 }
 
 const PIN_FLAG = "fbgrid-pin-css";
@@ -4437,7 +4465,8 @@ function updateBar() {
   if (q) {
     const ids = queueIds();
     q.disabled = ids.length === 0;
-    q.textContent = "▶ Bắt đầu: " + ids.length;
+    // Phase-D: nhãn ngắn ▶ N
+    q.textContent = "▶ " + ids.length;
     q.title = "Chạy cả " + ids.length + " bài trong hàng đợi theo thứ tự # — từng B một, "
       + "nhiều bài cùng lúc nếu có nhiều bộ rảnh. "
       + "B nào đã xanh lá (xong) được BỎ QUA, không ghi đè.";
@@ -4447,23 +4476,48 @@ function updateBar() {
     const ids = queueIds();
     const wasLoading = mp.dataset.loading === "1";
     mp.disabled = ids.length === 0 || wasLoading;
-    // iconButton không có textContent, cập nhật title và aria-label
     const title = "Đánh dấu TẤT CẢ " + ids.length + " bài đang có cờ queued là 'Đã đăng' (status = posted) — không thể hoàn tác, dùng cẩn thận.";
     mp.title = title;
     mp.setAttribute("aria-label", title);
-    // Loading state được xóa khi nhận response (xem ingestResponse / markSent)
   }
+  // Phase-D: queueAudioButton là wrap, nút con có id b4queueaudio, badge có id b4audiobadge
+  const ab = document.getElementById("b4queueaudio");
+  if (ab) {
+    const ids = queueIds();
+    ab.disabled = ids.length === 0;
+    ab.title = ids.length
+      ? "Audio: chọn file tiếng + số giây cho " + ids.length + " bài trong hàng đợi"
+      : "Không có bài nào trong hàng đợi — thêm bằng nút ▶";
+    const badge = document.getElementById("b4audiobadge");
+    if (badge) {
+      if (ids.length) {
+        badge.textContent = ids.length > 99 ? "99+" : String(ids.length);
+        badge.style.display = "";
+      } else {
+        badge.style.display = "none";
+      }
+    }
+  }
+  // Phase-D: errorsButton là wrap, nút con có id queueerr, badge có id queueerrbadge
   const e = document.getElementById("queueerr");
   if (e) {
     const n = errorCount();
     e.disabled = n === 0;
-    e.textContent = "⚠ Xếp lỗi: " + n;
     e.title = n ? "Đánh dấu " + n + " bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt" : "Chưa có bài nào đang lỗi";
+    e.setAttribute("aria-label", e.title);
+    const badge = document.getElementById("queueerrbadge");
+    if (badge) {
+      if (n) {
+        badge.textContent = n > 99 ? "99+" : String(n);
+        badge.style.display = "";
+      } else {
+        badge.style.display = "none";
+      }
+    }
   }
   // P40a: số hàng đang chọn — đổi ở cả hai nhánh vẽ (patchCells và dựng lại cả lưới)
   updateSelectionCount();
-  // P21h: nút nhịp đọc cũng phải đổi ở CẢ HAI nhánh vẽ — thiếu chỗ này thì bấm xong nó vẫn tối thui
-  // tới lần dựng lại cả lưới kế tiếp, tức là nói dối về chính cái vừa bật.
+  // P21h: nút nhịp đọc cũng phải đổi ở CẢ HAI nhánh vẽ
   const r = document.getElementById(REFRESH_BTN_ID);
   if (r) paintRefresh(r);
   // P41c: nút News chỉ tắt khi hàng đợi trống VÀ không có lượt đăng/login nào đang chạy
