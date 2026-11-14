@@ -2777,9 +2777,9 @@ const IO_EXPORTS = [
   ["json", "📤 JSON — import lại được",
     "Dựng {url, text, media[]} cho các bài đang hiện — mang sang máy khác import lại chính file này là đủ caption + link ảnh",
     "Bài chưa có caption/ảnh vẫn nằm trong file (trường để trống), chỉ bài không có link nguồn là bị bỏ."],
-  ["csv", "📤 CSV — id, caption, seo",
-    "Ba cột: id bài, caption (B1), SEO (định dạng Unicode đậm cho Facebook) cho các bài đang hiện",
-    "SEO đã chuyển heading thành IN HOA + vạch, **đậm** thành Unicode đậm (chữ Latin/số). Mở bằng Excel/Sheets."],
+  ["csv", "📤 CSV — id, caption, seo, link (news)",
+    "Bốn cột: id bài, caption (B1), SEO (Unicode đậm FB), link bài đã đăng (news)",
+    "SEO: heading→IN HOA+vạch, **đậm**→Unicode bold (Latin/số). Link: cột link trong story.json. Mở bằng Excel/Sheets."],
 ];
 
 function ioExportCard() {
@@ -2802,7 +2802,7 @@ function ioExportCard() {
   return card({ title: "📤 Export phần đang hiện", state: st.error ? "error" : st.text ? "done" : "pending", body: body,
     help: ["Export lấy đúng phần ĐANG HIỆN trên lưới: bộ lọc “Lọc bài” + chữ trong ô tìm kiếm.",
       "JSON {url, text, media}: import lại chính file này ở máy khác là nguyên văn caption + link ảnh, B0 khỏi trích.",
-      "CSV 3 cột: id, caption, seo (Unicode đậm FB). Có BOM nên Excel mở tiếng Việt đúng.",
+      "CSV 4 cột: id, caption, seo (Unicode đậm FB), link (news). Có BOM nên Excel mở tiếng Việt đúng.",
       "Bài không có link nguồn bị bỏ ở cả hai dạng — số bài bị bỏ ghi ngay ở ô Xem trước.",
       "File chỉ nằm trong bộ nhớ trình duyệt cho tới khi bấm ⬇; đóng bảng là mất, server không giữ bản nháp."] });
 }
