@@ -686,6 +686,8 @@ const ICON_PATHS = {
   headphone: '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>',
   // Phase-D: tam giác cảnh báo — icon nút Errors Queue (outline tam giác + chấm chấm than)
   alerttri: '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  // Phase-G: hai mũi tên lên-xuống — icon nút Import/Export (upload + download gộp 1 biểu tượng)
+  arrowupdown: '<path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/>',
 };
 // Dựng MỘT lần lúc tải trang từ hằng số tự viết (không chứa chữ của hàng lưới/URL nào), sau đó nhân bản.
 const ICON_NODE = {};
@@ -2768,6 +2770,7 @@ let IO_EXPORT = {};     // payload export gần nhất: {format, name, text, cou
 let IO_B0 = {};         // payload "trích B0 còn thiếu" gần nhất
 let IO_SCAN = {};       // P23c: payload "quét sha1 ảnh thiếu url" gần nhất {matched, unmatched, sample, line}
 let IO_REF = {};        // P33a: payload "quét từ chối AI" gần nhất {refused, line}
+let IO_TAB = "import"; // Phase-G: tab đang chọn trong modal IO — "import" | "export" | "tools"
 let IO_SEQ = 0;         // đếm response đã nạp — chữ ký khỏi phải stringify cả file export vài MB
 let IO_BUSY = false;    // đã gửi một file, chờ lưới trả lời: ô chọn file PHẢI khóa tới lúc đó, vì
                         // repaint() dựng lại input nên `pick.disabled = true` chỉ sống tới lượt vẽ kế.
@@ -2805,12 +2808,20 @@ function openIo() { IO_OPEN = true; repaint(); }
 function closeIo() { IO_OPEN = false; repaint(); }
 
 function ioButton() {
+  // Phase-G: icon-only button, badge = số bài chờ B0
   const todo = Number(ioModel().b0_todo || 0);
-  const b = button("📥 Import · Export", "Thêm bài từ file link/JSON hoặc chữ dán (có xem trước rồi mới tạo folder)"
-    + " và xuất đúng phần đang hiện ra file" + (todo ? " · còn " + todo + " bài chờ trích B0" : ""),
-    () => { if (IO_OPEN) closeIo(); else openIo(); });
+  const tip = "Import · Export — thêm bài từ file/dán chữ hoặc xuất phần đang hiện"
+    + (todo ? " · còn " + todo + " bài chờ trích B0" : "");
+  const wrap = el("div", "newsbtnwrap");
+  const b = iconButton("arrowupdown", tip, () => { if (IO_OPEN) closeIo(); else openIo(); });
   b.id = "iobtn";
-  return b;
+  wrap.appendChild(b);
+  if (todo > 0) {
+    const badge = el("span", "nbadge", String(todo));
+    badge.id = "iob0badge";
+    wrap.appendChild(badge);
+  }
+  return wrap;
 }
 
 function ioFilePicker() {
@@ -3377,33 +3388,72 @@ function ioRefusalCard() {
       "Không đổi nội dung file: caption.txt / seo.md giữ nguyên, chỉ đổi màu trên lưới."]});
 }
 
+// Phase-G: tab bar cho modal IO — 3 tab Import / Export / Tiện ích
+function ioTabBar() {
+  const tabs = [
+    ["import", "📥 Import"],
+    ["export", "📤 Export"],
+    ["tools",  "🔧 Tiện ích"],
+  ];
+  const wrap = el("div", "mtabs");
+  tabs.forEach(([id, label]) => {
+    const b = el("button", "mtab" + (IO_TAB === id ? " on" : ""), label);
+    b.type = "button";
+    b.addEventListener("click", () => { IO_TAB = id; repaint(); });
+    wrap.appendChild(b);
+  });
+  return wrap;
+}
+
 function ioNode() {
   if (!IO_OPEN) return null;
   const overlay = el("div", "overlay io");
   const modal = el("div", "modal");
   const head = el("div", "mhead");
-  head.appendChild(el("span", "mid", "📥 Import · 📤 Export"));
-  head.appendChild(el("span", "muted", String(MODEL.workspace || "").split(/[\\/]/).pop() || "(workspace?)"));
+  // Phase-G: workspace info + tab bar + help + nút đóng
+  head.appendChild(el("span", "muted", String(MODEL.workspace || "").split(/[\\\/]/).pop() || "(workspace?)"));
   head.appendChild(el("span", "mpos", visible().length + "/" + rows().length + " bài đang hiện"));
-  head.appendChild(helpChip(["Bảng Import/Export — làm cả hai chiều mà không rời khỏi lưới.",
-    "Bố cục: TRÁI là những ô thao tác (trên Import, giữa Export, dưới B0, cuối Quét ảnh), PHẢI là ô Xem trước nội dung thật — bên trái bấm gì thì bên phải hiện chữ đó trước khi tạo file/folder.",
-    "Import: chọn file HOẶC dán chữ → lưới đọc và ĐẾM (chưa tạo gì) → bấm “➕ Tạo N bài mới” mới sinh folder + hẹn B0.",
-    "Export: bấm một dạng → lưới dựng nội dung từ đúng phần đang hiện → bấm “⬇ Lưu …” trình duyệt mới tải file về.",
-    "Mọi số liệu lấy từ folder story tại thời điểm bấm, không có bản nháp nào được giữ hộ giữa hai lần mở bảng.",
-    "File import đi trong event nên có trần " + ioCap() + " MB; nhiều hơn thì tách file hoặc chép thẳng vào workspace.",
-    "Việc dài (B0, import hàng loạt) chạy trong luồng nền — đóng bảng không làm nó dừng."]));
+  head.appendChild(ioTabBar());
+  const helpTexts = {
+    import: ["Tab Import — thêm bài từ file link/JSON hoặc dán chữ.",
+      "Chọn file HOẶC dán chữ → lưới đọc và ĐẾM (chưa tạo gì) → bấm \u201c➕ Tạo N bài mới\u201d mới sinh folder.",
+      "File đi trong event nên có trần " + ioCap() + " MB; nhiều hơn thì tách file hoặc chép thẳng vào workspace.",
+      "Xem trước nội dung thật ở cột phải trước khi tạo — không có bản nháp giữ hộ giữa hai lần mở."],
+    export: ["Tab Export — xuất đúng phần đang hiện ra file.",
+      "Bấm một định dạng → lưới dựng nội dung → bấm \u201c⬇ Lưu …\u201d trình duyệt mới tải file về.",
+      "Xem trước nội dung ở cột phải — mọi số liệu lấy từ folder story tại thời điểm bấm."],
+    tools: ["Tab Tiện ích — B0 Retry, Quét ảnh thiếu URL, Quét từ chối AI.",
+      "B0 Retry: trích lại B0 cho bài còn thiếu — chạy nền, đóng bảng không dừng.",
+      "Quét ảnh: tìm sha1 chưa có link CDN và bổ sung.",
+      "Quét từ chối: đánh dấu bài bị AI từ chối để xem lại nhanh."],
+  };
+  head.appendChild(helpChip((helpTexts[IO_TAB] || helpTexts.import)));
   head.appendChild(iconButton("cross", "Đóng (Esc)", closeIo, "act"));
   modal.appendChild(head);
-  // P22c: TRÁI = thao tác (import trên, export dưới, B0 cuối), PHẢI = ô Xem trước nội dung thật.
-  const body = el("div", "mbody mcards iogrid");
-  const left = el("div", "iocol");
-  left.appendChild(ioImportCard());
-  left.appendChild(ioExportCard());
-  left.appendChild(ioB0Card());
-  left.appendChild(ioScanCard());
-  left.appendChild(ioRefusalCard());
-  body.appendChild(left);
-  body.appendChild(ioPreviewCard());
+  // Phase-G: body render theo tab đang chọn
+  let body;
+  if (IO_TAB === "import") {
+    body = el("div", "mbody mcards iogrid");
+    const left = el("div", "iocol");
+    left.appendChild(ioImportCard());
+    body.appendChild(left);
+    body.appendChild(ioPreviewCard());
+  } else if (IO_TAB === "export") {
+    body = el("div", "mbody mcards iogrid");
+    const left = el("div", "iocol");
+    left.appendChild(ioExportCard());
+    body.appendChild(left);
+    body.appendChild(ioPreviewCard());
+  } else {
+    // tools: 3 card nằm ngang, không cần preview
+    body = el("div", "mbody mcards");
+    body.style.flexDirection = "row";
+    body.style.flexWrap = "wrap";
+    body.style.alignItems = "flex-start";
+    body.appendChild(ioB0Card());
+    body.appendChild(ioScanCard());
+    body.appendChild(ioRefusalCard());
+  }
   modal.appendChild(body);
   overlay.appendChild(modal);
   overlay.addEventListener("click", e => { if (e.target === overlay) closeIo(); });
