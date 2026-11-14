@@ -577,6 +577,21 @@ check("queue_clear bỏ hết hàng đợi và nói rõ số bài",
       not any(stories.load_story(ga_root, s).get("queued") for s in (sid_q, sid_ok)) and "2 bài" in out.lines[0])
 check("queue_clear trên hàng đợi trống báo không có gì để bỏ",
       "chưa có bài nào" in ga.apply_event(gctx, {"source": "queue_clear"}).lines[0])
+# --- P40a: kéo-thả nhiều hàng -> một event xếp/bỏ hàng loạt ---
+out = ga.apply_event(gctx, {"source": "queue_add_many", "ids": [sid_q, sid_ok, sid_q]})
+qa = stories.load_story(ga_root, sid_q)
+qb = stories.load_story(ga_root, sid_ok)
+check("queue_add_many xếp nhiều bài, bỏ id trùng, giữ đúng thứ tự kéo",
+      qa.get("queued") is True and qb.get("queued") is True
+      and float(qa["queued_at"]) < float(qb["queued_at"]) and out.touched == [sid_q, sid_ok]
+      and "2 bài" in out.lines[0])
+out = ga.apply_event(gctx, {"source": "queue_remove_many", "ids": [sid_q, sid_ok]})
+check("queue_remove_many bỏ nhiều bài khỏi hàng đợi trong một lượt",
+      stories.load_story(ga_root, sid_q).get("queued") is False
+      and stories.load_story(ga_root, sid_ok).get("queued") is False
+      and out.touched == [sid_q, sid_ok] and "2 bài" in out.lines[0])
+check("queue_add_many với danh sách rỗng nói rõ chưa chọn bài nào",
+      "Chưa chọn bài nào" in ga.apply_event(gctx, {"source": "queue_add_many", "ids": []}).lines[0])
 check("bucket: treo tính là lỗi, đủ 3 bước mới là xong",
       ga.bucket({"b1": "done", "b2": "done", "b3": "done"}) == "done"
       and ga.bucket({"b1": "error", "b2": "done", "b3": "done"}) == "error"

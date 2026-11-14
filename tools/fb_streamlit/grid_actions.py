@@ -30,6 +30,7 @@ import steps
 import stories
 
 MAX_BATCH = 5
+MAX_QUEUE_BATCH = 200  # kéo-thả xếp/bỏ hàng đợi: một lượt chạm tối đa bấy nhiêu story.json — tránh kéo cả nghìn bài một cú
 MAX_IMPORT = 200  # một lần import tạo tối đa bấy nhiêu bài — file dài thì chia nhiều lần, tránh tạo nhầm cả nghìn folder
 EXPORT_MAX = 500  # một lần export đọc tối đa bấy nhiêu folder — export là việc của người đã lọc, không phải quét cả ổ
 IMPORT_MAX_BYTES = 8 * 1024 * 1024  # trần file import: modal gửi file base64 qua event, không để message phình vô hạn
@@ -2132,6 +2133,51 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
         elif source == "queue_remove":
             stories.update_story(ctx.root, sid, queued=False, queued_at=None)
             out.lines, out.touched = [f"{sid}: bỏ khỏi hàng đợi."], [sid]
+        elif source in ("queue_add_many", "queue_remove_many"):
+            # P40a: kéo-thả nhiều hàng cùng lúc — một event thay vì N event (mỗi event là một lượt
+            # Streamlit rerun). Giữ đúng thứ tự người dùng chọn/kéo để hàng đợi xếp y như ý.
+            raw = event.get("ids")
+            wanted = [str(i) for i in raw if str(i)] if isinstance(raw, (list, tuple)) else []
+            ids, seen = [], set()
+            for qid in wanted:
+                if qid not in seen:
+                    seen.add(qid)
+                    ids.append(qid)
+            if len(ids) > MAX_QUEUE_BATCH:
+                out.lines.append(f"Chỉ xử lý tối đa {MAX_QUEUE_BATCH} bài mỗi lượt — "
+                                 f"{len(ids) - MAX_QUEUE_BATCH} bài còn lại, kéo tiếp giúp anh.")
+                ids = ids[:MAX_QUEUE_BATCH]
+            if not ids:
+                out.lines = ["Chưa chọn bài nào — Ctrl/Shift-click vài hàng rồi kéo lên vùng thả."]
+            elif source == "queue_add_many":
+                base = time.time()
+                added = skipped = 0
+                for i, qid in enumerate(ids):
+                    try:
+                        if stories.load_story(ctx.root, qid).get("queued"):
+                            skipped += 1
+                            continue
+                        stories.update_story(ctx.root, qid, queued=True, queued_at=base + i / 1000)
+                        added += 1
+                    except stories.WorkspaceError:
+                        skipped += 1
+                out.lines.append(f"Đã xếp {added} bài vào CUỐI hàng đợi"
+                                 + (f" — {skipped} bài đã ở trong hàng đợi/bỏ qua." if skipped else
+                                    " (bấm ⚡ Chạy hàng đợi)."))
+                out.touched = ids
+            else:
+                removed = 0
+                for qid in ids:
+                    try:
+                        if not stories.load_story(ctx.root, qid).get("queued"):
+                            continue
+                        stories.update_story(ctx.root, qid, queued=False, queued_at=None)
+                        removed += 1
+                    except stories.WorkspaceError:
+                        continue
+                out.lines.append(f"Đã bỏ {removed} bài khỏi hàng đợi." if removed
+                                 else "Không có bài nào trong lựa chọn đang ở hàng đợi.")
+                out.touched = ids
         elif source == "queue_clear":
             ids = [s for s in stories.list_story_ids(ctx.root) if stories.load_story(ctx.root, s).get("queued")]
             for qid in ids:

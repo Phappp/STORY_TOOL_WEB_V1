@@ -427,6 +427,9 @@ def _cancel_targets(event: dict) -> list[str]:
     """
     if str(event.get("source") or "") == "queue_remove":
         return [str(event.get("id") or "")]
+    if str(event.get("source") or "") == "queue_remove_many":
+        raw = event.get("ids")
+        return [str(i) for i in raw if str(i)] if isinstance(raw, (list, tuple)) else []
     return []
 
 

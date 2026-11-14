@@ -404,6 +404,21 @@
   .menu button:hover { background:var(--btn-h); }
   .menu button.danger { color:var(--error-t); }
   tbody tr.cursor td { background:#1d3450; box-shadow:inset 0 0 0 1px var(--accent); }
+  /* P40a: Ctrl/Shift-click chọn nhiều hàng rồi kéo lên vùng thả nổi để thêm/bỏ hàng loạt. */
+  tbody tr[draggable="true"] { cursor:grab; }
+  tbody tr.dragging td { opacity:.5; }
+  tbody tr.sel td { background:#173049; box-shadow:inset 0 0 0 1px #3b82f6; }
+  .dropbar { position:fixed; top:16px; left:50%; transform:translateX(-50%); z-index:2147483001;
+    display:flex; gap:10px; padding:8px; background:rgba(12,22,33,.97); border:1px solid var(--border);
+    border-radius:10px; box-shadow:0 14px 38px rgba(0,0,0,.65); }
+  .dropbar[hidden] { display:none; }
+  .dropzone { min-width:180px; padding:10px 16px; border:2px dashed var(--border); border-radius:8px;
+    background:var(--panel); font:inherit; font-size:13px; color:var(--text); text-align:center;
+    cursor:copy; user-select:none; }
+  .dropzone.add { border-color:#3ecf7a; }
+  .dropzone.remove { border-color:#e05a4e; }
+  .dropzone.hot { background:#1d3450; border-style:solid; filter:brightness(1.15); }
+  .selcount { color:var(--queued-t); font-weight:700; }
 </style>
 </head>
 <body>
@@ -421,7 +436,7 @@ const GRID_STEPS = ["b0", "b1", "b2", "b3", "b4"];
 // còn bảng chẩn đoán native vẫn ghi chú giải bằng chữ của nó (LEGEND trong grid.py).
 // Cột kéo giãn được: rộng mặc định, lưu theo workspace trong localStorage
 const COLS = [
-  { key: "q", label: "#", w: 40, min: 34, align: "c", tip: "# = thứ tự hàng đợi: bài bấm dấu cộng trước làm trước, bài mới xếp cuối. Bấm số đó để bỏ khỏi hàng đợi." },
+  { key: "q", label: "#", w: 40, min: 34, align: "c", tip: "# = thứ tự hàng đợi: bài bấm dấu cộng trước làm trước, bài mới xếp cuối. Bấm số đó để bỏ khỏi hàng đợi. Ctrl/Shift-click chọn nhiều hàng rồi kéo lên vùng thả để thêm/bỏ hàng loạt." },
   { key: "id", label: "story", w: 92, min: 64 },
   { key: "src", label: "nguồn", w: 210, min: 80 },
   // 5 viên pill 32px + kẽ 3px mỗi viên + đệm ô 8+8 = 191px; min chặn để prefs cũ (156) không cắt chữ B4
@@ -631,6 +646,10 @@ let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
 let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
+let SELECTED = new Set();  // P40a: id hàng đang chọn (Ctrl/Shift-click) — kéo lên vùng thả để thêm/bỏ hàng loạt
+let SEL_ANCHOR = "";       // hàng mốc của Shift-click (chọn cả khoảng đang vẽ)
+let DRAG_IDS = [];         // id của lượt kéo đang diễn ra (dataTransfer chỉ để trình duyệt vẽ con trỏ)
+let DROPBAR = null;        // thanh thả nổi, dựng một lần rồi ẩn/hiện theo lượt kéo
 
 function rows() { return Array.isArray(MODEL.rows) ? MODEL.rows : []; }
 
@@ -2258,6 +2277,121 @@ function modalNode() {
   return overlay;
 }
 
+// P40a: chọn nhiều hàng để kéo hàng loạt. Click thường = chọn đúng hàng đó, Ctrl/Cmd-click =
+// thêm/bớt một hàng, Shift-click = chọn cả khoảng từ hàng mốc tới hàng vừa bấm (trong phần đang vẽ).
+// Bấm vào nút/link/ô sửa thì KHÔNG đổi lựa chọn — những thứ đó có việc riêng của chúng.
+const NO_SELECT = "button,a,input,select,textarea,.grip,.menu";
+
+function clearSelection() {
+  SELECTED.clear();
+  SEL_ANCHOR = "";
+  document.querySelectorAll("tbody tr.sel").forEach(tr => tr.classList.remove("sel"));
+  const sc = document.getElementById("selcount");
+  if (sc) { sc.hidden = true; sc.textContent = ""; }
+}
+
+function onRowClick(row, ev) {
+  if (ev.target.closest(NO_SELECT)) return;
+  const id = String(row.id);
+  CURSOR = id;  // bấm hàng cũng là đặt con trỏ bàn phím — ↑ ↓ đi tiếp từ đây
+  if (ev.shiftKey && SEL_ANCHOR) {
+    const list = windowed(visible()).map(r => String(r.id));
+    const a = list.indexOf(SEL_ANCHOR);
+    const b = list.indexOf(id);
+    if (a >= 0 && b >= 0) list.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(x => SELECTED.add(x));
+  } else if (ev.ctrlKey || ev.metaKey) {
+    if (SELECTED.has(id)) SELECTED.delete(id); else SELECTED.add(id);
+    SEL_ANCHOR = id;
+  } else {
+    SELECTED.clear();
+    SELECTED.add(id);
+    SEL_ANCHOR = id;
+  }
+  repaint();
+}
+
+function updateSelectionCount() {
+  const sc = document.getElementById("selcount");
+  if (!sc) return;
+  const n = SELECTED.size;
+  sc.hidden = !n;
+  sc.textContent = n ? "đã chọn " + n + " bài — kéo lên vùng thả (Esc bỏ chọn)" : "";
+}
+
+function showDropBar() {
+  if (!DROPBAR) DROPBAR = dropBarNode();
+  if (!DROPBAR.isConnected) document.body.appendChild(DROPBAR);
+  const n = DRAG_IDS.length;
+  DROPBAR.querySelectorAll(".dropzone").forEach(z => {
+    z.textContent = z.dataset.label + " (" + n + " bài)";
+    z.classList.remove("hot");
+  });
+  DROPBAR.hidden = false;
+}
+
+function hideDropBar() {
+  if (!DROPBAR) return;
+  DROPBAR.hidden = true;
+  DROPBAR.querySelectorAll(".dropzone").forEach(z => z.classList.remove("hot"));
+}
+
+function dropZoneNode(kind, label, source) {
+  const z = el("div", "dropzone " + kind, label);
+  z.dataset.label = label;
+  z.addEventListener("dragover", ev => {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    z.classList.add("hot");
+  });
+  z.addEventListener("dragleave", () => z.classList.remove("hot"));
+  z.addEventListener("drop", ev => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    z.classList.remove("hot");
+    const ids = DRAG_IDS.slice();
+    hideDropBar();
+    if (!ids.length) return;
+    send({ source, ids });
+    clearSelection();
+  });
+  return z;
+}
+
+function dropBarNode() {
+  const bar = el("div", "dropbar");
+  bar.hidden = true;
+  bar.appendChild(dropZoneNode("add", "➕ Vào hàng đợi", "queue_add_many"));
+  bar.appendChild(dropZoneNode("remove", "➖ Ra hàng đợi", "queue_remove_many"));
+  return bar;
+}
+
+function onRowDragStart(row, tr, ev) {
+  const id = String(row.id);
+  if (!SELECTED.has(id)) {
+    // hàng chưa chọn: kéo CHÍNH NÓ. Không repaint trong dragstart — dựng lại <tr> là hủy lượt kéo.
+    SELECTED.clear();
+    SELECTED.add(id);
+    SEL_ANCHOR = id;
+    tr.classList.add("sel");
+  }
+  DRAG_IDS = Array.from(SELECTED);
+  // Hàng đợi xếp theo đúng thứ tự NHÌN THẤY (trên → dưới), không theo thứ tự bấm chọn:
+  // chọn kiểu Shift từ dưới lên mà xếp ngược thì "bài trên làm trước" sẽ sai.
+  const onScreen = windowed(visible()).map(r => String(r.id));
+  const ordered = onScreen.filter(id => SELECTED.has(id));
+  if (ordered.length) DRAG_IDS = ordered;
+  tr.classList.add("dragging");
+  ev.dataTransfer.effectAllowed = "move";
+  ev.dataTransfer.setData("text/plain", DRAG_IDS.join("\n"));
+  showDropBar();
+}
+
+function onRowDragEnd(tr) {
+  tr.classList.remove("dragging");
+  DRAG_IDS = [];
+  hideDropBar();
+}
+
 function queueCell(row) {
   const td = el("td", "q");
   const queued = !!row.queued;
@@ -2409,6 +2543,7 @@ function rowMenu(anchor, row) {
 function rowClasses(row) {
   const cls = [];
   if (row.queued) cls.push("queued");
+  if (SELECTED.has(String(row.id))) cls.push("sel");
   if (String(row.id) === CURSOR) cls.push("cursor");
   return cls.join(" ");
 }
@@ -2457,6 +2592,10 @@ function cellNode(row, key) {
 function rowNode(row) {
   const tr = el("tr", rowClasses(row));
   tr.dataset.id = String(row.id);
+  tr.draggable = true;
+  tr.addEventListener("click", ev => onRowClick(row, ev));
+  tr.addEventListener("dragstart", ev => onRowDragStart(row, tr, ev));
+  tr.addEventListener("dragend", () => onRowDragEnd(tr));
   COLS.forEach(c => {
     tr.appendChild(cellNode(row, c.key));
   });
@@ -3784,7 +3923,7 @@ function errorCount() { return (MODEL.error_ids || []).length; }
 function queueButton() {
   // P21g: nhãn ngắn "Bắt đầu: N" — chữ "N bài" không thêm thông tin nào mà chiều ngang thanh nút thì
   // có (P21f đã đổi các nút icon, bước này chỉ siết chữ). Con số vẫn là phần tử quan trọng nhất.
-  const b = button("▶ Bắt đầu: 0", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #", () => {
+  const b = button("▶ Bắt đầu: 0", "Chạy tuần tự các bài đã vào hàng đợi, theo đúng thứ tự #. Chọn nhiều hàng (Ctrl/Shift-click) rồi kéo lên vùng thả để xếp/bỏ hàng loạt.", () => {
     const ids = queueIds();
     if (ids.length) send({ source: "batch_run", ids });
   });
@@ -3962,6 +4101,8 @@ function updateBar() {
     e.textContent = "⚠ Xếp lỗi: " + n;
     e.title = n ? "Đánh dấu " + n + " bài đang lỗi (kể cả treo, mất file) để chạy lại một loạt" : "Chưa có bài nào đang lỗi";
   }
+  // P40a: số hàng đang chọn — đổi ở cả hai nhánh vẽ (patchCells và dựng lại cả lưới)
+  updateSelectionCount();
   // P21h: nút nhịp đọc cũng phải đổi ở CẢ HAI nhánh vẽ — thiếu chỗ này thì bấm xong nó vẫn tối thui
   // tới lần dựng lại cả lưới kế tiếp, tức là nói dối về chính cái vừa bật.
   const r = document.getElementById(REFRESH_BTN_ID);
@@ -4047,6 +4188,7 @@ function render(args, force) {
   const alive = new Set(rows().map(r => String(r.id)));
   if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
   if (CURSOR && !alive.has(CURSOR)) CURSOR = "";
+  SELECTED.forEach(id => { if (!alive.has(id)) SELECTED.delete(id); });
   const full = visible();
   const list = windowed(full);
   const lsig = listSigOf(list);
@@ -4095,6 +4237,11 @@ function render(args, force) {
   const cnt = el("span", "count", countText());
   cnt.id = "rowcount";  // syncStats đổi chữ này tại chỗ khi số hàng thay đổi
   bar.appendChild(cnt);
+  const sel = el("span", "selcount");
+  sel.id = "selcount";
+  sel.hidden = true;
+  sel.title = "Ctrl/Cmd-click để thêm/bớt từng hàng · Shift-click để chọn cả khoảng · kéo lên vùng thả để xếp/bỏ hàng loạt";
+  bar.appendChild(sel);
   wrap.appendChild(bar);
 
   if (!rows().length) {
@@ -4201,6 +4348,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     if (MENU) { closeMenu(); return; }
     if (inSearch) { SEARCH = ""; repaint(); return; }  // Esc ở ô tìm = xoá lọc, chưa phải đóng modal
+    if (SELECTED.size) { clearSelection(); repaint(); return; }  // Esc bỏ chọn nhiều hàng trước khi đóng bảng/modal
     if (IO_OPEN) { closeIo(); return; }               // bảng Import/Export phủ lên lưới -> Esc đóng nó trước
     if (AUDIO_OPEN) { closeAudio(); return; }          // P27a-UI: modal Audio
     if (NEWS_OPEN) { closeNews(); return; }            // P28a: modal News
