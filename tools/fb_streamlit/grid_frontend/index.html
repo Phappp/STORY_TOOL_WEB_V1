@@ -466,13 +466,13 @@
      BẬT không bị màu hover đè, hover vẫn trả lời bằng filter. */
   button.b.tog.on { background:var(--accent); color:#0b1620; border-color:var(--accent); }
   button.b.tog.on:hover { filter:brightness(1.1); }
-  .empty { padding:20px; color:var(--muted); }
+  /* .empty định nghĩa ở Phase-B CSS block phía dưới (có ::before icon) */
   /* P24a+b: nút nới cửa sổ VẼ — ĐỨNG CUỐI lưới (danh sách giảm dần nên bài cũ nằm dưới) và NGOÀI
      <tbody> vì patchCells đếm LAST_TBODY.children theo chỉ số hàng. */
-  .more { margin:0 10px 8px; padding:3px 10px; font:inherit; font-size:12px; color:var(--muted);
-    background:var(--btn); border:1px solid var(--border); border-radius:6px; cursor:pointer;
-    align-self:flex-start; }
-  .more:hover { color:var(--text); border-color:var(--accent); }
+  .more { margin:4px 10px 8px; padding:4px 12px; font:inherit; font-size:12px; color:var(--accent);
+    background:var(--field); border:1px dashed var(--running-b); border-radius:6px; cursor:pointer;
+    align-self:flex-start; transition:background 80ms ease, color 80ms ease; }
+  .more:hover { color:#fff; background:var(--running); border-style:solid; }
   .muted { color:var(--muted); }
   /* ô tìm kiếm ngay trên grid — lọc client-side, không gửi event mỗi lần gõ */
   .bar input.find { height:26px; width:220px; font:inherit; font-size:12px; padding:1px 8px;

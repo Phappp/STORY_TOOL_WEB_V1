@@ -25,6 +25,149 @@ load_dotenv(paths.env_path())
 
 st.set_page_config(page_title="FB Content Tool", layout="wide")
 
+# Phase-C: Global SaaS-Dark CSS — đồng bộ toàn app với palette Pro Dark của grid
+_GLOBAL_CSS = """<style>
+/* === App shell === */
+.stApp { background: #09101e !important; }
+section[data-testid="stSidebar"] {
+    background: #09101e !important;
+    border-right: 1px solid #1e2d42 !important;
+}
+/* Header bar */
+header[data-testid="stHeader"] {
+    background: #09101e !important;
+    border-bottom: 1px solid #1e2d42 !important;
+}
+div[data-testid="stDecoration"] { display: none !important; }
+div[data-testid="stStatusWidget"] { display: none !important; }
+
+/* === Typography === */
+html, body, [class*="css"] {
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.01em;
+}
+.stApp, .stApp p, .stApp label, .stApp span, .stApp div {
+    color: #dde6f3;
+}
+h1, h2, h3 { color: #dde6f3 !important; letter-spacing: -0.02em !important; }
+
+/* === Sidebar nav radio === */
+section[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    color: #8fa5c4 !important;
+    font-size: 13px !important;
+}
+section[data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] input:checked
+    + div { background-color: #2563eb !important; border-color: #2563eb !important; }
+section[data-testid="stSidebar"] [data-testid="stRadio"] [aria-checked="true"] + div label {
+    color: #dde6f3 !important;
+}
+section[data-testid="stSidebar"] .stCaption,
+section[data-testid="stSidebar"] p {
+    color: #5a7499 !important;
+    font-size: 11px !important;
+}
+
+/* === Buttons === */
+div[data-testid="stButton"] > button {
+    background: #1a2840 !important;
+    color: #c7d5e5 !important;
+    border: 1px solid #1e2d42 !important;
+    border-radius: 6px !important;
+    transition: background 80ms ease, border-color 80ms ease !important;
+}
+div[data-testid="stButton"] > button:hover {
+    background: #243551 !important;
+    border-color: #4f8ef7 !important;
+    color: #dde6f3 !important;
+}
+div[data-testid="stButton"] > button[kind="primary"] {
+    background: #2563eb !important;
+    border-color: #3b82f6 !important;
+    color: #fff !important;
+}
+div[data-testid="stButton"] > button[kind="primary"]:hover {
+    background: #1d4ed8 !important;
+}
+
+/* === Inputs & Textareas === */
+input[type="text"], input[type="number"], textarea, select,
+div[data-baseweb="input"] input, div[data-baseweb="textarea"] textarea {
+    background: #070e1b !important;
+    color: #dde6f3 !important;
+    border: 1px solid #1e2d42 !important;
+    border-radius: 6px !important;
+}
+div[data-baseweb="input"]:focus-within,
+div[data-baseweb="textarea"]:focus-within {
+    border-color: #4f8ef7 !important;
+    box-shadow: 0 0 0 2px rgba(79,142,247,0.2) !important;
+}
+
+/* === Selectbox === */
+div[data-baseweb="select"] > div {
+    background: #070e1b !important;
+    border: 1px solid #1e2d42 !important;
+    border-radius: 6px !important;
+    color: #dde6f3 !important;
+}
+div[data-baseweb="select"] svg { color: #8fa5c4 !important; }
+div[data-baseweb="popover"] [role="listbox"] {
+    background: #111d32 !important;
+    border: 1px solid #1e2d42 !important;
+}
+div[data-baseweb="popover"] [role="option"] { color: #dde6f3 !important; }
+div[data-baseweb="popover"] [role="option"]:hover { background: #1c2a46 !important; }
+div[data-baseweb="popover"] [aria-selected="true"] { background: #1a2840 !important; }
+
+/* === Notifications & Messages === */
+div[data-testid="stAlert"] {
+    border-radius: 8px !important;
+    border-width: 1px !important;
+}
+div[data-testid="stAlert"][data-baseweb="notification"][kind="positive"] {
+    background: #0d3324 !important; border-color: #166534 !important; color: #4ade80 !important;
+}
+div[data-testid="stAlert"][data-baseweb="notification"][kind="negative"] {
+    background: #3f1d24 !important; border-color: #9b2335 !important; color: #f87171 !important;
+}
+div[data-testid="stAlert"][data-baseweb="notification"][kind="warning"] {
+    background: #3a2a0d !important; border-color: #6b4c0a !important; color: #fbbf24 !important;
+}
+div[data-testid="stAlert"][data-baseweb="notification"][kind="info"] {
+    background: #0f2a52 !important; border-color: #2563eb !important; color: #60a5fa !important;
+}
+
+/* === Code blocks === */
+div[data-testid="stCodeBlock"] {
+    background: #070e1b !important;
+    border: 1px solid #1e2d42 !important;
+    border-radius: 8px !important;
+}
+div[data-testid="stCodeBlock"] pre { color: #dde6f3 !important; }
+
+/* === Expander === */
+div[data-testid="stExpander"] {
+    background: #111d32 !important;
+    border: 1px solid #1e2d42 !important;
+    border-radius: 8px !important;
+}
+
+/* === Subheader divider === */
+div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"] { gap: 12px; }
+h3 { border-bottom: 1px solid #1e2d42; padding-bottom: 6px; margin-bottom: 12px !important; }
+
+/* === Scrollbars === */
+* { scrollbar-color: #334d6a #09101e; scrollbar-width: thin; }
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: #09101e; }
+::-webkit-scrollbar-thumb { background: #334d6a; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #4f8ef7; }
+
+/* === Caption / Muted text === */
+.stCaption, div[data-testid="stCaptionContainer"] p { color: #5a7499 !important; }
+</style>"""
+st.markdown(_GLOBAL_CSS, unsafe_allow_html=True)
+
 KIND_LABELS = {"openai": "API OpenAI-compatible (OpenRouter, top-tools…)", "codex_cli": "Codex CLI (local)"}
 
 
@@ -1120,9 +1263,36 @@ NAV = {"Tạo bài": page_create, "Grid": page_grid, "Cấu hình": page_config}
 
 
 def _run_app():
+    # Phase-C: Sidebar header — logo + app name
+    st.sidebar.markdown("""<div style="
+        padding: 10px 4px 14px 4px;
+        border-bottom: 1px solid #1e2d42;
+        margin-bottom: 10px;
+    ">
+        <div style="font-size:18px; font-weight:700; color:#dde6f3; letter-spacing:-0.02em;">
+            📄 Story Tool
+        </div>
+        <div style="font-size:11px; color:#5a7499; margin-top:2px;">Content automation dashboard</div>
+    </div>""", unsafe_allow_html=True)
     st.sidebar.caption("Cấu hình chung: `" + str(paths.home()) + "`")
     ws = stories.current()
-    st.sidebar.caption("Workspace story: `" + (str(ws) if ws else "chưa chọn — mở Cấu hình ▸ Workspace") + "`")
+    if ws:
+        st.sidebar.markdown(f"""<div style="
+            font-size:11px; color:#8fa5c4; padding:4px 0 2px 0;
+            border-top:1px solid #1e2d42; margin-top:4px;
+        ">
+            <span style="color:#4ade80; font-weight:700;">●</span>
+            &nbsp;<span style="color:#5a7499;">Workspace:</span>
+            &nbsp;<code style="color:#60a5fa; font-size:10px;">{ws.name}</code>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.sidebar.markdown("""<div style="
+            font-size:11px; color:#f87171; padding:4px 0 2px 0;
+            border-top:1px solid #1e2d42; margin-top:4px;
+        ">
+            <span style="font-weight:700;">○</span>
+            &nbsp;Chưa chọn workspace
+        </div>""", unsafe_allow_html=True)
     if hasattr(os, "startfile"):
         if st.sidebar.button("Mở thư mục dữ liệu"):
             os.startfile(str(paths.home()))  # noqa: S606 — Windows only
