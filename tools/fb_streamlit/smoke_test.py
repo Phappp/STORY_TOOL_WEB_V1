@@ -4407,18 +4407,19 @@ def _append_calls(segs):
     # thứ tự bar.appendChild(X()) trong bar — so theo CHỖ GỌI, không theo định nghĩa hàm (chú thích
     # "P28a: modal News..." chứa từ newsButton làm index() khớp nhầm định nghĩa, không khớp call).
     out = []
-    for name in ("filterButton", "refreshButton", "queueAudioButton", "newsButton", "ioButton",
+    for name in ("refreshButton", "queueAudioButton", "newsButton", "ioButton",
                  "queueButton", "queueMarkPostedButton", "errorsButton", "expandButton", "usageButton", "statsBar"):
         out.append(segs.index("bar.appendChild(" + name + "()"))
     return out
-check("P21d thanh nút đúng thứ tự tìm · lọc (P35a) · nhịp đọc (P21h) · import · ▶ · ⚠ · ✓ hàng đợi · mở rộng · stats; "
+check("P21d thanh nút đúng thứ tự tìm · nhịp đọc (P21h) · import · ▶ · ⚠ · ✓ hàng đợi · mở rộng · stats; "
       "P27a thêm nút '🎧 Chọn file + giây' (queue audio) trước ioButton; "
       "P28a thêm nút News (globe); P29a thêm nút hạn mức Codex (usage) giữa mở rộng và stats; "
-      "P41f thêm nút '✓ Đã đăng hàng đợi' sau ▶ Bắt đầu "
-      "— 12 item (11 nút + ô đếm), không ô chọn tất cả",
-      _p21d_bar.count("bar.appendChild(") == 12
+      "P41f thêm nút '✓ Đã đăng hàng đợi' sau ▶ Bắt đầu; "
+      "P41g bỏ nút 'Lọc bài' (filterButton) "
+      "— 14 bar.appendChild (searchBox + 10 nút + 3 separator + statsBar), không ô chọn tất cả",
+      _p21d_bar.count("bar.appendChild(") == 14
       and "pickAll" not in _p21d_bar
-      and "filterButton" in _p21d_bar
+      and "filterButton" not in _p21d_bar
       and _append_calls(_p21d_bar) == sorted(_append_calls(_p21d_bar)))
 check("P21d prefs cột cũ còn mang khóa 'pick' cũng vô hại: bề rộng dựng theo COLS (không phải theo file) "
       "và tổng chiều ngang tính từ COLS — khóa lạc không được nở lưới ra một cột ma",
@@ -7601,18 +7602,18 @@ check("P35a frontend: icon funnel + GRID_FILTER_OPTIONS (7 mức: all/done_poste
       and '"done_draft"' in _p35a_fe
       and '"waiting"' in _p35a_fe
       and "const FILTER_KEY = \"fbgrid:filter:v1\"" in _p35a_fe)
-check("P35a frontend: filterPredicate + _stateDone4 (Xong = đủ 4 B gồm B4) + filterButton + openFilterMenu",
+check("P35a frontend: filterPredicate + _stateDone4 (Xong = đủ 4 B gồm B4) + openFilterMenu; P41g bỏ nút filterButton",
       "function filterPredicate(row)" in _p35a_fe
       and "function _stateDone4(row)" in _p35a_fe
       and "function filterButton()" in _p35a_fe
       and "function openFilterMenu(anchor)" in _p35a_fe
       and "String(row.b4 || \"\") === \"done\"" in _p35a_fe)
 check("P35a frontend: visible() chạy filterPredicate trước sort + listSigOf theo GRID_FILTER + "
-      "countText nêu bộ lọc hiện tại + nút filterButton đứng cạnh ô tìm trong bar",
+      "countText nêu bộ lọc hiện tại; P41g bỏ nút filterButton khỏi bar",
       "rows().filter(filterPredicate)" in _p35a_fe
       and "GRID_FILTER" in _p35a_fe.split("function listSigOf")[1].split("function isTypingIn")[0]
       and "[lọc: " in _p35a_fe
-      and "bar.appendChild(filterButton())" in _p35a_fe)
+      and "bar.appendChild(filterButton())" not in _p35a_fe)
 # --- hết P35a ---
 
 # --- P36a: thẻ video B4 trong modal hiện % tải thật (đọc buffered/duration từ CHÍNH <video>) ---

@@ -360,6 +360,8 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
                       "seconds": int((story.get("b4") or {}).get("audio_seconds") or 0)},
             # P31a: state đăng báo (web_publish) — modal News đọc trực tiếp từ row, sống qua polling
             "web_publish": summary.get("web_publish") or {},
+            # caption (B1) — để ô tìm kiếm lọc được theo nội dung caption
+            "caption": stories.step_text(ctx.root, sid, "b1"),
             # một dòng cho tab B2: ảnh refs của bài đi vào prompt bằng đường nào (P19a) — xem notes
             "b2ref": ga.b2_ref_hint(story, kinds),
             "bucket": "error" if corrupt else ga.bucket(states),  # bài không đọc được story.json là việc phải xử lý, không phải "chờ"
@@ -1057,15 +1059,16 @@ def render(ctx: ga.Ctx) -> None:
     pending_mode = st.session_state.pop("grid_mode_pending", None)  # nút ↩ trong bảng chẩn đoán: đổi TRƯỚC khi radio sinh ra
     if pending_mode:
         st.session_state["grid_mode"] = pending_mode
-    col_mode, col_filter = st.columns(2)
-    with col_mode:
-        st.radio("Kiểu hiển thị", (MODE_COMPONENT, MODE_NATIVE), key="grid_mode", horizontal=True,
-                 help="Lưới component là nơi bấm chạy; bảng chẩn đoán chỉ đọc để thấy grid đang thấy gì "
-                      "khi component không hiện được.")
-    with col_filter:
-        st.selectbox("Lọc bài", list(ga.FILTERS), key="grid_filter",
-                     help="Bài đã vào hàng đợi nổi lên đầu danh sách lưới; thứ tự LÀM theo cột # — "
-                          "bấm ＋ trước thì làm trước, bài mới xếp cuối.")
+    # P41g: ẩn "Kiểu hiển thị" và "Lọc bài" ở ngoài grid theo yêu cầu
+    # col_mode, col_filter = st.columns(2)
+    # with col_mode:
+    #     st.radio("Kiểu hiển thị", (MODE_COMPONENT, MODE_NATIVE), key="grid_mode", horizontal=True,
+    #              help="Lưới component là nơi bấm chạy; bảng chẩn đoán chỉ đọc để thấy grid đang thấy gì "
+    #                   "khi component không hiện được.")
+    # with col_filter:
+    #     st.selectbox("Lọc bài", list(ga.FILTERS), key="grid_filter",
+    #                  help="Bài đã vào hàng đợi nổi lên đầu danh sách lưới; thứ tự LÀM theo cột # — "
+    #                       "bấm ＋ trước thì làm trước, bài mới xếp cuối.")
     workspace_bar(ctx)
     # P37d: publisher_form + video_form (expander) đã xóa. Anh dùng:
     #   - modal News (globe) trong grid component để đăng báo (site từ Cấu hình ▸ Website)

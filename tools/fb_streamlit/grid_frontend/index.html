@@ -796,10 +796,10 @@ function filterPredicate(row) {
   }
 }
 
-// Tìm nhanh trong đúng phần đang hiện: id · chủ đề · nguồn B0 · link đã đăng · status.
+// Tìm nhanh trong đúng phần đang hiện: id · chủ đề · caption (B1) · nguồn B0 · link đã đăng · status.
 // Lọc ngay trong JS để gõ tới đâu lưới thu tới đó, không phải hỏi Python từng ký tự.
 function searchFields(row) {
-  return [row.id, row.topic, row.source, row.link, row.status].map(v => String(v || "").toLowerCase());
+  return [row.id, row.topic, row.caption, row.source, row.link, row.status].map(v => String(v || "").toLowerCase());
 }
 function visible() {
   // P26a: hàng đợi lên ĐẦU theo đúng thứ tự # của ▶ (queueIds), phần còn lại giảm dần theo số id
@@ -4691,7 +4691,7 @@ function render(args, force) {
   // Phase-B: helper tạo separator giữa các nhóm nút
   function barSep() { return el("span", "bar-sep"); }
   bar.appendChild(searchBox());
-  bar.appendChild(filterButton());  // P35a: lọc trạng thái cạnh ô tìm
+  // P41g: ẩn nút "Lọc bài" theo yêu cầu
   bar.appendChild(refreshButton());  // P21h: nút nhịp đọc folder — trước đây là st.toggle đứng NGOÀI lưới
   bar.appendChild(barSep());
   bar.appendChild(queueAudioButton());  // P27a: chọn file tiếng + giây cho hàng đợi
