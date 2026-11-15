@@ -8,7 +8,6 @@ import base64
 import csv
 import io
 import json
-import mimetypes
 import os
 import re
 import tempfile
@@ -36,7 +35,6 @@ EXPORT_MAX = 500  # một lần export đọc tối đa bấy nhiêu folder — 
 IMPORT_MAX_BYTES = 8 * 1024 * 1024  # trần file import: modal gửi file base64 qua event, không để message phình vô hạn
 EXPORT_MAX_BYTES = 8 * 1024 * 1024  # trần chiều ngược lại: nội dung export cũng đi qua một delta của Streamlit
 STALE_SECONDS = 15 * 60
-IMAGE_INLINE_MAX = 2 * 1024 * 1024  # chỉ còn cho ảnh refs/ của modal B0 (đi base64 trong một response)
 B2_IMAGE_MAX = 100 * 1024 * 1024  # trần ảnh B2 mở được trong modal — tải qua URL /media/, không qua delta
 STALE = "stale"
 QUEUED = "queued"
@@ -1851,16 +1849,20 @@ def modal_payload(ctx: Ctx, sid: str, raw_fields, request_id: str):
 # P42a: các trường CHỮ (từ FILE) mà modal xin cho tab B1/B3 — dựng sẵn cho bài trong hàng đợi.
 # Prompt CỐ Ý không nằm ở đây: mỗi prompt ~9,5 KB, ba cái là gần 30 KB/bài — hàng đợi 20 bài thành
 # nửa MB mỗi tick. Chữ thật (caption/seo) chỉ vài KB, đó cũng là thứ mở modal ra là muốn đọc trước.
-# B0 đi `b0_request` riêng (payload mang ảnh base64), Ảnh/Video đi đường xin riêng khi mở tab.
+# P42b: thêm Ảnh B2 · Video B4 · B0 preview — nhưng CHỈ đường dẫn file, lớp lưới đổi ra URL /media/.
 PRELOAD_FIELDS = ("Caption", "Bài SEO", "Bài SEO (render)")
 
 
 def preload_payload(ctx: Ctx, sid: str) -> dict:
-    """Chữ của mọi tab modal cho MỘT bài, dựng sẵn để double-click là thấy ngay, khỏi một vòng event.
+    """Chữ + đường dẫn file của mọi tab modal cho MỘT bài, dựng sẵn để double-click là thấy ngay.
 
-    Dùng ĐÚNG `_copy_payload` mà `modal_payload` dùng, nên chữ hiện sẵn khớp từng byte với chữ
-    xin sau — không có bản "xem trước" thứ hai để lệch nguồn. Trường trống/lỗi thì bỏ hẳn khỏi
-    kết quả: modal tự xin như cũ, và cờ `copyable` phía lưới đã nói trước chuyện trống.
+    Dùng ĐÚNG `_copy_payload` / `image_payload` / `video_payload` / `b0_payload` mà `modal_request`
+    dùng, nên thứ hiện sẵn khớp từng byte với thứ xin sau — không có bản "xem trước" thứ hai để
+    lệch nguồn. Trường trống/lỗi thì bỏ hẳn khỏi kết quả: modal tự xin như cũ, và cờ `copyable`
+    phía lưới đã nói trước chuyện trống.
+
+    Ảnh/Video/B0 chỉ mang `image_path`/`video_path` — byte ảnh không bao giờ đi qua payload lưới
+    (P7c/P21i), nên preload 20 bài cũng không nặng thêm gì đáng kể.
     """
     out = {}
     for name in PRELOAD_FIELDS:
@@ -1875,13 +1877,33 @@ def preload_payload(ctx: Ctx, sid: str) -> dict:
         if payload.get("html"):
             item["html"] = str(payload["html"])
         out[name] = item
+    try:
+        image, _why = image_payload(ctx, sid, "")
+        if image:
+            out["Ảnh"] = {"image_path": str(image["image_path"])}
+        video, _why = video_payload(ctx, sid, "")
+        if video:
+            out["Video"] = {"video_path": str(video["video_path"]), "name": str(video.get("name") or ""),
+                            "bytes": int(video.get("bytes") or 0)}
+        b0, _why = b0_payload(ctx, sid, "")
+        if b0:
+            # B0 đi cùng một ô cho cả caption lẫn ảnh refs (P4d) — giữ đúng khuôn đó, kể cả chữ rỗng
+            item = {"text": str(b0.get("text") or ""), "refs": int(b0.get("refs") or 0)}
+            if b0.get("image_path"):
+                item["image_path"] = str(b0["image_path"])
+            out[B0_PREVIEW_FIELD] = item
+    except Exception:
+        pass  # ảnh/video hỏng (file biến mất giữa hai lần stat…) -> modal xin như thường
     return out
 
 
 def b0_payload(ctx: Ctx, sid: str, request_id: str):
     """Modal B0 cần thấy caption lẫn ảnh trong một response — hai request gửi liền sẽ bị latch event nuốt một.
 
-    Trả (payload, note): payload mang text + image + số ảnh; note (nếu có) là lý do không nhúng được ảnh.
+    P42b: ảnh tham chiếu trả ĐƯỜNG DẪN FILE (lớp lưới đổi ra URL /media/), không nhúng base64 nữa.
+    Ảnh chụp trong refs/ thường vài MB, nhúng base64 là mỗi lần mở modal đẩy cả cục qua WebSocket —
+    và trần 2 MB cũ từng làm ảnh to hơn hiện "quá giới hạn nhúng" dù file vẫn nằm đó.
+    Trả (payload, note): note (nếu có) là lý do không có gì để hiện.
     """
     text = stories.input_text(ctx.root, sid)
     refs = stories.refs_of(ctx.root, sid)
@@ -1889,16 +1911,12 @@ def b0_payload(ctx: Ctx, sid: str, request_id: str):
         # payload rỗng vẫn có nghĩa là "B0 chưa có gì" -> modal hiện ô gõ caption tay thay vì chỉ một dòng chữ
         return {"id": sid, "field": B0_PREVIEW_FIELD, "request_id": request_id, "text": "", "image": "", "refs": 0}, \
                f"{sid}: B0 chưa trích được gì từ link — gõ caption tay trong modal hoặc bấm “▶ Trích lại B0”."
-    image, note = "", ""
+    image, image_bytes = "", 0
     if refs:
-        size = refs[0].stat().st_size
-        if size > IMAGE_INLINE_MAX:
-            note = f"{sid}: ảnh tham chiếu {size // 1024} KB lớn quá ({IMAGE_INLINE_MAX // 1024} KB giới hạn nhúng) — xem ở trang Tạo bài."
-        else:
-            mime = mimetypes.guess_type(refs[0].name)[0] or "image/png"
-            image = f"data:{mime};base64," + base64.b64encode(refs[0].read_bytes()).decode("ascii")
+        image = str(refs[0])
+        image_bytes = refs[0].stat().st_size
     return {"id": sid, "field": B0_PREVIEW_FIELD, "request_id": request_id, "text": text,
-            "image": image, "refs": len(refs)}, note
+            "image_path": image, "bytes": image_bytes, "refs": len(refs)}, ""
 
 
 def save_b0_caption(ctx: Ctx, sid: str, text: str) -> list[str]:

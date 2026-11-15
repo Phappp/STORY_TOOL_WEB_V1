@@ -918,10 +918,13 @@ check("b0_run: caption vào input.txt, ảnh vào refs/, state done",
 check("B0 không phải bước AI nên không đổi bucket của hàng đợi",
       ga.bucket(ga.display_states(ga_root, ids_p4d[0])) == "waiting")
 out = ga.apply_event(gctx, {"source": "b0_request", "id": ids_p4d[0], "field": "B0 preview", "request_id": "req-b0"})
-check("modal B0 xin 1 lần là thấy cả caption lẫn ảnh tham chiếu (latch component chỉ nhận 1 event/lượt)",
+check("modal B0 xin 1 lần là thấy cả caption lẫn ảnh tham chiếu (latch component chỉ nhận 1 event/lượt); "
+      "P42b ảnh trả ĐƯỜNG DẪN FILE (lớp lưới đổi ra URL /media/) chứ không nhúng base64 — refs/ vài MB "
+      "không còn đi qua delta, và trần 'quá giới hạn nhúng' 2 MB cũng hết",
       out.copy is not None and out.copy["field"] == "B0 preview" and out.copy["mode"] == "show"
       and "Caption của" in out.copy["text"] and out.copy["refs"] == 1
-      and out.copy["image"].startswith("data:image/jpeg;base64,"))
+      and str(out.copy.get("image_path") or "").endswith("ref_1.jpg")
+      and not str(out.copy.get("image") or "").startswith("data:"))
 out = ga.apply_event(gctx, {"source": "copy_request", "id": ids_p4d[0], "field": "Input", "request_id": "req-b0cap"})
 check("nút Copy ở tab B0 lấy đúng chữ trong input.txt (đường copy riêng, không dùng payload preview)",
       out.copy is not None and out.copy["mode"] == "copy" and "Caption của" in out.copy["text"])
@@ -7779,6 +7782,52 @@ check("P42a frontend: preloadFromRows() nạp row.pre vào CONTENT/RICH theo con
       and "CONTENT.set(key, text)" in _p42_fe.split("function preloadFromRows")[1].split("function finishCopy")[0]
       and "RICH.set(key, String(p.html))" in _p42_fe.split("function preloadFromRows")[1].split("function finishCopy")[0])
 # --- hết P42a ---
+
+# --- P42b: preload ảnh B2 · video B4 · ảnh refs B0 — chỉ URL /media/, không byte nào trong payload ---
+_p42b_root = Path(tempfile.mkdtemp(prefix="p42b_"))
+_p42b_ctx = ga.build_ctx(db.connect(), _p42b_root)
+_p42b_sid = stories.create_story(_p42b_root, "P42b đủ ảnh video refs")["id"]
+_p42b_dir = _p42b_root / _p42b_sid
+(_p42b_dir / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 32)
+(_p42b_dir / "video.mp4").write_bytes(b"\x00" * 64)
+(_p42b_dir / "refs").mkdir(exist_ok=True)
+(_p42b_dir / "refs" / "ref_1.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"r" * 32)
+stories.save_input(_p42b_root, _p42b_sid, "caption B0 trong hàng đợi")
+ga.apply_event(_p42b_ctx, {"source": "queue_add", "id": _p42b_sid})
+
+_p42b_calls = []
+_p42b_saved_url = fbgrid.media_url
+fbgrid.media_url = lambda path, sid, slot="b2": (
+    _p42b_calls.append((slot, Path(path).name)) or f"/media/{slot}/{Path(path).name}")
+fbgrid._MEDIA_CACHE.clear()
+try:
+    _p42b_pre = next(r for r in fbgrid.rows_for(_p42b_ctx) if r["id"] == _p42b_sid).get("pre") or {}
+    _p42b_calls_first = len(_p42b_calls)
+    fbgrid.rows_for(_p42b_ctx)  # tick kế: file không đổi -> không đăng ký lại
+    _p42b_calls_second = len(_p42b_calls) - _p42b_calls_first
+finally:
+    fbgrid.media_url = _p42b_saved_url
+check("P42b hàng đợi có sẵn cả Ảnh B2 · Video B4 · B0 (caption + ảnh refs) — mở tab nào cũng thấy ngay, "
+      "và payload chỉ mang URL /media/ chứ không byte/path nào",
+      _p42b_pre.get("Ảnh", {}).get("image") == "/media/b2/image.png"
+      and _p42b_pre.get("Video", {}).get("video") == "/media/b4/video.mp4"
+      and _p42b_pre.get("B0 preview", {}).get("image") == "/media/b0/ref_1.png"
+      and _p42b_pre.get("B0 preview", {}).get("text") == "caption B0 trong hàng đợi"
+      and "image_path" not in str(_p42b_pre) and "video_path" not in str(_p42b_pre))
+check("P42b URL /media/ NHỚ theo (file, mtime, size): tick thứ hai không gọi đăng ký lại — "
+      "media_file_mgr.add() đọc + băm CẢ FILE mỗi lần, gọi mỗi tick là đọc lại vài chục MB",
+      _p42b_calls_first == 3 and _p42b_calls_second == 0)
+_p42b_saved_max = fbgrid.PRELOAD_MEDIA_MAX
+fbgrid.PRELOAD_MEDIA_MAX = 10  # hạ trần: mọi file ở trên đều "quá lớn"
+_p42b_big = next(r for r in fbgrid.rows_for(_p42b_ctx) if r["id"] == _p42b_sid).get("pre") or {}
+fbgrid.PRELOAD_MEDIA_MAX = _p42b_saved_max
+check("P42b file quá trần thì BỎ hẳn trường đó (modal xin như cũ) — không được hiện 'chưa có ảnh' "
+      "cho file vẫn nằm trong folder, cũng không nạp sẵn file lớn vào RAM phiên",
+      "Ảnh" not in _p42b_big and "Video" not in _p42b_big and "B0 preview" not in _p42b_big)
+check("P42b frontend: preloadFromRows nạp cả IMAGES/VIDEOS từ row.pre (ảnh/video đi URL /media/)",
+      "IMAGES.set(key, image)" in _p42_fe.split("function preloadFromRows")[1].split("function finishCopy")[0]
+      and "VIDEOS.set(key, video)" in _p42_fe.split("function preloadFromRows")[1].split("function finishCopy")[0])
+# --- hết P42b ---
 
 # cleanup test rows
 c = db.connect()

@@ -291,35 +291,108 @@ def video_meta(story: dict, folder: Path) -> str:
             + (f" · {_when(float(block.get('updated_at') or 0))}" if block.get("updated_at") else ""))
 
 
+PRELOAD_MEDIA_MAX = 8 * 1024 * 1024  # P42b: file lớn hơn thì KHÔNG dựng sẵn URL — mở tab sẽ xin
+_MEDIA_CACHE: dict = {}  # (phiên, file, slot, mtime, size) -> URL /media/ (P42b)
+
+
+def _session_tag() -> str:
+    """Khóa cache media theo PHIÊN: Streamlit xóa media của một phiên khi phiên đó đóng, nên URL cũ
+    phải bị quên theo — nhớ xuyên phiên là mở lại trang thấy thẻ "không tải được ảnh từ /media"."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+        try:
+            ctx = get_script_run_ctx(suppress_warning=True)  # chạy ngoài app (test) thì khỏi in cảnh báo
+        except TypeError:  # bản Streamlit cũ không có tham số này
+            ctx = get_script_run_ctx()
+        return str(getattr(ctx, "session_id", "") or "")
+    except Exception:
+        return ""
+
+
+def media_url_cached(path: str, sid: str, slot: str = "b2") -> str:
+    """URL /media/ cho modal, NHỚ theo (file, mtime, size) — `add()` đọc và băm CẢ FILE mỗi lần gọi.
+
+    Không nhớ thì mỗi tick 2 giây × 20 bài × (ảnh B2 + video B4 + refs B0) là đọc lại vài chục MB
+    chỉ để lấy lại đúng chuỗi URL cũ. File đổi (mtime/size) hoặc sang phiên khác là khóa đổi.
+    """
+    try:
+        info = Path(path).stat()
+    except OSError:
+        return ""
+    if info.st_size > PRELOAD_MEDIA_MAX:
+        return ""  # quá lớn: để modal xin khi mở đúng tab, khỏi nạp sẵn cả file vào RAM phiên
+    key = (_session_tag(), str(path), slot, info.st_mtime_ns, info.st_size)
+    hit = _MEDIA_CACHE.get(key)
+    if hit is not None:
+        return hit
+    url = media_url(str(path), sid, slot) or ""
+    if url:
+        _MEDIA_CACHE[key] = url
+        if len(_MEDIA_CACHE) > 600:  # nhiều bài × nhiều bản sửa: cắt cả bảng, tra lại rẻ
+            _MEDIA_CACHE.clear()
+    return url
+
+
+def _preload_for_js(sid: str, raw: dict) -> dict:
+    """Đổi `image_path`/`video_path` trong preload thành URL /media/ cho JS.
+
+    File không lấy được URL (quá lớn, biến mất, chưa có runtime) thì BỎ CẢ TRƯỜNG: thà modal xin
+    như cũ, còn hơn hiện thẻ "chưa có ảnh/video" trong khi file vẫn nằm đó.
+    """
+    out = {}
+    for field, item in (raw or {}).items():
+        item = dict(item or {})
+        dropped = False
+        path = str(item.pop("image_path", "") or "")
+        if path:
+            url = media_url_cached(path, sid, "b0" if field == ga.B0_PREVIEW_FIELD else "b2")
+            if url:
+                item["image"] = url
+            else:
+                dropped = True
+        vpath = str(item.pop("video_path", "") or "")
+        if vpath:
+            url = media_url_cached(vpath, sid, "b4")
+            if url:
+                item["video"] = url
+            else:
+                dropped = True
+        if not dropped:
+            out[field] = item
+    return out
+
+
 PRELOAD_MAX = 20  # trần số bài trong hàng đợi được dựng sẵn chữ cho modal (P42a)
 _PRELOAD_CACHE: dict = {}  # (sid, stamp, preset) -> {field: {text, html}} — bài đứng yên thì khỏi dựng lại
 
 
 def preload_texts(ctx: ga.Ctx, rows: list[dict]) -> None:
-    """P42a: dựng sẵn chữ modal cho bài ĐANG TRONG HÀNG ĐỢI.
+    """P42a/P42b: dựng sẵn nội dung modal cho bài ĐANG TRONG HÀNG ĐỢI.
 
     Double-click một bài trước đây phải chờ một vòng event → rerun → render mới thấy caption /
-    SEO / prompt. Hàng đợi chính là danh sách anh vừa chọn để làm, nên đó là chỗ cần có sẵn:
-    chữ đi kèm payload lưới vài KB/bài, modal mở là hiện, không phải xin gì.
+    SEO / ảnh / video. Hàng đợi chính là danh sách anh vừa chọn để làm, nên đó là chỗ cần có sẵn:
+    chữ đi kèm payload lưới vài KB/bài, ảnh-video chỉ là URL /media/, modal mở là hiện.
 
-    Chỉ CHỮ: ảnh/video/B0 vẫn xin riêng khi mở đúng tab (nặng, và mở tab nào mới cần tab đó).
+    Prompt vẫn xin khi mở tab (mỗi prompt ~9,5 KB — hàng đợi 20 bài là nửa MB mỗi tick).
     `stamp` + tên preset nằm trong khóa cache nên bài vừa chạy xong (file đổi) là dựng lại ngay,
     không có chuyện modal hiện bản cũ.
     """
     queued = sorted((r for r in rows if r.get("queued")), key=lambda r: float(r.get("queued_at") or 0))
     for row in queued[:PRELOAD_MAX]:
-        key = (str(row.get("id") or ""), str(row.get("stamp") or ""), str(row.get("preset") or ""))
-        hit = _PRELOAD_CACHE.get(key)
-        if hit is None:
+        sid = str(row["id"])
+        key = (sid, str(row.get("stamp") or ""), str(row.get("preset") or ""))
+        raw = _PRELOAD_CACHE.get(key)
+        if raw is None:
             try:
-                hit = ga.preload_payload(ctx, str(row["id"]))
+                raw = ga.preload_payload(ctx, sid)
             except Exception:
-                hit = {}
-            _PRELOAD_CACHE[key] = hit
+                raw = {}
+            _PRELOAD_CACHE[key] = raw
             if len(_PRELOAD_CACHE) > 600:  # nhiều bài × nhiều bản sửa: cắt cả bảng, dựng lại rẻ
                 _PRELOAD_CACHE.clear()
-        if hit:
-            row["pre"] = hit
+        pre = _preload_for_js(sid, raw) if raw else {}
+        if pre:
+            row["pre"] = pre
 
 
 def rows_for(ctx: ga.Ctx) -> list[dict]:

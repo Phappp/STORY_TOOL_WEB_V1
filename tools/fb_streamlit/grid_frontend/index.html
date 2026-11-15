@@ -1104,10 +1104,11 @@ function fillField(field, key, payload) {
   }
 }
 
-// P42a: Python dựng sẵn chữ modal cho bài ĐANG TRONG HÀNG ĐỢI (row.pre) — nạp vào cache NGAY trong
-// lượt vẽ này, nên double-click một bài trong hàng đợi là thấy caption/SEO/prompt liền, không phải
-// chờ một vòng event → rerun → render. Khóa vẫn là contentKey (id|field|stamp|preset) nên bài vừa
-// chạy xong (stamp đổi) là khớp khóa MỚI, không bao giờ hiện bản cũ.
+// P42a/P42b: Python dựng sẵn nội dung modal cho bài ĐANG TRONG HÀNG ĐỢI (row.pre) — nạp vào cache
+// NGAY trong lượt vẽ này, nên double-click một bài trong hàng đợi là thấy caption/SEO/ảnh/video liền,
+// không phải chờ một vòng event → rerun → render. Khóa vẫn là contentKey (id|field|stamp|preset) nên
+// bài vừa chạy xong (stamp đổi) là khớp khóa MỚI, không bao giờ hiện bản cũ.
+// Ảnh/video đi bằng URL /media/ (server đã đăng ký), byte thật trình duyệt tự tải — không qua payload.
 function preloadFromRows() {
   rows().forEach(row => {
     const pre = row && row.pre;
@@ -1117,9 +1118,17 @@ function preloadFromRows() {
       if (CONTENT.has(key) || NOTES.has(key) || IMAGES.has(key) || VIDEOS.has(key)) return;  // đã có thì thôi
       const p = pre[field] || {};
       const text = String(p.text || "");
-      if (!text.trim()) return;
-      CONTENT.set(key, text);
-      if (p.html) RICH.set(key, String(p.html));
+      const image = String(p.image || "");
+      const video = p.video ? { url: String(p.video), name: String(p.name || ""), bytes: Number(p.bytes || 0) } : null;
+      // B0 là ô chữ + ảnh refs chung MỘT khóa: chữ rỗng vẫn phải nạp (ô gõ tay hiện ra, không "đang đọc")
+      const emptyOk = field === TAB_FIELD.b0;
+      if (!text.trim() && !image && !video && !emptyOk) return;
+      if (image) IMAGES.set(key, image);
+      if (video) VIDEOS.set(key, video);
+      if (text.trim() || emptyOk) {
+        CONTENT.set(key, text);
+        if (p.html) RICH.set(key, String(p.html));
+      }
     });
   });
 }
