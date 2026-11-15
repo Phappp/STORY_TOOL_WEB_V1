@@ -2770,7 +2770,14 @@ let IO_EXPORT = {};     // payload export gần nhất: {format, name, text, cou
 let IO_B0 = {};         // payload "trích B0 còn thiếu" gần nhất
 let IO_SCAN = {};       // P23c: payload "quét sha1 ảnh thiếu url" gần nhất {matched, unmatched, sample, line}
 let IO_REF = {};        // P33a: payload "quét từ chối AI" gần nhất {refused, line}
-let IO_TAB = "import"; // Phase-G: tab đang chọn trong modal IO — "import" | "export" | "tools"
+const IO_TAB_KEY = "fbgrid:io_tab:v1";
+let IO_TAB = (function _initIoTab() {  // P41h: persist tab IO qua localStorage — chuyển tab không cần tắt/bật modal
+  try {
+    if (typeof localStorage === "undefined") return "import";
+    const v = localStorage.getItem(IO_TAB_KEY);
+    return ["import", "export", "tools"].includes(v) ? v : "import";
+  } catch (_) { return "import"; }
+})();
 let IO_SEQ = 0;         // đếm response đã nạp — chữ ký khỏi phải stringify cả file export vài MB
 let IO_BUSY = false;    // đã gửi một file, chờ lưới trả lời: ô chọn file PHẢI khóa tới lúc đó, vì
                         // repaint() dựng lại input nên `pick.disabled = true` chỉ sống tới lượt vẽ kế.
@@ -3399,7 +3406,11 @@ function ioTabBar() {
   tabs.forEach(([id, label]) => {
     const b = el("button", "mtab" + (IO_TAB === id ? " on" : ""), label);
     b.type = "button";
-    b.addEventListener("click", () => { IO_TAB = id; repaint(); });
+    b.addEventListener("click", () => {
+      IO_TAB = id;
+      try { localStorage.setItem(IO_TAB_KEY, id); } catch (_) {}
+      repaint();
+    });
     wrap.appendChild(b);
   });
   return wrap;
