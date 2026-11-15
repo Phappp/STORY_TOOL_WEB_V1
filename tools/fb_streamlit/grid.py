@@ -1059,7 +1059,8 @@ def render(ctx: ga.Ctx) -> None:
     pending_mode = st.session_state.pop("grid_mode_pending", None)  # nút ↩ trong bảng chẩn đoán: đổi TRƯỚC khi radio sinh ra
     if pending_mode:
         st.session_state["grid_mode"] = pending_mode
-    # P41g: ẩn "Kiểu hiển thị" và "Lọc bài" ở ngoài grid theo yêu cầu
+    # P41g/P41h: "Kiểu hiển thị" ẩn hẳn; "Lọc bài" chỉ ẩn selectbox NGOÀI grid — nút phễu
+    # (filterButton) trong thanh nút của grid vẫn là chỗ lọc thật (client-side, nhớ localStorage).
     # col_mode, col_filter = st.columns(2)
     # with col_mode:
     #     st.radio("Kiểu hiển thị", (MODE_COMPONENT, MODE_NATIVE), key="grid_mode", horizontal=True,

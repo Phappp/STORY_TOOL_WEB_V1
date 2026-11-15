@@ -3521,7 +3521,10 @@ function ioSig() {
     // P23c: kết quả quét hiện trong thẻ "🧹 Ảnh thiếu link" — hai con số đổi thì vẽ lại, không đổi thì bỏ
     (IO_SCAN || {}).matched, (IO_SCAN || {}).unmatched, (IO_SCAN || {}).error ? 1 : 0,
     // P33a: kết quả quét từ chối AI hiện trong thẻ "🔍 Quét từ chối AI"
-    (IO_REF || {}).refused, (IO_REF || {}).error ? 1 : 0]);
+    (IO_REF || {}).refused, (IO_REF || {}).error ? 1 : 0,
+    // P41h: TAB đang chọn. Thiếu nó thì bấm tab chỉ đổi biến IO_TAB rồi repaint() thấy chữ ký
+    // y nguyên nên syncIo() bỏ qua — phải đóng modal mở lại (IO_OPEN đổi -> chữ ký đổi) mới thấy tab mới.
+    IO_TAB]);
 }
 
 function syncIo() {
@@ -3543,7 +3546,7 @@ function searchBox() {
   box.className = "find";
   box.id = "find";
   box.dataset.fid = "search";  // keepView/restoreView nhận ra ô này -> gõ dở không rơi con trỏ
-  box.placeholder = "🔍 tìm id · chủ đề · nguồn · link · status";
+  box.placeholder = "🔍 tìm id · chủ đề · caption · nguồn · link · status";
   box.title = "Lọc ngay trong phần đang hiện, không gọi Python · ↑ ↓ chuyển hàng · Esc để xoá chữ";
   box.value = SEARCH;
   box.addEventListener("input", () => {
@@ -4702,7 +4705,7 @@ function render(args, force) {
   // Phase-B: helper tạo separator giữa các nhóm nút
   function barSep() { return el("span", "bar-sep"); }
   bar.appendChild(searchBox());
-  // P41g: ẩn nút "Lọc bài" theo yêu cầu
+  bar.appendChild(filterButton());  // P35a: lọc trạng thái cạnh ô tìm (P41h: hiện lại — chỉ ẩn selectbox ngoài grid)
   bar.appendChild(refreshButton());  // P21h: nút nhịp đọc folder — trước đây là st.toggle đứng NGOÀI lưới
   bar.appendChild(barSep());
   bar.appendChild(queueAudioButton());  // P27a: chọn file tiếng + giây cho hàng đợi
@@ -4727,7 +4730,7 @@ function render(args, force) {
   wrap.appendChild(bar);
 
   if (!rows().length) {
-    wrap.appendChild(el("div", "empty", "Workspace này chưa có story nào (hoặc bộ lọc đang che hết) — mở trang Tạo bài, hoặc đổi bộ lọc 'Lọc bài'."));
+    wrap.appendChild(el("div", "empty", "Workspace này chưa có story nào (hoặc bộ lọc đang che hết) — mở trang Tạo bài, hoặc bấm nút phễu cạnh ô tìm đổi bộ lọc."));
   } else if (!full.length) {
     const fopt = GRID_FILTER_OPTIONS.find(o => o[0] === GRID_FILTER);
     const filtPart = GRID_FILTER === "all" ? ""

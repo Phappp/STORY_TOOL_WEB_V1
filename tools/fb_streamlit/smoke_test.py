@@ -4141,6 +4141,11 @@ check("P22e ảnh tải không được thì Ô TỰ NÓI ✕ Kèm lý do — im
 check("P22e trạng thái 'xem hết' caption SỐNG QUA LƯỢT VẼ (IO_CAPS ở module + có mặt trong ioSig) — để trong DOM thì tick 2s xóa sạch",
       "const IO_CAPS = new Set()" in _p22_fe and "Array.from(IO_CAPS).sort().join" in _p22_fe.split("function ioSig")[1].split("function syncIo")[0]
       and "IO_CAPS.add(raw)" in _p22_item_src and '"iocap" + (IO_CAPS.has(raw) ? " full" : "")' in _p22_item_src)
+# P41h: bấm tab Import/Export/Tiện ích phải đổi được NGAY. ioSig thiếu IO_TAB thì repaint() thấy chữ ký
+# y nguyên -> syncIo() bỏ qua, chỉ đóng/mở lại modal (IO_OPEN đổi) mới vẽ lại tab mới.
+check("P41h ioSig mang IO_TAB để bấm tab Import/Export/Tiện ích vẽ lại ngay, không phải tắt/bật modal",
+      "IO_TAB" in _p22_fe.split("function ioSig")[1].split("function syncIo")[0]
+      and 'IO_TAB = id;' in _p22_fe.split("function ioTabBar")[1].split("function ioNode")[0])
 check("P22e '.iocap' CHỈ là caption — nhãn '(không link)' phải class riêng, nếu không querySelector('.iocap') đầu tiên vớ phải nó thay vì chữ của bài",
       'el("span", "iomut", "(không link)")' in _p22_item_src
       and '"iocap none"' not in _p22_fe.split("function ioItemCard")[1].split("function ioPreviewCard")[0]
@@ -4407,19 +4412,19 @@ def _append_calls(segs):
     # thứ tự bar.appendChild(X()) trong bar — so theo CHỖ GỌI, không theo định nghĩa hàm (chú thích
     # "P28a: modal News..." chứa từ newsButton làm index() khớp nhầm định nghĩa, không khớp call).
     out = []
-    for name in ("refreshButton", "queueAudioButton", "newsButton", "ioButton",
+    for name in ("filterButton", "refreshButton", "queueAudioButton", "newsButton", "ioButton",
                  "queueButton", "queueMarkPostedButton", "errorsButton", "expandButton", "usageButton", "statsBar"):
         out.append(segs.index("bar.appendChild(" + name + "()"))
     return out
-check("P21d thanh nút đúng thứ tự tìm · nhịp đọc (P21h) · import · ▶ · ⚠ · ✓ hàng đợi · mở rộng · stats; "
+check("P21d thanh nút đúng thứ tự tìm · lọc (P35a) · nhịp đọc (P21h) · import · ▶ · ⚠ · ✓ hàng đợi · mở rộng · stats; "
       "P27a thêm nút '🎧 Chọn file + giây' (queue audio) trước ioButton; "
       "P28a thêm nút News (globe); P29a thêm nút hạn mức Codex (usage) giữa mở rộng và stats; "
       "P41f thêm nút '✓ Đã đăng hàng đợi' sau ▶ Bắt đầu; "
-      "P41g bỏ nút 'Lọc bài' (filterButton) "
-      "— 14 bar.appendChild (searchBox + 10 nút + 3 separator + statsBar), không ô chọn tất cả",
-      _p21d_bar.count("bar.appendChild(") == 14
+      "P41h giữ nút phễu 'Lọc bài' trong bar (chỉ ẩn selectbox NGOÀI grid) "
+      "— 15 bar.appendChild (searchBox + 11 nút + 3 separator + statsBar), không ô chọn tất cả",
+      _p21d_bar.count("bar.appendChild(") == 15
       and "pickAll" not in _p21d_bar
-      and "filterButton" not in _p21d_bar
+      and "filterButton" in _p21d_bar
       and _append_calls(_p21d_bar) == sorted(_append_calls(_p21d_bar)))
 check("P21d prefs cột cũ còn mang khóa 'pick' cũng vô hại: bề rộng dựng theo COLS (không phải theo file) "
       "và tổng chiều ngang tính từ COLS — khóa lạc không được nở lưới ra một cột ma",
@@ -7602,18 +7607,18 @@ check("P35a frontend: icon funnel + GRID_FILTER_OPTIONS (7 mức: all/done_poste
       and '"done_draft"' in _p35a_fe
       and '"waiting"' in _p35a_fe
       and "const FILTER_KEY = \"fbgrid:filter:v1\"" in _p35a_fe)
-check("P35a frontend: filterPredicate + _stateDone4 (Xong = đủ 4 B gồm B4) + openFilterMenu; P41g bỏ nút filterButton",
+check("P35a frontend: filterPredicate + _stateDone4 (Xong = đủ 4 B gồm B4) + openFilterMenu; P41h giữ nút phễu trong bar",
       "function filterPredicate(row)" in _p35a_fe
       and "function _stateDone4(row)" in _p35a_fe
       and "function filterButton()" in _p35a_fe
       and "function openFilterMenu(anchor)" in _p35a_fe
       and "String(row.b4 || \"\") === \"done\"" in _p35a_fe)
 check("P35a frontend: visible() chạy filterPredicate trước sort + listSigOf theo GRID_FILTER + "
-      "countText nêu bộ lọc hiện tại; P41g bỏ nút filterButton khỏi bar",
+      "countText nêu bộ lọc hiện tại + nút filterButton đứng cạnh ô tìm trong bar",
       "rows().filter(filterPredicate)" in _p35a_fe
       and "GRID_FILTER" in _p35a_fe.split("function listSigOf")[1].split("function isTypingIn")[0]
       and "[lọc: " in _p35a_fe
-      and "bar.appendChild(filterButton())" not in _p35a_fe)
+      and "bar.appendChild(filterButton())" in _p35a_fe)
 # --- hết P35a ---
 
 # --- P36a: thẻ video B4 trong modal hiện % tải thật (đọc buffered/duration từ CHÍNH <video>) ---
