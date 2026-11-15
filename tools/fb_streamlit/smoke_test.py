@@ -7742,6 +7742,44 @@ check("P37d bỏ giới hạn domain *.danhngon.pro: constants PUBLIC_DOMAIN_SUF
       and "Chỉ hỗ trợ website thuộc danhngon.pro" not in _p37d_wp)
 # --- hết P37d ---
 
+# --- P42a: hàng đợi mang sẵn chữ modal (double-click trong hàng đợi là thấy, không chờ lượt) ---
+_p42_root = Path(tempfile.mkdtemp(prefix="p42a_"))
+_p42_ctx = ga.build_ctx(db.connect(), _p42_root)
+_p42_ids = [stories.create_story(_p42_root, topic=f"P42a {i}")["id"] for i in range(3)]
+stories.save_step_text(_p42_root, _p42_ids[0], "b1", "caption sẵn của bài trong hàng đợi")
+stories.save_step_text(_p42_root, _p42_ids[0], "b3", "# SEO sẵn\n\nchữ **đậm**")
+ga.apply_event(_p42_ctx, {"source": "queue_add", "id": _p42_ids[0]})
+ga.apply_event(_p42_ctx, {"source": "queue_add", "id": _p42_ids[1]})
+_p42_rows = fbgrid.rows_for(_p42_ctx)
+_p42_q = next(r for r in _p42_rows if r["id"] == _p42_ids[0])
+_p42_plain = next(r for r in _p42_rows if r["id"] == _p42_ids[2])
+check("P42a bài trong hàng đợi mang sẵn chữ modal (Caption + Bài SEO + bản render) — "
+      "double-click là thấy nội dung, không phải chờ event → rerun → render",
+      (_p42_q.get("pre") or {}).get("Caption", {}).get("text") == "caption sẵn của bài trong hàng đợi"
+      and "SEO sẵn" in (_p42_q.get("pre") or {}).get("Bài SEO", {}).get("text", "")
+      and "đậm" in (_p42_q.get("pre") or {}).get("Bài SEO (render)", {}).get("html", ""))
+check("P42a bài NGOÀI hàng đợi không mang chữ nào — payload chỉ nặng thêm cho đúng danh sách anh chọn làm",
+      "pre" not in _p42_plain)
+check("P42a prompt CỐ Ý không preload (9,5 KB/bài × 3 prompt là nửa MB cho 20 bài) — chỉ chữ đọc từ file",
+      ga.PRELOAD_FIELDS == ("Caption", "Bài SEO", "Bài SEO (render)"))
+stories.save_step_text(_p42_root, _p42_ids[0], "b1", "caption MỚI sau khi chạy lại")
+_p42_after = next(r for r in fbgrid.rows_for(_p42_ctx) if r["id"] == _p42_ids[0])
+check("P42a khóa cache theo stamp + preset: sửa caption xong là preload dựng lại, không hiện bản cũ",
+      (_p42_after.get("pre") or {}).get("Caption", {}).get("text") == "caption MỚI sau khi chạy lại")
+_p42_saved_max = fbgrid.PRELOAD_MAX
+fbgrid.PRELOAD_MAX = 1
+_p42_capped = [r for r in fbgrid.rows_for(_p42_ctx) if r.get("queued")]
+fbgrid.PRELOAD_MAX = _p42_saved_max
+check("P42a trần PRELOAD_MAX chặn payload nở theo hàng đợi dài (hàng đợi 2 bài, trần 1 -> đúng 1 bài có pre)",
+      len(_p42_capped) == 2 and sum(1 for r in _p42_capped if r.get("pre")) == 1)
+_p42_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+check("P42a frontend: preloadFromRows() nạp row.pre vào CONTENT/RICH theo contentKey và được gọi trong render()",
+      "function preloadFromRows()" in _p42_fe
+      and "preloadFromRows();" in _p42_fe.split("function render(")[1].split("const alive")[0]
+      and "CONTENT.set(key, text)" in _p42_fe.split("function preloadFromRows")[1].split("function finishCopy")[0]
+      and "RICH.set(key, String(p.html))" in _p42_fe.split("function preloadFromRows")[1].split("function finishCopy")[0])
+# --- hết P42a ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")

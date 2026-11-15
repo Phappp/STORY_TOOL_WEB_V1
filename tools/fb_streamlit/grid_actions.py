@@ -1848,6 +1848,36 @@ def modal_payload(ctx: Ctx, sid: str, raw_fields, request_id: str):
     return {"id": sid, "request_id": request_id, "mode": "show", "items": items}, note
 
 
+# P42a: các trường CHỮ (từ FILE) mà modal xin cho tab B1/B3 — dựng sẵn cho bài trong hàng đợi.
+# Prompt CỐ Ý không nằm ở đây: mỗi prompt ~9,5 KB, ba cái là gần 30 KB/bài — hàng đợi 20 bài thành
+# nửa MB mỗi tick. Chữ thật (caption/seo) chỉ vài KB, đó cũng là thứ mở modal ra là muốn đọc trước.
+# B0 đi `b0_request` riêng (payload mang ảnh base64), Ảnh/Video đi đường xin riêng khi mở tab.
+PRELOAD_FIELDS = ("Caption", "Bài SEO", "Bài SEO (render)")
+
+
+def preload_payload(ctx: Ctx, sid: str) -> dict:
+    """Chữ của mọi tab modal cho MỘT bài, dựng sẵn để double-click là thấy ngay, khỏi một vòng event.
+
+    Dùng ĐÚNG `_copy_payload` mà `modal_payload` dùng, nên chữ hiện sẵn khớp từng byte với chữ
+    xin sau — không có bản "xem trước" thứ hai để lệch nguồn. Trường trống/lỗi thì bỏ hẳn khỏi
+    kết quả: modal tự xin như cũ, và cờ `copyable` phía lưới đã nói trước chuyện trống.
+    """
+    out = {}
+    for name in PRELOAD_FIELDS:
+        try:
+            payload, _why = _copy_payload(ctx, sid, name, "")
+        except Exception:  # preset hỏng / file đọc lỗi -> để modal xin như thường, đừng làm sập lưới
+            continue
+        text = str((payload or {}).get("text") or "")
+        if not payload or not text.strip():
+            continue
+        item = {"text": text}
+        if payload.get("html"):
+            item["html"] = str(payload["html"])
+        out[name] = item
+    return out
+
+
 def b0_payload(ctx: Ctx, sid: str, request_id: str):
     """Modal B0 cần thấy caption lẫn ảnh trong một response — hai request gửi liền sẽ bị latch event nuốt một.
 

@@ -1104,6 +1104,26 @@ function fillField(field, key, payload) {
   }
 }
 
+// P42a: Python dựng sẵn chữ modal cho bài ĐANG TRONG HÀNG ĐỢI (row.pre) — nạp vào cache NGAY trong
+// lượt vẽ này, nên double-click một bài trong hàng đợi là thấy caption/SEO/prompt liền, không phải
+// chờ một vòng event → rerun → render. Khóa vẫn là contentKey (id|field|stamp|preset) nên bài vừa
+// chạy xong (stamp đổi) là khớp khóa MỚI, không bao giờ hiện bản cũ.
+function preloadFromRows() {
+  rows().forEach(row => {
+    const pre = row && row.pre;
+    if (!pre || typeof pre !== "object") return;
+    Object.keys(pre).forEach(field => {
+      const key = contentKey(row, field);
+      if (CONTENT.has(key) || NOTES.has(key) || IMAGES.has(key) || VIDEOS.has(key)) return;  // đã có thì thôi
+      const p = pre[field] || {};
+      const text = String(p.text || "");
+      if (!text.trim()) return;
+      CONTENT.set(key, text);
+      if (p.html) RICH.set(key, String(p.html));
+    });
+  });
+}
+
 function finishCopy() {
   const job = COPY_NOW;
   if (!job) return;
@@ -4664,6 +4684,7 @@ function render(args, force) {
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
   ingestIo();        // tương tự cho bảng Import/Export — preview phải hiện ngay lượt vẽ này
   ingestVideo();     // và cho mẩu video vừa được server xác nhận (P21c)
+  preloadFromRows(); // P42a: nạp sẵn chữ modal của bài trong hàng đợi — mở modal là có, khỏi xin
   const alive = new Set(rows().map(r => String(r.id)));
   if (EDITING && !alive.has(String(EDITING.id))) EDITING = null;
   if (CURSOR && !alive.has(CURSOR)) CURSOR = "";

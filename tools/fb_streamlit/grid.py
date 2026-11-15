@@ -291,6 +291,37 @@ def video_meta(story: dict, folder: Path) -> str:
             + (f" · {_when(float(block.get('updated_at') or 0))}" if block.get("updated_at") else ""))
 
 
+PRELOAD_MAX = 20  # trần số bài trong hàng đợi được dựng sẵn chữ cho modal (P42a)
+_PRELOAD_CACHE: dict = {}  # (sid, stamp, preset) -> {field: {text, html}} — bài đứng yên thì khỏi dựng lại
+
+
+def preload_texts(ctx: ga.Ctx, rows: list[dict]) -> None:
+    """P42a: dựng sẵn chữ modal cho bài ĐANG TRONG HÀNG ĐỢI.
+
+    Double-click một bài trước đây phải chờ một vòng event → rerun → render mới thấy caption /
+    SEO / prompt. Hàng đợi chính là danh sách anh vừa chọn để làm, nên đó là chỗ cần có sẵn:
+    chữ đi kèm payload lưới vài KB/bài, modal mở là hiện, không phải xin gì.
+
+    Chỉ CHỮ: ảnh/video/B0 vẫn xin riêng khi mở đúng tab (nặng, và mở tab nào mới cần tab đó).
+    `stamp` + tên preset nằm trong khóa cache nên bài vừa chạy xong (file đổi) là dựng lại ngay,
+    không có chuyện modal hiện bản cũ.
+    """
+    queued = sorted((r for r in rows if r.get("queued")), key=lambda r: float(r.get("queued_at") or 0))
+    for row in queued[:PRELOAD_MAX]:
+        key = (str(row.get("id") or ""), str(row.get("stamp") or ""), str(row.get("preset") or ""))
+        hit = _PRELOAD_CACHE.get(key)
+        if hit is None:
+            try:
+                hit = ga.preload_payload(ctx, str(row["id"]))
+            except Exception:
+                hit = {}
+            _PRELOAD_CACHE[key] = hit
+            if len(_PRELOAD_CACHE) > 600:  # nhiều bài × nhiều bản sửa: cắt cả bảng, dựng lại rẻ
+                _PRELOAD_CACHE.clear()
+        if hit:
+            row["pre"] = hit
+
+
 def rows_for(ctx: ga.Ctx) -> list[dict]:
     """Chỉ đủ dữ liệu cho ô grid; state qua ga.display_states nên 'treo >15 phút' hiện đúng là stale.
 
@@ -380,7 +411,9 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
                          "Bài SEO (render)": summary["b3"] == stories.DONE,
                          "Input": summary["has_input"], "Link": bool(summary["link"].strip())},
         })
-    return ga.with_positions(ga.queue_sort(out))
+    rows = ga.with_positions(ga.queue_sort(out))
+    preload_texts(ctx, rows)  # P42a: bài trong hàng đợi mang sẵn chữ modal — double-click là hiện
+    return rows
 
 
 def _executor(event: dict, root: Path) -> list[str]:
