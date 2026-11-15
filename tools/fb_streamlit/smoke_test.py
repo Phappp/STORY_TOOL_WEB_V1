@@ -7829,6 +7829,44 @@ check("P42b frontend: preloadFromRows nạp cả IMAGES/VIDEOS từ row.pre (ả
       and "VIDEOS.set(key, video)" in _p42_fe.split("function preloadFromRows")[1].split("function finishCopy")[0])
 # --- hết P42b ---
 
+# --- P42c: PRELOAD_MAX 40 + NGÂN SÁCH media cho cả lượt (chữ luôn sẵn, media vượt thì bỏ) ---
+check("P42c PRELOAD_MAX = 40 (đo thật: 394,2 KB/tick ở 40 bài, 251,9 KB ở 20, 536,6 KB ở 60) — "
+      "chữ luôn preload, ảnh/video nằm trong ngân sách riêng",
+      fbgrid.PRELOAD_MAX == 40 and fbgrid.PRELOAD_MEDIA_BUDGET > 0)
+_p42c_root = Path(tempfile.mkdtemp(prefix="p42c_"))
+_p42c_ctx = ga.build_ctx(db.connect(), _p42c_root)
+_p42c_ids = [stories.create_story(_p42c_root, f"P42c {i}")["id"] for i in range(2)]
+for _p42c_sid in _p42c_ids:
+    _p42c_dir = _p42c_root / _p42c_sid
+    (_p42c_dir / "image.png").write_bytes(b"x" * 4096)
+    (_p42c_dir / "video.mp4").write_bytes(b"y" * 8192)
+    (_p42c_dir / "refs").mkdir(exist_ok=True)
+    (_p42c_dir / "refs" / "ref_1.png").write_bytes(b"z" * 1024)
+    stories.save_step_text(_p42c_root, _p42c_sid, "b1", "caption P42c")
+    stories.save_input(_p42c_root, _p42c_sid, "caption B0 P42c")
+    ga.apply_event(_p42c_ctx, {"source": "queue_add", "id": _p42c_sid})
+_p42c_saved_url = fbgrid.media_url
+_p42c_saved_budget = fbgrid.PRELOAD_MEDIA_BUDGET
+fbgrid.media_url = lambda path, sid, slot="b2": f"/media/{slot}/{Path(path).name}"
+fbgrid._MEDIA_CACHE.clear()
+try:
+    fbgrid.PRELOAD_MEDIA_BUDGET = 0
+    _p42c_none = {r["id"]: (r.get("pre") or {}) for r in fbgrid.rows_for(_p42c_ctx) if r["id"] in _p42c_ids}
+    fbgrid.PRELOAD_MEDIA_BUDGET = 4096  # đủ đúng ảnh B2 của bài đầu, không đủ video/refs
+    _p42c_some = {r["id"]: (r.get("pre") or {}) for r in fbgrid.rows_for(_p42c_ctx) if r["id"] in _p42c_ids}
+finally:
+    fbgrid.media_url = _p42c_saved_url
+    fbgrid.PRELOAD_MEDIA_BUDGET = _p42c_saved_budget
+check("P42c ngân sách media = 0: MẤT ảnh/video preload nhưng CHỮ vẫn có sẵn — hết RAM thì mất tốc độ "
+      "tab ảnh, không mất nội dung đọc",
+      all("Caption" in p for p in _p42c_none.values())
+      and all("Ảnh" not in p and "Video" not in p and "B0 preview" not in p for p in _p42c_none.values()))
+check("P42c ngân sách chỉ đủ một ảnh: đúng bài ĐẦU có Ảnh B2, bài sau bị bỏ (trừ dần qua từng bài), "
+      "chữ của cả hai vẫn nguyên",
+      "Ảnh" in _p42c_some[_p42c_ids[0]] and "Ảnh" not in _p42c_some[_p42c_ids[1]]
+      and "Video" not in _p42c_some[_p42c_ids[0]] and "Caption" in _p42c_some[_p42c_ids[1]])
+# --- hết P42c ---
+
 # cleanup test rows
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")

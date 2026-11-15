@@ -292,6 +292,10 @@ def video_meta(story: dict, folder: Path) -> str:
 
 
 PRELOAD_MEDIA_MAX = 8 * 1024 * 1024  # P42b: file lớn hơn thì KHÔNG dựng sẵn URL — mở tab sẽ xin
+# P42c: tổng byte media được nạp sẵn cho CẢ hàng đợi trong một tick. Trần theo từng file (8 MB) vẫn
+# để 40 bài × 3 file chạm gần 1 GB RAM phiên trong trường hợp xấu; ngân sách này cắt theo TỔNG, bài
+# nào vượt thì chỉ mất ảnh/video preload (chữ vẫn có sẵn), mở tab vẫn xin như cũ.
+PRELOAD_MEDIA_BUDGET = 64 * 1024 * 1024
 _MEDIA_CACHE: dict = {}  # (phiên, file, slot, mtime, size) -> URL /media/ (P42b)
 
 
@@ -333,36 +337,65 @@ def media_url_cached(path: str, sid: str, slot: str = "b2") -> str:
     return url
 
 
-def _preload_for_js(sid: str, raw: dict) -> dict:
+def _preload_for_js(sid: str, raw: dict, budget: int | None = None) -> tuple[dict, int]:
     """Đổi `image_path`/`video_path` trong preload thành URL /media/ cho JS.
 
     File không lấy được URL (quá lớn, biến mất, chưa có runtime) thì BỎ CẢ TRƯỜNG: thà modal xin
     như cũ, còn hơn hiện thẻ "chưa có ảnh/video" trong khi file vẫn nằm đó.
+
+    `budget` là số byte media còn được nạp sẵn trong tick này (None = không giới hạn). Vượt ngân
+    sách thì cũng bỏ cả trường như trên — chữ vẫn đi, ảnh/video mở tab sẽ xin. Trả (payload, số
+    byte media đã dùng) để `preload_texts` trừ dần qua từng bài.
     """
     out = {}
+    used = 0
     for field, item in (raw or {}).items():
         item = dict(item or {})
         dropped = False
         path = str(item.pop("image_path", "") or "")
-        if path:
-            url = media_url_cached(path, sid, "b0" if field == ga.B0_PREVIEW_FIELD else "b2")
+        vpath = str(item.pop("video_path", "") or "")
+        if path and not dropped:
+            slot = "b0" if field == ga.B0_PREVIEW_FIELD else "b2"
+            url, cost = _media_worth(path, sid, slot, budget)
             if url:
                 item["image"] = url
+                budget = None if budget is None else budget - cost
+                used += cost
             else:
                 dropped = True
-        vpath = str(item.pop("video_path", "") or "")
-        if vpath:
-            url = media_url_cached(vpath, sid, "b4")
+        if vpath and not dropped:
+            url, cost = _media_worth(vpath, sid, "b4", budget)
             if url:
                 item["video"] = url
+                budget = None if budget is None else budget - cost
+                used += cost
             else:
                 dropped = True
         if not dropped:
             out[field] = item
-    return out
+    return out, used
 
 
-PRELOAD_MAX = 20  # trần số bài trong hàng đợi được dựng sẵn chữ cho modal (P42a)
+def _media_worth(path: str, sid: str, slot: str, budget: int | None) -> tuple[str, int]:
+    """URL /media/ + số byte phải trả từ ngân sách (0 khi không đăng ký được).
+
+    Trả ("", 0) cho file biến mất / quá trần / vượt ngân sách còn lại — chỗ gọi hiểu là "bỏ trường".
+    """
+    try:
+        size = Path(path).stat().st_size
+    except OSError:
+        return "", 0
+    if not size or size > PRELOAD_MEDIA_MAX:
+        return "", 0
+    if budget is not None and size > budget:
+        return "", 0
+    return media_url_cached(path, sid, slot), size
+
+
+# Trần số bài trong hàng đợi được dựng sẵn nội dung cho modal. Đo thật (60 bài đủ caption 0,9 KB +
+# SEO 3 KB): payload 251,9 KB ở 20 bài, 394,2 KB ở 40, 536,6 KB ở 60 — nên 40 là mức "đủ dùng" mà
+# vẫn dưới nửa MB mỗi tick. CPU lúc dựng hàng không chênh đo được.
+PRELOAD_MAX = 40
 _PRELOAD_CACHE: dict = {}  # (sid, stamp, preset) -> {field: {text, html}} — bài đứng yên thì khỏi dựng lại
 
 
@@ -373,11 +406,14 @@ def preload_texts(ctx: ga.Ctx, rows: list[dict]) -> None:
     SEO / ảnh / video. Hàng đợi chính là danh sách anh vừa chọn để làm, nên đó là chỗ cần có sẵn:
     chữ đi kèm payload lưới vài KB/bài, ảnh-video chỉ là URL /media/, modal mở là hiện.
 
-    Prompt vẫn xin khi mở tab (mỗi prompt ~9,5 KB — hàng đợi 20 bài là nửa MB mỗi tick).
+    Prompt vẫn xin khi mở tab (mỗi prompt ~9,5 KB — hàng đợi 40 bài là gần 1,2 MB mỗi tick).
+    Ảnh/video có ngân sách riêng `PRELOAD_MEDIA_BUDGET` cho CẢ lượt: chữ luôn có sẵn, còn media
+    của bài vượt ngân sách thì để modal xin khi mở tab (RAM phiên không phình theo độ dài hàng đợi).
     `stamp` + tên preset nằm trong khóa cache nên bài vừa chạy xong (file đổi) là dựng lại ngay,
     không có chuyện modal hiện bản cũ.
     """
     queued = sorted((r for r in rows if r.get("queued")), key=lambda r: float(r.get("queued_at") or 0))
+    budget = PRELOAD_MEDIA_BUDGET
     for row in queued[:PRELOAD_MAX]:
         sid = str(row["id"])
         key = (sid, str(row.get("stamp") or ""), str(row.get("preset") or ""))
@@ -390,7 +426,8 @@ def preload_texts(ctx: ga.Ctx, rows: list[dict]) -> None:
             _PRELOAD_CACHE[key] = raw
             if len(_PRELOAD_CACHE) > 600:  # nhiều bài × nhiều bản sửa: cắt cả bảng, dựng lại rẻ
                 _PRELOAD_CACHE.clear()
-        pre = _preload_for_js(sid, raw) if raw else {}
+        pre, used = _preload_for_js(sid, raw, budget) if raw else ({}, 0)
+        budget -= used
         if pre:
             row["pre"] = pre
 
