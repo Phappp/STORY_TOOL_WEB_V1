@@ -538,19 +538,21 @@ def _executor(event: dict, root: Path) -> list[str]:
 RUNNER = gr.Runner(_executor)
 
 
-def start_inline(sid: str) -> str:
+def start_inline(sid: str, root=None) -> str:
     """Trang Tạo bài chạy bước AI ngay tại chỗ: xin giữ chỗ bài này để luồng nền không làm trùng.
 
     Trả '' nếu được giữ (phải gọi end_inline khi xong), ngược lại trả dòng giải thích vì sao đừng chạy.
+    P43a: khóa theo (workspace, bài) — A đang chạy `story_001` không chặn `story_001` của B.
     """
-    if not sid or not RUNNER.claim_inline([str(sid)]):
+    root = root or stories.current()
+    if not sid or not RUNNER.claim_inline([str(sid)], root):
         return ""
     return (f"{sid}: đang chờ/chạy trong luồng nền — chờ nó xong rồi bấm ở trang này, "
             "hoặc bấm ⏸ Dừng trên Grid rồi chạy lại.")
 
 
-def end_inline(sid: str) -> None:
-    RUNNER.release_inline([str(sid)])
+def end_inline(sid: str, root=None) -> None:
+    RUNNER.release_inline([str(sid)], root or stories.current())
 
 
 def runner_line(snap: dict) -> str:
@@ -653,7 +655,7 @@ def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
         st.session_state[REFRESH_KEY] = bool(event.get("on"))
     out = ga.apply_event(ctx, event)
     if victims:
-        out.lines += RUNNER.cancel(victims)
+        out.lines += RUNNER.cancel(victims, ctx.root)  # P43a: chỉ rút bài của workspace đang mở
     _collect(out, event)
     return out
 
@@ -918,7 +920,27 @@ def show_log() -> None:
             st.caption("· " + line)
 
 
-def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> bool:
+def other_workspaces(snap: dict, root) -> list[dict]:
+    """P43a: workspace KHÁC đang có việc chạy — dữ liệu cho nút hover trên thanh lưới.
+
+    Chỉ đọc: đang ở B thì thấy A còn `x/y bài xong`, đang chạy bước nào, còn bao nhiêu việc chờ.
+    Không có nút dừng/rút cho workspace khác, và workspace đang mở không nằm trong danh sách
+    (tiến độ của nó đã có thanh riêng ngay trên lưới).
+    """
+    me = str(root)
+    out = []
+    for path, info in (snap.get("workspaces") or {}).items():
+        if not path or path == me or not info.get("busy"):
+            continue
+        out.append({"path": path, "name": Path(path).name or path,
+                    "done": int(info.get("done") or 0), "total": int(info.get("total") or 0),
+                    "running": [str(x) for x in (info.get("running") or [])[:4]],
+                    "waiting": int(info.get("waiting") or 0)})
+    out.sort(key=lambda w: w["path"])
+    return out
+
+
+def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict], snap: dict | None = None) -> bool:
     """Vẽ grid bằng component; trả False nếu component không dùng được.
 
     rows là phần đang hiện (sau bộ lọc) nhưng số liệu hàng đợi + tổng kết lấy từ cả
@@ -968,6 +990,8 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict]) -> boo
                     news_response=news_resp,
                     # P41a: tiến trình ĐĂNG THẬT của runner nền — đọc mỗi tick, sống qua repaint
                     news_job=news.RUNNER.snapshot(),
+                    # P43a: workspace khác đang chạy gì — nút hover trên thanh lưới (chỉ đọc)
+                    other_ws=other_workspaces(snap or {}, ctx.root),
                     # P41c: hàng đợi đầy đủ (kể cả bài bị bộ lọc lưới che) — modal chỉ thao tác trên đây
                     news_rows=_news_rows(all_rows),
                     # P29a: icon usage Codex góc phải — bản CACHED CLI tự ghi, ~mươi ms/tick
@@ -1074,7 +1098,7 @@ def copy_blocks(ctx: ga.Ctx, sid: str) -> None:
             st.code(str(story.get("link") or "") or "(trống)")
 
 
-def mark_flow(rows: list[dict], snap: dict) -> list[dict]:
+def mark_flow(rows: list[dict], snap: dict, root=None) -> list[dict]:
     """Gắn bài nào đang/do luồng nền giữ vào dòng grid — nhưng chỉ tô ĐÚNG bước đang chạy.
 
     Việc ⚡ giao B1+B2+B3 cùng một lượt, còn luồng nền chỉ biết tới CẢ VIỆC chứ không biết
@@ -1083,8 +1107,12 @@ def mark_flow(rows: list[dict], snap: dict) -> list[dict]:
     story.json mới là chỗ biết điều đó: mỗi bước ghi state `running` ngay trước khi gọi AI.
     Nên "running" chỉ giữ khi folder nói đúng bước đó đang chạy (hoặc treo), các bước khác của
     cùng việc vẫn tím nét đứt "đã giao, chờ tới lượt" — ▶ trong modal nhờ thế vẫn khóa.
+
+    P43a: `root` = workspace đang mở. Lấy `flow_by_root` để đang ở B không thấy ô `story_001`
+    của mình sáng lên chỉ vì A cũng có `story_001` đang chạy.
     """
-    flow = snap["flow"]
+    flow = (snap.get("flow_by_root") or {}).get(str(root)) if root is not None else snap["flow"]
+    flow = flow or {}
     for row in rows:
         slot = dict(flow.get(row["id"]) or {})
         states = row.get("states") or {}
@@ -1153,7 +1181,7 @@ def _body(ctx: ga.Ctx) -> None:
         cached = {"run": app_run, "at": time.monotonic(), "all_rows": rows_for(ctx)}
         st.session_state[PAYLOAD_KEY] = cached
     st.session_state["grid_news_busy"] = news_job["busy"]
-    all_rows = mark_flow(cached["all_rows"], snap)  # dấu bài do luồng nền giữ là bộ nhớ, khỏi đọc folder
+    all_rows = mark_flow(cached["all_rows"], snap, ctx.root)  # dấu bài do luồng nền giữ là bộ nhớ, khỏi đọc folder
     choice = str(st.session_state.get("grid_filter") or ga.FILTERS[0])
     rows = ga.filter_rows(all_rows, choice)
     # ĐÚNG MỘT container cho toàn bộ chữ đổi số dòng (trạng thái luồng + log + chú thích lọc), tạo
@@ -1168,7 +1196,7 @@ def _body(ctx: ga.Ctx) -> None:
         if choice != ga.FILTERS[0]:
             st.caption(f"Lọc “{choice}”: {len(rows)}/{len(all_rows)} bài trong workspace.")
     if str(st.session_state.get("grid_mode") or MODE_COMPONENT) == MODE_COMPONENT:
-        if render_component(ctx, rows, all_rows):
+        if render_component(ctx, rows, all_rows, snap):
             return
         st.warning(f"Grid component không chạy được ({st.session_state.get('grid_component_error')}) — "
                    "dưới đây là bảng đọc thuần cùng dữ liệu, chỉ để thấy grid đang thấy gì chứ không bấm chạy.")

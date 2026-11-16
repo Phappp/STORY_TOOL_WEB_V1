@@ -347,13 +347,16 @@ def require_root() -> Path:
     return root
 
 
-def run_inline(sid: str, label: str, fn):
+def run_inline(sid: str, label: str, fn, root=None):
     """Chạy một bước AI NGAY tại trang Tạo bài sau khi đã giữ chỗ bài đó trong luồng nền.
 
     Trả None (kèm dòng lỗi) khi bài đang có việc ở luồng nền — hai nơi cùng gọi AI cho một bài
     là tốn tiền hai lần và kết quả đè nhau.
     """
-    why = grid.start_inline(sid)
+    # P43a: khóa chạy gắn với workspace — chốt root MỘT lần rồi dùng đúng root đó lúc nhả, kẻo
+    # đổi workspace giữa chừng thì khóa của workspace cũ nằm lại vĩnh viễn.
+    root = root if root is not None else stories.current()
+    why = grid.start_inline(sid, root)
     if why:
         st.error(why)
         return None
@@ -361,7 +364,7 @@ def run_inline(sid: str, label: str, fn):
         with st.spinner(label):
             return fn()
     finally:
-        grid.end_inline(sid)
+        grid.end_inline(sid, root)
 
 
 def sync_staged_refs(root: Path, sid: str) -> None:

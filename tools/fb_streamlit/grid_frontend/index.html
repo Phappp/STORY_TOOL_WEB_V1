@@ -114,6 +114,7 @@
   /* Phase-D: badge màu amber cho errors queue — phân biệt với badge đỏ của news */
   .nbadge.errbadge { background:var(--queued-b,#78350f); color:var(--queued-t,#fbbf24); }
   .newsbtnwrap { position:relative; display:inline-flex; }
+  .newsbtnwrap[hidden] { display:none; }
   .newsbtnwrap .npulse { position:absolute; left:-2px; bottom:-2px; }
   .newsfilters { display:flex; gap:4px; flex-wrap:wrap; }
   .nchip { font-size:10.5px; padding:2px 8px; border-radius:999px; background:var(--btn);
@@ -733,7 +734,7 @@ function menuItem(icon, label, fn, cls, manual) {
   return { node: b, label: text };
 }
 
-let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {}, news: {}, news_response: {}, news_job: {}, news_rows: [], codex_usage: {} };
+let MODEL = { rows: [], workspace: "", copy_response: {}, io: {}, io_response: {}, summary: {}, queue_ids: [], error_ids: [], providers: [], defaults: {}, cols: {}, auto_refresh: false, refresh_seconds: 0, audio: {}, news: {}, news_response: {}, news_job: {}, news_rows: [], codex_usage: {}, other_ws: [] };
 let EDITING = null;  // {id, value} — ô Link đang sửa tay, chỉ sống trong lần vẽ này
 let SEARCH = "";     // chữ đang gõ ở ô tìm — lọc client-side trên phần server đã lọc
 let CURSOR = "";     // id hàng đang chọn bằng phím ↑ ↓
@@ -4363,6 +4364,92 @@ function usageButton() {
 
 function errorCount() { return (MODEL.error_ids || []).length; }
 
+// ---- P43a: workspace KHÁC đang chạy — nút hover trên thanh lưới (chỉ đọc) -------------------
+// Runner là singleton cấp process nên đổi workspace KHÔNG dừng việc cũ; Python gửi sang danh sách
+// workspace đang bận (trừ workspace đang mở). Nút chỉ để XEM, không dừng/rút hộ workspace khác.
+const WS_TIP_ID = "wstip";
+function otherWorkspaces() {
+  return Array.isArray(MODEL.other_ws) ? MODEL.other_ws.filter(w => w && typeof w === "object") : [];
+}
+function wsTipNode() {
+  let t = document.getElementById(WS_TIP_ID);
+  if (!t) {
+    t = el("div", "usagetip");
+    t.id = WS_TIP_ID;
+    t.hidden = true;
+    document.body.appendChild(t);
+  }
+  return t;
+}
+function fillWsTip() {
+  const t = wsTipNode();
+  t.textContent = "";
+  const list = otherWorkspaces();
+  t.appendChild(el("div", "uhead", "Workspace khác đang chạy"));
+  list.forEach(w => {
+    const row = el("div", "usagerow");
+    row.appendChild(el("span", "usagename", String(w.name || w.path || "?")));
+    const total = Number(w.total || 0), done = Number(w.done || 0);
+    const wait = Number(w.waiting || 0);
+    row.appendChild(el("span", "usagesrc",
+      (total ? done + "/" + total + " bài xong" : "chưa rõ tiến độ") + (wait ? " · " + wait + " việc chờ" : "")));
+    t.appendChild(row);
+    const run = Array.isArray(w.running) ? w.running.map(String).filter(Boolean) : [];
+    if (run.length) t.appendChild(el("div", "usagesrc", "▸ " + run.join(" · ")));
+    t.appendChild(el("div", "unote", String(w.path || "")));
+  });
+  return t;
+}
+function placeWsTip(x, y) {
+  const t = wsTipNode();
+  let left = x + 15, top = y + 17;
+  if (left + t.offsetWidth > innerWidth - 8) left = Math.max(8, x - t.offsetWidth - 15);
+  if (top + t.offsetHeight > innerHeight - 8) top = Math.max(8, y - t.offsetHeight - 17);
+  t.style.left = left + "px";
+  t.style.top = top + "px";
+}
+function otherWsButton() {
+  const wrap = el("span", "newsbtnwrap");
+  wrap.id = "otherwswrap";
+  wrap.hidden = true;
+  const b = iconButton("layout",
+    "Workspace khác đang chạy — đưa chuột vào để xem tiến độ (chỉ xem, không dừng hộ)",
+    () => {}, "act");
+  b.id = "otherws";
+  b.addEventListener("pointerenter", e => { fillWsTip(); wsTipNode().hidden = false; placeWsTip(e.clientX, e.clientY); });
+  b.addEventListener("pointermove", e => placeWsTip(e.clientX, e.clientY));
+  b.addEventListener("pointerleave", () => { wsTipNode().hidden = true; });
+  wrap.appendChild(b);
+  const badge = el("span", "nbadge");
+  badge.id = "otherwsbadge";
+  badge.style.display = "none";
+  wrap.appendChild(badge);
+  return wrap;
+}
+function syncOtherWs() {
+  // Chạy ở CẢ HAI nhánh vẽ: badge phải đổi ngay khi workspace khác bắt đầu/kết thúc mà lưới
+  // chỉ vá từng ô. Nút ẩn hẳn khi không còn workspace nào khác đang chạy.
+  const wrap = document.getElementById("otherwswrap");
+  if (!wrap) return;
+  const list = otherWorkspaces();
+  wrap.hidden = list.length === 0;
+  const badge = document.getElementById("otherwsbadge");
+  if (!badge) return;
+  if (list.length) {
+    badge.textContent = list.length > 9 ? "9+" : String(list.length);
+    badge.style.display = "";
+  } else {
+    badge.style.display = "none";
+  }
+  const b = document.getElementById("otherws");
+  if (b) {
+    const n = list.reduce((sum, w) => sum + (Number(w.waiting) || 0), 0);
+    b.title = "Workspace khác đang chạy: " + list.map(w => String(w.name || w.path)).join(", ")
+      + " — đưa chuột vào để xem tiến độ (chỉ xem)" + (n ? " · còn " + n + " việc chờ" : "");
+    b.setAttribute("aria-label", b.title);
+  }
+}
+
 function queueButton() {
   // P21g: nhãn ngắn "Bắt đầu: N" — chữ "N bài" không thêm thông tin nào mà chiều ngang thanh nút thì
   // có (P21f đã đổi các nút icon, bước này chỉ siết chữ). Con số vẫn là phần tử quan trọng nhất.
@@ -4616,6 +4703,8 @@ function updateBar() {
   // P41c: nút News chỉ tắt khi hàng đợi trống VÀ không có lượt đăng/login nào đang chạy
   const nb = document.getElementById("newsbtn");
   if (nb) nb.disabled = !newsEnabled();
+  // P43a: workspace khác vừa bắt đầu/kết thúc -> nút hiện/ẩn ngay ở nhánh vá từng ô
+  syncOtherWs();
 }
 
 let drag = null;
@@ -4688,6 +4777,7 @@ function render(args, force) {
     news_job: args.news_job && typeof args.news_job === "object" ? args.news_job : {},
     news_rows: Array.isArray(args.news_rows) ? args.news_rows : [],
     codex_usage: args.codex_usage && typeof args.codex_usage === "object" ? args.codex_usage : {},
+    other_ws: Array.isArray(args.other_ws) ? args.other_ws : [],
   };
   if (MODEL.workspace !== wasWorkspace) { REFRESH_PENDING = null; SHOWN = PAGE_ROWS; }  // đổi workspace: không có cú bấm nào đang chờ nữa, cửa sổ vẽ về 20
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
@@ -4748,6 +4838,7 @@ function render(args, force) {
   bar.appendChild(barSep());
   bar.appendChild(expandButton());
   bar.appendChild(usageButton());  // P29a: hạn mức Codex — hover hiện vòng tròn % còn lại
+  bar.appendChild(otherWsButton());  // P43a: workspace khác đang chạy — hover xem tiến độ (chỉ xem)
   bar.appendChild(statsBar());
   const cnt = el("span", "count", countText());
   cnt.id = "rowcount";  // syncStats đổi chữ này tại chỗ khi số hàng thay đổi

@@ -159,31 +159,46 @@ class Runner:
         self._thread: threading.Thread | None = None
         self._stopping = False
         self._paused = False
-        self._inline: set[str] = set()  # bài trang khác (Tạo bài) đang chạy ngay tại chỗ
+        self._inline: set[tuple[str, str]] = set()  # (workspace, bài) trang khác đang chạy ngay tại chỗ
         self._lines: list[str] = []
-        self._open: dict[str, int] = {}  # bài -> còn mấy việc chưa xong, về 0 là tính "1 bài xong"
+        # P43a: (workspace, bài) -> còn mấy việc chưa xong. Khóa có workspace vì hai workspace
+        # thường trùng story_001: so sid trần là chặn nhầm / tô nhầm bài của workspace kia.
+        self._open: dict[tuple[str, str], int] = {}
         self.done = 0
         self.total = 0
+        # P43a: tiến độ theo từng workspace — để đang ở B vẫn thấy A chạy tới đâu.
+        self._prog: dict[str, dict[str, int]] = {}
 
     # ---------- grid gọi, luôn ở thread chính ----------
-    def in_flight(self) -> set[str]:
-        """Mọi id đang có việc chờ/chạy — tính cả bài trang Tạo bài đang giữ."""
-        ids = set(self._inline) | set(self._open)
-        return ids
+    @staticmethod
+    def _ws(root) -> str:
+        """Khóa workspace trong sổ tiến độ: đường dẫn tuyệt đối của folder data."""
+        return str(root or "")
 
-    def claim_inline(self, ids: list[str]) -> list[str]:
+    def in_flight(self, root=None) -> set[str]:
+        """Mọi id đang có việc chờ/chạy — tính cả bài trang Tạo bài đang giữ.
+
+        `root` giới hạn vào ĐÚNG một workspace: đang ở B mà A chạy `story_001` thì B vẫn giao
+        được `story_001` của mình (hai folder khác nhau, hai lượt AI khác nhau).
+        """
+        want = None if root is None else self._ws(root)
+        ids = {sid for ws, sid in self._inline if want is None or ws == want}
+        return ids | {sid for ws, sid in self._open if want is None or ws == want}
+
+    def claim_inline(self, ids: list[str], root=None) -> list[str]:
         """Xin chạy ngay ở trang khác. Trả về id đang bận — khóa file chỉ chống ghi chồng, còn đây là
         chặn hai nơi cùng gọi AI cho MỘT bài (tốn tiền, kết quả đè nhau)."""
         with self._cv:
             wanted = [str(i) for i in ids if str(i)]
-            busy = [sid for sid in wanted if sid in self.in_flight()]
+            busy = [sid for sid in wanted if sid in self.in_flight(root)]
             if not busy:
-                self._inline.update(wanted)
+                self._inline.update((self._ws(root), sid) for sid in wanted)
             return busy
 
-    def release_inline(self, ids: list[str]) -> None:
+    def release_inline(self, ids: list[str], root=None) -> None:
         with self._cv:
-            self._inline.difference_update(str(i) for i in ids)
+            ws = self._ws(root)
+            self._inline.difference_update((ws, str(i)) for i in ids)
 
     def submit(self, job: Job) -> str:
         """Nhận một việc; trả dòng nói rõ đã nhận hay từ chối để grid in ra ngay."""
@@ -194,9 +209,11 @@ class Runner:
         tasks = tasks_for(job)
         chained = list(job.steps) == list(ALL_STEPS)
         with self._cv:
-            busy = [sid for sid in ids if sid in self.in_flight()]
+            ws = self._ws(job.root)
+            busy = [sid for sid in ids if sid in self.in_flight(ws)]
             if busy:
-                where = "trang Tạo bài" if any(s in self._inline for s in busy) else "luồng nền"
+                where = ("trang Tạo bài" if any((ws, s) in self._inline for s in busy)
+                         else "luồng nền")
                 return f"{', '.join(busy)}: đang chờ/chạy trong {where} — xong bài này hãy bấm lại."
             if chained and not tasks:
                 # P15a: bài đã xanh lá hết thì KHÔNG giữ chỗ — giữ là bài bị khóa "đang chờ" vĩnh viễn.
@@ -211,8 +228,19 @@ class Runner:
             else:
                 self.done += len(done_now)
                 self.total += len(ids)
+            busy_roots = {r for r, _ in self._open} | {self._ws(t.job.root) for t in self._slots.values()}
+            prog = self._prog.setdefault(ws, {"done": 0, "total": 0})
+            if ws not in busy_roots:
+                prog["done"], prog["total"] = len(done_now), len(ids)  # workspace này vừa bắt đầu loạt mới
+            else:
+                prog["done"] += len(done_now)
+                prog["total"] += len(ids)
+            if len(self._prog) > 40:  # nhiều workspace mở trong ngày: quên bảng của workspace đã cạn
+                for stale in [w for w in self._prog if w not in busy_roots and w != ws]:
+                    self._prog.pop(stale, None)
             for sid in keep:
-                self._open[sid] = self._open.get(sid, 0) + sum(1 for t in tasks if t.sid == sid)
+                key = (ws, sid)
+                self._open[key] = self._open.get(key, 0) + sum(1 for t in tasks if t.sid == sid)
             job.ids = keep
             if isinstance(job.event.get("ids"), list):  # cancel/executor chỉ thấy bài thật sự chạy
                 job.event["ids"] = keep
@@ -233,14 +261,30 @@ class Runner:
         return f"Đã giao cho luồng nền: {job.label} — {n} việc{tail}, bộ nào rảnh là nhảy vào."
 
     def snapshot(self) -> dict:
-        """Ảnh trạng thái cho grid vẽ: bước nào của bài nào đang chạy, chờ gì, tới đâu."""
+        """Ảnh trạng thái cho grid vẽ: bước nào của bài nào đang chạy, chờ gì, tới đâu.
+
+        P43a: thêm `flow_by_root` + `workspaces` — đang ở workspace B vẫn thấy A chạy tới đâu,
+        và `mark_flow` không còn tô nhầm khi hai workspace cùng có `story_001`.
+        """
         with self._cv:
             flow: dict[str, dict[str, str]] = {}
+            flow_by_root: dict[str, dict[str, dict[str, str]]] = {}
             for task in self._slots.values():
                 flow.setdefault(task.sid, {})[task.step] = "running"
+                flow_by_root.setdefault(self._ws(task.job.root), {}).setdefault(task.sid, {})[task.step] = "running"
             for task in self._ready + self._hold:
                 flow.setdefault(task.sid, {}).setdefault(task.step, "waiting")
+                flow_by_root.setdefault(self._ws(task.job.root), {}).setdefault(task.sid, {})[task.step] = "waiting"
             running = [t.label for t in self._slots.values()]
+            spaces: dict[str, dict] = {}
+            # Gồm cả workspace VỪA chạy xong (busy False, done=total) để nút hover không nháy mất
+            # số cuối; `other_workspaces` chỉ lấy busy nên danh sách vẫn sạch.
+            for ws in list(flow_by_root) + [w for w in self._prog if w not in flow_by_root]:
+                prog = self._prog.get(ws) or {}
+                run = [t.label for t in self._slots.values() if self._ws(t.job.root) == ws]
+                wait = sum(1 for t in self._ready + self._hold if self._ws(t.job.root) == ws)
+                spaces[ws] = {"busy": ws in flow_by_root, "running": run, "waiting": wait,
+                              "done": int(prog.get("done") or 0), "total": int(prog.get("total") or 0)}
             return {
                 "busy": bool(self._slots or self._ready or self._hold),
                 "running": bool(self._slots),
@@ -254,8 +298,10 @@ class Runner:
                 "total": self.total,
                 "running_ids": sorted({t.sid for t in self._slots.values()}),
                 "waiting_ids": sorted({t.sid for t in self._ready + self._hold}),
-                "inline": sorted(self._inline),
+                "inline": sorted({sid for _, sid in self._inline}),
                 "flow": flow,
+                "flow_by_root": flow_by_root,
+                "workspaces": spaces,
                 "lines": len(self._lines),
             }
 
@@ -278,37 +324,52 @@ class Runner:
             self._cv.notify_all()
             return len(self._ready) + len(self._hold)
 
-    def cancel(self, ids: list[str]) -> list[str]:
+    def cancel(self, ids: list[str], root=None) -> list[str]:
         """Rút bài khỏi những việc CHƯA bắt đầu trong luồng nền.
 
         Việc đang chạy thì không cắt: bước AI giữa chừng bỏ dở sẽ để lại story.json dở dang
         và vẫn tốn tiền. Trả về dòng log thật cho từng id, id nào chưa có việc thì im.
+
+        `root` = workspace đang mở; bỏ trống thì rút theo sid ở mọi workspace (test dùng).
         """
         lines: list[str] = []
+        ws = None if root is None else self._ws(root)
+
+        def mine(any_root) -> bool:
+            return ws is None or any_root == ws
+
         with self._cv:
             for sid in {str(i) for i in ids if str(i)}:
-                if sid in {t.sid for t in self._slots.values()}:
+                if any(t.sid == sid and mine(self._ws(t.job.root)) for t in self._slots.values()):
                     lines.append(f"{sid}: đang chạy dở trong luồng nền — không cắt giữa lượt AI; "
                                  f"muốn dừng cả loạt bấm ⏸ Dừng.")
                     continue
-                if sid in self._inline:
+                if any(s == sid and mine(r) for r, s in self._inline):
                     # trang Tạo bài đang chạy bài này NGAY TẠI CHỖ: khóa là của nó, ở đây không có
                     # quyền nhả (nhả là hai nơi cùng ghi một folder story).
                     lines.append(f"{sid}: bỏ khỏi hàng đợi, nhưng trang Tạo bài đang chạy bài này "
                                  f"ngay tại chỗ — khóa chạy vẫn còn nguyên tới khi trang đó xong.")
                     continue
-                touched = [t for t in self._ready + self._hold if t.sid == sid]
+                touched = [t for t in self._ready + self._hold if t.sid == sid and mine(self._ws(t.job.root))]
                 if not touched:
                     continue
-                self._ready = [t for t in self._ready if t.sid != sid]
-                self._hold = [t for t in self._hold if t.sid != sid]
+                self._ready = [t for t in self._ready if t not in touched]
+                self._hold = [t for t in self._hold if t not in touched]
                 for job in self._jobs:
+                    if not mine(self._ws(job.root)):
+                        continue
                     job.ids = [i for i in job.ids if i != sid]
                     raw = job.event.get("ids")
                     if isinstance(raw, list):  # event batch mang ids — phải sửa cả hai nơi
                         job.event["ids"] = [i for i in raw if i != sid]
                 self._jobs = [j for j in self._jobs if j.ids]
-                self._open.pop(sid, None)
+                roots = {self._ws(t.job.root) for t in touched}
+                for r in roots:
+                    key = (r, sid)
+                    self._open.pop(key, None)
+                    prog = self._prog.get(r)
+                    if prog:  # bài bị rút không tính vào "xong" của workspace đó
+                        prog["total"] = max(int(prog.get("total") or 0) - 1, int(prog.get("done") or 0))
                 self.total = max(self.total - 1, self.done)
                 lines.append(f"{sid}: đã rút {len(touched)} việc chưa bắt đầu trong luồng nền.")
             self._cv.notify_all()
@@ -407,35 +468,48 @@ class Runner:
         — bài chưa chạy mà đếm 'xong' là nói dối tiến độ.
         """
         self._log([f"{task.label}: không giao được việc — {why}"])
-        self._ready = [t for t in self._ready if t.sid != task.sid]
-        self._hold = [t for t in self._hold if t.sid != task.sid]
-        self._open.pop(task.sid, None)
+        ws = self._ws(task.job.root)
+        self._ready = [t for t in self._ready if not (t.sid == task.sid and self._ws(t.job.root) == ws)]
+        self._hold = [t for t in self._hold if not (t.sid == task.sid and self._ws(t.job.root) == ws)]
+        self._open.pop((ws, task.sid), None)
         live = {t.sid for t in self._ready + self._hold} | {t.sid for t in self._slots.values()}
         self._jobs = [j for j in self._jobs if any(i in live for i in j.ids)]
 
     def _finish(self, task: Task) -> None:
-        """Một việc kết thúc: nhả các việc chờ nó, bài hết việc thì tính một bài xong."""
+        """Một việc kết thúc: nhả các việc chờ nó, bài hết việc thì tính một bài xong.
+
+        P43a: mọi phép so ở đây phải kèm workspace — hai workspace cùng `story_001` là chuyện
+        thường, so sid trần là B1 của A nhả B4 của B.
+        """
+        ws = self._ws(task.job.root)
+
+        def same(t) -> bool:
+            return t.sid == task.sid and self._ws(t.job.root) == ws
+
         if task.step == "b1" and task.dep == "":
-            moved = [t for t in self._hold if t.sid == task.sid and t.dep == "b1"]
+            moved = [t for t in self._hold if same(t) and t.dep == "b1"]
             self._hold = [t for t in self._hold if t not in moved]
             self._ready += moved
         # P25c: B4 chờ CẢ dây chuyền chứ không chỉ B3 — B2 và B3 xong lệch nhau, còn B3 có thể
         # đã xanh lá từ trước nên không có việc nào để "xong sau nó". Nhả B4 khi bài này không
         # còn việc AI nào đang chờ/chạy: nhả sớm là ffmpeg chạy trước khi ảnh B2 được ghi.
         others = [t for t in self._ready + self._hold + list(self._slots.values())
-                  if t.sid == task.sid and t.step != "b4"]
+                  if same(t) and t.step != "b4"]
         if not others:
-            moved = [t for t in self._hold if t.sid == task.sid and t.step == "b4"]
+            moved = [t for t in self._hold if same(t) and t.step == "b4"]
             self._hold = [t for t in self._hold if t not in moved]
             self._ready += moved
         live = {t.sid for t in self._ready + self._hold} | {t.sid for t in self._slots.values()}
         self._jobs = [j for j in self._jobs if any(i in live for i in j.ids)]
-        left = self._open.get(task.sid, 0) - 1
+        key = (ws, task.sid)
+        left = self._open.get(key, 0) - 1
         if left > 0:
-            self._open[task.sid] = left
+            self._open[key] = left
         else:
-            self._open.pop(task.sid, None)
+            self._open.pop(key, None)
             self.done += 1
+            prog = self._prog.setdefault(ws, {"done": 0, "total": 0})
+            prog["done"] = int(prog.get("done") or 0) + 1
 
 
 def _ids_text(ids: list[str], cap: int = 6) -> str:

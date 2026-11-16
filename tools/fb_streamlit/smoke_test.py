@@ -1448,12 +1448,12 @@ check("▶ Chạy tiếp: làm đúng những việc đã xếp, theo đúng th�
       ok_c and n_go == 2 and started_c == ["story_001", "story_002", "story_003"]
       and not runner_p6c.snapshot()["paused"])
 j_c4, _ = gr.job_for({"source": "run_step", "id": "story_004", "step": "b1"}, p5b_root)
-held = runner_p6c.claim_inline(["story_004"])
+held = runner_p6c.claim_inline(["story_004"], p5b_root)
 note_inline = runner_p6c.submit(j_c4[0])
 check("trang Tạo bài giữ chỗ bài nào thì luồng nền từ chối đúng bài đó (không gọi AI hai lần một bài)",
       held == [] and runner_p6c.snapshot()["inline"] == ["story_004"]
       and "đang chờ/chạy trong trang Tạo bài" in note_inline and runner_p6c.snapshot()["queued"] == 0)
-runner_p6c.release_inline(["story_004"])
+runner_p6c.release_inline(["story_004"], p5b_root)
 note_free = runner_p6c.submit(j_c4[0])
 check("thả chỗ rồi thì luồng nền nhận lại bài đó", "đang chờ/chạy" not in note_free and wait_flow(runner_p6c))
 runner_p6c.stop()
@@ -3126,7 +3126,8 @@ class _BusyRunner:
         self.real = real
 
     def snapshot(self):
-        return dict(self.real.snapshot(), busy=True, flow={p8_show_sid: {"b1": "running"}})
+        return dict(self.real.snapshot(), busy=True, flow={p8_show_sid: {"b1": "running"}},
+                    flow_by_root={str(p8_root): {p8_show_sid: {"b1": "running"}}})
 
     def new_lines(self, seen):
         return self.real.new_lines(seen)
@@ -3201,7 +3202,7 @@ src_body = inspect.getsource(fbgrid._body)
 src_flow = inspect.getsource(fbgrid.flow_bar)
 lines_body = src_body.splitlines()
 i_slot = next(i for i, l in enumerate(lines_body) if l.strip() == "with st.container():")
-i_comp = next(i for i, l in enumerate(lines_body) if "render_component(ctx, rows, all_rows)" in l)
+i_comp = next(i for i, l in enumerate(lines_body) if "render_component(ctx, rows, all_rows, snap)" in l)
 emitters = ("st.caption", "st.columns", "st.button", "flow_bar(", "show_log(")
 before_slot = [l for l in lines_body[:i_slot] if l.strip().startswith(emitters)]
 outside = [l for l in lines_body[i_slot + 1:i_comp]
@@ -4416,16 +4417,18 @@ def _append_calls(segs):
     # "P28a: modal News..." chứa từ newsButton làm index() khớp nhầm định nghĩa, không khớp call).
     out = []
     for name in ("filterButton", "refreshButton", "queueAudioButton", "newsButton", "ioButton",
-                 "queueButton", "queueMarkPostedButton", "errorsButton", "expandButton", "usageButton", "statsBar"):
+                 "queueButton", "queueMarkPostedButton", "errorsButton", "expandButton", "usageButton",
+                 "otherWsButton", "statsBar"):
         out.append(segs.index("bar.appendChild(" + name + "()"))
     return out
 check("P21d thanh nút đúng thứ tự tìm · lọc (P35a) · nhịp đọc (P21h) · import · ▶ · ⚠ · ✓ hàng đợi · mở rộng · stats; "
       "P27a thêm nút '🎧 Chọn file + giây' (queue audio) trước ioButton; "
       "P28a thêm nút News (globe); P29a thêm nút hạn mức Codex (usage) giữa mở rộng và stats; "
       "P41f thêm nút '✓ Đã đăng hàng đợi' sau ▶ Bắt đầu; "
-      "P41h giữ nút phễu 'Lọc bài' trong bar (chỉ ẩn selectbox NGOÀI grid) "
-      "— 15 bar.appendChild (searchBox + 11 nút + 3 separator + statsBar), không ô chọn tất cả",
-      _p21d_bar.count("bar.appendChild(") == 15
+      "P41h giữ nút phễu 'Lọc bài' trong bar (chỉ ẩn selectbox NGOÀI grid); "
+      "P43a thêm nút workspace khác đang chạy (otherWsButton) cạnh usage, tự ẩn khi không có ai chạy "
+      "— 16 bar.appendChild (searchBox + 12 nút + 3 separator + statsBar), không ô chọn tất cả",
+      _p21d_bar.count("bar.appendChild(") == 16
       and "pickAll" not in _p21d_bar
       and "filterButton" in _p21d_bar
       and _append_calls(_p21d_bar) == sorted(_append_calls(_p21d_bar)))
@@ -7867,7 +7870,100 @@ check("P42c ngân sách chỉ đủ một ảnh: đúng bài ĐẦU có Ảnh B2
       and "Video" not in _p42c_some[_p42c_ids[0]] and "Caption" in _p42c_some[_p42c_ids[1]])
 # --- hết P42c ---
 
-# cleanup test rows
+# --- P43a: theo dõi workspace KHÁC đang chạy — runner đếm theo workspace, sid trùng không lẫn ---
+_p43_hold = threading.Event()
+_p43_seen = []
+
+
+def _p43_exec(event, root):
+    _p43_seen.append((Path(root).name, event.get("id")))
+    _p43_hold.wait(10)
+    return [f"{Path(root).name} {event.get('id')} xong"]
+
+
+def _p43_claim(root, sid, step, busy):
+    name = f"{Path(root)}:{step}"  # mỗi workspace một "bộ" riêng để hai bên chạy được cùng lúc
+    return ("" if name in busy else name), ""
+
+
+def _p43_wait(runner, cond, timeout=8.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cond(runner.snapshot()):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+_p43_ws_a = Path(tempfile.mkdtemp(prefix="p43wsA_"))
+_p43_ws_b = Path(tempfile.mkdtemp(prefix="p43wsB_"))
+_p43_r = gr.Runner(_p43_exec, claim=_p43_claim)
+_p43_r.submit(gr.Job(event={"source": "run_step", "id": "story_001"}, root=_p43_ws_a,
+                     ids=["story_001"], steps=["b1"], name="A · story_001"))
+_p43_ok_run = _p43_wait(_p43_r, lambda s: s["running"])
+_p43_snap_a = _p43_r.snapshot()
+# Cùng id ở workspace khác: trước P43a in_flight() so sid trần nên chặn oan ("đang chờ/chạy")
+_p43_line_b = _p43_r.submit(gr.Job(event={"source": "run_step", "id": "story_001"}, root=_p43_ws_b,
+                                   ids=["story_001"], steps=["b1"], name="B · story_001"))
+check("P43a hai workspace cùng story_001 chạy được CÙNG LÚC (khóa theo workspace, không so sid trần)",
+      _p43_ok_run and "Đã giao" in _p43_line_b
+      and _p43_wait(_p43_r, lambda s: len(s["workspaces"]) == 2
+                    and all(v["running"] for v in s["workspaces"].values())))
+_p43_snap2 = _p43_r.snapshot()
+check("P43a snapshot đếm tiến độ theo TỪNG workspace: mỗi bên 0/1 bài, đang chạy bước của mình",
+      set(_p43_snap2["workspaces"]) == {str(_p43_ws_a), str(_p43_ws_b)}
+      and all(v["total"] == 1 and v["done"] == 0 and v["running"] for v in _p43_snap2["workspaces"].values())
+      and set(_p43_snap2["flow_by_root"]) == {str(_p43_ws_a), str(_p43_ws_b)})
+_p43_rows = [{"id": "story_001", "states": {"b1": "running", "b2": "", "b3": ""}, "b0": "", "b4": ""}]
+check("P43a mark_flow lọc theo workspace: chỉ A chạy thì dòng story_001 của B KHÔNG sáng 'đang chạy'",
+      fbgrid.mark_flow([dict(r) for r in _p43_rows], _p43_snap_a, _p43_ws_b)[0].get("flow") == {}
+      and fbgrid.mark_flow([dict(r) for r in _p43_rows], _p43_snap_a, _p43_ws_a)[0].get("flow") == {"b1": "running"})
+check("P43a danh sách workspace khác cho nút hover: bỏ workspace đang mở, có tên folder + x/y + bước đang chạy",
+      [w["path"] for w in fbgrid.other_workspaces(_p43_snap_a, _p43_ws_b)] == [str(_p43_ws_a)]
+      and [w["path"] for w in fbgrid.other_workspaces(_p43_snap_a, _p43_ws_a)] == []
+      and fbgrid.other_workspaces(_p43_snap_a, _p43_ws_b)[0]["name"] == _p43_ws_a.name
+      and fbgrid.other_workspaces(_p43_snap_a, _p43_ws_b)[0]["total"] == 1)
+_p43_hold.set()
+_p43_done_ok = _p43_wait(_p43_r, lambda s: not s["busy"])
+_p43_final = _p43_r.snapshot()
+_p43_r.stop()
+check("P43a chạy xong thì mỗi workspace tự đếm 1/1 (done riêng, không cộng lẫn)",
+      _p43_done_ok and all(v["done"] == 1 and v["total"] == 1 for v in _p43_final["workspaces"].values()))
+
+# cancel cũng phải theo workspace: rút bài của B không được rút bài cùng tên của A
+_p43_rs = gr.Runner(lambda event, root: [], claim=lambda root, sid, step, busy: ("", ""))  # chờ mãi
+_p43_rs.submit(gr.Job(event={"source": "run_step", "id": "story_001"}, root=_p43_ws_a,
+                      ids=["story_001"], steps=["b1"], name="A"))
+_p43_rs.submit(gr.Job(event={"source": "run_step", "id": "story_001"}, root=_p43_ws_b,
+                      ids=["story_001"], steps=["b1"], name="B"))
+_p43_cut = _p43_rs.cancel(["story_001"], _p43_ws_b)
+_p43_after_cut = _p43_rs.snapshot()
+_p43_rs.stop()
+check("P43a cancel(ids, workspace) chỉ rút việc của workspace đó — việc chờ cùng sid của A còn nguyên",
+      len(_p43_cut) == 1 and "đã rút" in _p43_cut[0]
+      and list(_p43_after_cut["flow_by_root"]) == [str(_p43_ws_a)]
+      and not _p43_after_cut["workspaces"][str(_p43_ws_b)]["busy"])
+_p43_grid_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+check("P43a grid nối đúng: mark_flow/cancel nhận workspace, payload component có other_ws",
+      'mark_flow(cached["all_rows"], snap, ctx.root)' in _p43_grid_src
+      and "RUNNER.cancel(victims, ctx.root)" in _p43_grid_src
+      and "other_ws=other_workspaces(snap or {}, ctx.root)" in _p43_grid_src
+      and "render_component(ctx, rows, all_rows, snap)" in _p43_grid_src)
+check("P43a frontend: nút otherWsButton nằm trên thanh lưới, hover ra thẻ tiến độ, updateBar cập nhật badge "
+      "ở nhánh vá từng ô",
+      "function otherWsButton()" in _p42_fe and "bar.appendChild(otherWsButton())" in _p42_fe
+      and "syncOtherWs();" in _p42_fe.split("function updateBar(")[1].split("\n}")[0]
+      and "other_ws: Array.isArray(args.other_ws)" in _p42_fe
+      and ".newsbtnwrap[hidden] { display:none; }" in _p42_fe)
+_p43_app_src = (Path(__file__).resolve().parent / "app.py").read_text(encoding="utf-8")
+check("P43a trang Tạo bài chốt MỘT root cho cả start_inline lẫn end_inline (đổi workspace giữa chừng "
+      "không để khóa chạy nằm lại workspace cũ)",
+      "grid.start_inline(sid, root)" in _p43_app_src
+      and "grid.end_inline(sid, root)" in _p43_app_src
+      and "root = root if root is not None else stories.current()" in _p43_app_src)
+# --- hết P43a ---
+
+
 c = db.connect()
 c.execute("DELETE FROM providers WHERE name IN ('TestOR','FormTest')")
 c.execute("DELETE FROM presets WHERE name='Du lich'")
