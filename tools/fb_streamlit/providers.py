@@ -627,12 +627,20 @@ def _epoch_local(raw) -> str:
         return ""
 
 
-def _mask_email(raw) -> str:
-    """Email đã che: giữ tối đa 2 ký tự đầu hộp thư — đủ để phân biệt hai tài khoản, không lộ nguyên văn."""
-    local, sep, domain = str(raw or "").partition("@")
-    if not sep or not local:
+def _email_label(raw) -> str:
+    """Email NGUYÊN VĂN của tài khoản — đây là máy của người dùng, anh cần thấy ĐÚNG tài khoản nào.
+
+    P44a: trước đây che kiểu `ki***@example.com` để không lộ hộp thư khi chụp màn hình, nhưng
+    chính người sở hữu máy lại không đọc được tài khoản nào đang chạy. Che hay không là lựa chọn
+    của anh, không phải của tool: giờ hiện đủ.
+
+    Vẫn giữ phép kiểm để màn hình không in ra nhãn vô nghĩa: chuỗi không có `@`, thiếu hộp thư
+    hoặc thiếu domain (claim rác) thì trả "" — nơi gọi sẽ rơi về account id / "chưa có token".
+    """
+    local, sep, domain = str(raw or "").strip().partition("@")
+    if not sep or not local or not domain:
         return ""
-    return f"{local[:2] if len(local) >= 3 else local[:1]}***@{domain}"
+    return f"{local}@{domain}"
 
 
 def _jwt_claims(token) -> dict:
@@ -653,9 +661,9 @@ def codex_identity(home=None) -> dict:
 
     Lý do có mặt: `accountId` mà app-server trả chỉ là một chuỗi hex vô nghĩa với người đọc, còn
     P18f thì CACHED (session log) không kèm id nào cả — nên hai nhà cùng một tài khoản không phân
-    biệt nổi. email đã che + account id + gói nằm trong `id_token` mà CLI tự lưu, đọc offline là đủ.
+    biệt nổi. email + account id + gói nằm trong `id_token` mà CLI tự lưu, đọc offline là đủ.
     File đó cũng chứa token đăng nhập, nhưng hàm này KHÔNG chạm vào chúng: chỉ lấy các claim mô tả
-    tài khoản, và email luôn qua _mask_email trước khi ra màn hình.
+    tài khoản, và email hiện NGUYÊN VĂN (`_email_label`) — P44a: anh cần biết đúng tài khoản nào.
     """
     path = (Path(home) if home else codex_home()) / "auth.json"
     try:
@@ -669,7 +677,7 @@ def codex_identity(home=None) -> dict:
     claims = _jwt_claims(tokens.get("id_token") if isinstance(tokens, dict) else "")
     prof = claims.get("https://api.openai.com/auth")
     prof = prof if isinstance(prof, dict) else {}
-    email = _mask_email(claims.get("email"))
+    email = _email_label(claims.get("email"))
     account_id = str(prof.get("chatgpt_account_id") or "")
     if not account_id and isinstance(tokens, dict):
         account_id = str(tokens.get("account_id") or "")
@@ -961,10 +969,11 @@ def codex_usage_all(providers, timeout: int = USAGE_TIMEOUT, budget: int = USAGE
 
 
 def _usage_account_tag(rec: dict) -> str:
-    """Nhãn đứng sau tên bộ: email ĐÃ CHE là thứ người đọc nhận ra, id hex chỉ là phương án cuối.
+    """Nhãn đứng sau tên bộ: email NGUYÊN VĂN là thứ người đọc nhận ra, id hex chỉ là phương án cuối.
 
-    Hai nhà cùng một email che thì rõ ràng là một tài khoản hơn nhiều so với hai chuỗi `acct-1`,
-    `acct-2` mà không ai đoán được là ai. Home chưa đăng nhập thì nói thẳng là không có token.
+    P44a: hiện đủ hộp thư (trước đây che `ki***@…`). Hai nhà cùng một email thì rõ ràng là một
+    tài khoản hơn nhiều so với hai chuỗi `acct-1`, `acct-2` mà không ai đoán được là ai. Home chưa
+    đăng nhập thì nói thẳng là không có token.
     """
     identity = rec.get("identity") or {}
     email = str(identity.get("email") or "")
@@ -984,8 +993,8 @@ def codex_usage_all_text(result: dict) -> str:
         return ("Chưa có bộ nào loại 'Codex CLI (local)' trong Cấu hình ▸ Providers, nên không có tài "
                 "khoản Codex nào để xem hạn mức.")
     lines = [f"Hạn mức Codex — {len(accounts)} tài khoản CLI thật, đọc từ máy cho {n_providers} bộ codex_cli "
-             "(chỉ đọc: không gửi prompt, không đổi tài khoản, không API tính phí nào được gọi). Email che "
-             "ở đầu mỗi khối là email trong token đăng nhập của chính home đó:"]
+             "(chỉ đọc: không gửi prompt, không đổi tài khoản, không API tính phí nào được gọi). Email "
+             "nguyên văn ở đầu mỗi khối là email trong token đăng nhập của chính home đó:"]
     for i, rec in enumerate(accounts, start=1):
         names = " · ".join(rec.get("providers") or [])
         lines.append("")
@@ -1048,10 +1057,11 @@ def _grid_account_view(rec: dict) -> dict:
 
 
 def _grid_account_who(rec: dict) -> str:
-    """Tên tài khoản cho icon: email che (P18i) + TÊN BỘ CODEX (CODEX1/CODEX2…).
+    """Tên tài khoản cho icon: email NGUYÊN VĂN + TÊN BỘ CODEX (CODEX1/CODEX2…).
 
     Hai home cùng một email (một tài khoản, hai nhà CLI) phải PHÂN BIỆT được trên grid bằng
-    tên bộ đứng sau, nếu không anh chỉ thấy một dòng "ke***@gmail.com" không biết nhà nào chạm trần.
+    tên bộ đứng sau, nếu không anh chỉ thấy một dòng "kit.tran.dz@example.com" không biết nhà
+    nào chạm trần. P44a: hết che `ki***@…` — thẻ hover hiện đủ để biết đang chạy bằng tài khoản nào.
     """
     providers = " · ".join(rec.get("providers") or [])
     identity = rec.get("identity") or {}
