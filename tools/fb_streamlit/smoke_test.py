@@ -3106,6 +3106,9 @@ _p8ctx = ga.build_ctx(p8_conn, p8_root)
 p8_cap = {}  # props thật gửi sang component của RIÊNG app dưới đây (cap ở trên thuộc app khác)
 fbgrid.component = lambda: (lambda **kw: p8_cap.update(kw))
 
+# P43a: một workspace KHÁC đang chạy (stub) — chỉ để đo payload thật tới component, không đụng đĩa.
+_P43_OTHER_WS = "Z:\\workspace_khac"
+
 
 def _counting_rows_for(ctx):
     scan_count["n"] += 1
@@ -3127,7 +3130,12 @@ class _BusyRunner:
 
     def snapshot(self):
         return dict(self.real.snapshot(), busy=True, flow={p8_show_sid: {"b1": "running"}},
-                    flow_by_root={str(p8_root): {p8_show_sid: {"b1": "running"}}})
+                    flow_by_root={str(p8_root): {p8_show_sid: {"b1": "running"}}},
+                    # P43a: thêm một workspace KHÁC đang chạy để đo payload thật đi tới component
+                    workspaces={str(p8_root): {"busy": True, "running": ["ws này · B1"], "waiting": 0,
+                                               "done": 1, "total": 2},
+                                _P43_OTHER_WS: {"busy": True, "running": ["story_009 · B3 SEO"],
+                                                "waiting": 3, "done": 4, "total": 9}})
 
     def new_lines(self, seen):
         return self.real.new_lines(seen)
@@ -3179,6 +3187,14 @@ at_p8.run()
 check("P8iii luồng nền đang chạy thì mỗi tick (2s) đều đọc mới nên ô đổi màu gần lúc bài xong",
       not at_p8.exception and scan_count["n"] == 1
       and any((r.get("flow") or {}).get("b1") == "running" for r in (p8_cap.get("rows") or [])))
+check("P43a app thật (Streamlit) gửi kèm other_ws trong payload component: workspace khác đang chạy có "
+      "tên folder + x/y + việc chờ + bước đang chạy, còn workspace ĐANG MỞ không nằm trong danh sách",
+      [w.get("path") for w in (p8_cap.get("other_ws") or [])] == [_P43_OTHER_WS]
+      and (p8_cap["other_ws"][0].get("name"), p8_cap["other_ws"][0].get("done"),
+           p8_cap["other_ws"][0].get("total"), p8_cap["other_ws"][0].get("waiting"))
+      == ("workspace_khac", 4, 9, 3)
+      and p8_cap["other_ws"][0].get("running") == ["story_009 · B3 SEO"]
+      and str(p8_root) not in [w.get("path") for w in p8_cap.get("other_ws") or []])
 fbgrid.RUNNER = _real_runner
 stories.set_step_state(p8_root, p8_show_sid, "b1", stories.DONE)  # trả lại folder như cũ cho các block sau
 
