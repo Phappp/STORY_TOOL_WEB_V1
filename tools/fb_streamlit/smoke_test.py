@@ -4432,7 +4432,7 @@ def _append_calls(segs):
     # thứ tự bar.appendChild(X()) trong bar — so theo CHỖ GỌI, không theo định nghĩa hàm (chú thích
     # "P28a: modal News..." chứa từ newsButton làm index() khớp nhầm định nghĩa, không khớp call).
     out = []
-    for name in ("filterButton", "refreshButton", "queueAudioButton", "newsButton", "ioButton",
+    for name in ("wsSwitchButton", "filterButton", "refreshButton", "queueAudioButton", "newsButton", "ioButton",
                  "queueButton", "queueMarkPostedButton", "errorsButton", "expandButton", "usageButton",
                  "otherWsButton", "statsBar"):
         out.append(segs.index("bar.appendChild(" + name + "()"))
@@ -4443,8 +4443,8 @@ check("P21d thanh nút đúng thứ tự tìm · lọc (P35a) · nhịp đọc (
       "P41f thêm nút '✓ Đã đăng hàng đợi' sau ▶ Bắt đầu; "
       "P41h giữ nút phễu 'Lọc bài' trong bar (chỉ ẩn selectbox NGOÀI grid); "
       "P43a thêm nút workspace khác đang chạy (otherWsButton) cạnh usage, tự ẩn khi không có ai chạy "
-      "— 16 bar.appendChild (searchBox + 12 nút + 3 separator + statsBar), không ô chọn tất cả",
-      _p21d_bar.count("bar.appendChild(") == 16
+      "P44b thêm nút đổi workspace (wsSwitchButton) ở đầu thanh — 18 bar.appendChild (wsSwitchButton + searchBox + 12 nút + 4 separator + statsBar), không ô chọn tất cả",
+      _p21d_bar.count("bar.appendChild(") == 18
       and "pickAll" not in _p21d_bar
       and "filterButton" in _p21d_bar
       and _append_calls(_p21d_bar) == sorted(_append_calls(_p21d_bar)))
@@ -7059,6 +7059,103 @@ finally:
     shutil.rmtree(_p25c_box, ignore_errors=True)
 # --- hết P25c ---
 
+# --- P45a: ghép B4 từ ẢNH THAM CHIẾU B0 (refs[0]) — lựa chọn nguồn ảnh trong ô "🎧 Chọn file + giây" ---
+_p45_box = Path(tempfile.mkdtemp(prefix="fbsmoke_p45_"))
+_p45_dd, _p45_rec = paths.data_dir, stories._recents_path
+_p45_setup_real, _p45_merge_real = ga.audio_setup, audio.merge
+paths.data_dir = lambda: _p45_box / "DATA"
+stories._recents_path = lambda: _p45_box / "workspaces.json"
+_p45_root = stories.set_current(stories.validate_root(_p45_box / "ws_p45"))
+_p45_ctx = ga.Ctx(root=_p45_root, providers={}, presets={}, defaults={})
+_p45_clip = _p45_box / "mot.mp3"
+_p45_clip.write_bytes(b"ID3fake")
+_p45_used = []
+
+
+def _p45_setup(root):
+    return {"ffmpeg": {"ffmpeg": "ffmpeg.exe", "ffprobe": "", "source": "PATH", "stored": "",
+                       "found": True},
+            "collection": "Nhac P45", "seconds": 30, "files": [_p45_clip], "missing": False}
+
+
+def _p45_merge(image, clip, out, secs):
+    _p45_used.append(str(image))
+    Path(out).write_bytes(b"VIDEO-" + Path(image).name.encode())
+    return 0.1
+
+
+ga.audio_setup = _p45_setup
+audio.merge = _p45_merge
+try:
+    _p45_s = stories.create_story(_p45_root, topic="b0 merge")
+    _p45_sid = _p45_s["id"]
+    _p45_folder = _p45_s["folder"]
+    (_p45_folder / "image.png").write_bytes(b"png B2")
+    _p45_refs = _p45_folder / "refs"
+    _p45_refs.mkdir()
+    (_p45_refs / "ref_1.png").write_bytes(b"ref 1")
+    (_p45_refs / "ref_2.png").write_bytes(b"ref 2")
+    _p45_lines = ga.merge_b4(_p45_ctx, _p45_sid, image_from="b0", seconds=45)
+    _p45_b4 = dict(stories.load_story(_p45_root, _p45_sid).get("b4") or {})
+    check("P45a ghép từ ảnh B0: LUÔN lấy ảnh ĐẦU TIÊN trong refs/ (ref_1.png, đúng ảnh tab B0 hiện) "
+          "thay vì image.png của B2; video mang method RIÊNG 'ghép từ ảnh B0' + audio_from = tên ảnh B0",
+          _p45_used == [str(_p45_refs / "ref_1.png")]
+          and _p45_b4.get("method") == ga.B0_MERGE_METHOD
+          and _p45_b4.get("audio_from") == "ref_1.png"
+          and "ref_1.png" in _p45_lines[0])
+
+    check("P45a hàng loạt (⚡/▶) KHÔNG đè video ghép từ ảnh B0 — lý do riêng, nói đúng nguồn ảnh",
+          ga.b4_skip_reason(_p45_root, _p45_sid)
+          == "video ghép từ ảnh B0 `video.mp4` — hàng loạt không đè")
+
+    _p45_arm = ga.merge_b4(_p45_ctx, _p45_sid, image_from="b0")[0]
+    _p45_force = ga.merge_b4(_p45_ctx, _p45_sid, image_from="b0", force=True)[0]
+    check("P45a video ghép từ B0 cũng là thứ phải bấm HAI lần mới đè: lần đầu chỉ hỏi xác nhận "
+          "(nói rõ 'GHÉP TỪ ẢNH B0'), lần sau (force) mới ghi đè",
+          "GHÉP TỪ ẢNH B0" in _p45_arm and "Bấm lại lần nữa" in _p45_arm
+          and "đã ghi đè" in _p45_force
+          and len([p for p in _p45_folder.iterdir() if p.name.startswith("video")]) == 1)
+
+    _p45_noref = stories.create_story(_p45_root, topic="b0 khong ref")["id"]
+    (_p45_root / _p45_noref / "image.png").write_bytes(b"png B2")
+    _p45_err = ga.merge_b4(_p45_ctx, _p45_noref, image_from="b0")[0]
+    check("P45a bài chưa có ảnh tham chiếu B0 thì TỪ CHỐI THẲNG, chỉ đúng chỗ cần làm "
+          "(chạy B0 trích link / thêm ảnh tham chiếu) — không âm thầm quay về ảnh B2",
+          "refs/ref_" in _p45_err and "chưa có ảnh tham chiếu B0" in _p45_err
+          and not (_p45_root / _p45_noref / "video.mp4").exists())
+
+    _p45_njob = gr.Job(event={}, root=_p45_root, ids=[_p45_sid], steps=list(gr.ALL_STEPS),
+                       b4=ga.b4_plan(_p45_root, [_p45_sid]))
+    _p45_notes = gr.b4_notes(_p45_njob)
+    check("P45a log hàng loạt gộp video ghép từ B0 vào CÙNG nhóm 'không đụng' với video tải tay "
+          "(cùng lời khuyên mở bài bấm hai lần) — không lẫn vào nhóm 'bỏ qua' chung",
+          len(_p45_notes) == 1 and _p45_sid in _p45_notes[0]
+          and "ghép từ ảnh B0" in _p45_notes[0] and "hai lần" in _p45_notes[0])
+
+    _p45_ga_src = (Path(__file__).resolve().parent / "grid_actions.py").read_text(encoding="utf-8")
+    _p45_grid_src = (Path(__file__).resolve().parent / "grid.py").read_text(encoding="utf-8")
+    _p45_fe = (Path(__file__).resolve().parent / "grid_frontend" / "index.html").read_text(encoding="utf-8")
+    check("P45a ba tầng khớp nhau: event `b4_merge` mang `image_from`; grid.py đẩy `b0ref`/`b0refs` + "
+          "`b4setup` và `b4over` nhận CẢ method B0; frontend gửi `image_from` từ ô chọn ảnh trong "
+          "panel “🎧 Chọn file + giây”",
+          'image_from=str(event.get("image_from") or "")' in _p45_ga_src
+          and 'image_from: imgSel.value' in _p45_fe
+          and '"b0ref": b0refs[0].name if b0refs else ""' in _p45_grid_src
+          and '"b0refs": len(b0refs)' in _p45_grid_src
+          and '"b4setup": aud_ok' in _p45_grid_src
+          and "in (ga.MANUAL_METHOD, ga.B0_MERGE_METHOD)" in _p45_grid_src
+          and "B0 · refs/" in _p45_fe
+          and "chưa có ảnh tham chiếu" in _p45_fe
+          and "b4over" in _p45_fe and "b0refs" in _p45_fe)
+finally:
+    paths.data_dir = _p45_dd
+    stories._recents_path = _p45_rec
+    ga.audio_setup = _p45_setup_real
+    audio.merge = _p45_merge_real
+    shutil.rmtree(_p45_box, ignore_errors=True)
+# --- hết P45a ---
+
+
 # --- P26c: modal B4 chọn RIÊNG file tiếng + giây cho TỪNG bài (nút "🎧 Chọn file + giây") ---
 _p26c_box = Path(tempfile.mkdtemp(prefix="fbsmoke_p26c_"))
 _p26c_dd, _p26c_rec = paths.data_dir, stories._recents_path
@@ -7409,7 +7506,7 @@ check("P41a web_publisher báo stage THẬT qua on_stage ở publish_one/republi
 
 check("P41a grid_actions: webpub_start/login/republish giao runner nền rồi trả lời ngay; "
       "có webpub_cancel; grid.py đẩy news_job mỗi tick + ép đọc lại folder khi runner đang ghi",
-      'nr.RUNNER.submit(ids, ctx.root, site, kind="publish")' in _p41_ga
+      'nr.RUNNER.submit(ids, ctx.root, site, kind="publish", headed=headed)' in _p41_ga
       and "nr.RUNNER.login_async(ctx.root, site)" in _p41_ga
       and "nr.RUNNER.cancel()" in _p41_ga
       and 'elif source == "webpub_cancel":' in _p41_ga
@@ -7453,7 +7550,7 @@ try:
     stories.update_story(_p41_box, _p41_a, queued=True)
     stories.update_story(_p41_box, _p41_b, queued=True)
 
-    def _p41_exec(root, sid, site, kind, on_stage):
+    def _p41_exec(root, sid, site, kind, on_stage, headed=False):
         on_stage("Mốc thật", 55)
         return "https://news.test/" + sid
 
@@ -7473,7 +7570,7 @@ try:
     _p41_started = threading.Event()
     _p41_release = threading.Event()
 
-    def _p41_slow(root, sid, site, kind, on_stage):
+    def _p41_slow(root, sid, site, kind, on_stage, headed=False):
         _p41_started.set()
         _p41_release.wait(3)
         return "u"

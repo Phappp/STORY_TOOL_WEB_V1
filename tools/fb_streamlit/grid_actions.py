@@ -42,6 +42,9 @@ PREFS_FILE = ".fbtool-grid-prefs.json"
 PROV_NONE = ""  # để trống nghĩa là bài này không chọn riêng, theo workspace/preset
 B0_PREVIEW_FIELD = "B0 preview"
 MANUAL_METHOD = "thủ công"  # method ghi vào block khi anh sửa chữ tay trong modal — B0 phân biệt với og-tags/yt-dlp, B1/B3 phân biệt với chữ AI
+# P45a: video dựng tay từ ẢNH THAM CHIẾU B0 (refs/ref_*), không phải ảnh B2. Khác `audio.MERGE_METHOD`
+# để ⚡/▶ nhận ra đây là bản anh cố ý chọn nguồn ảnh — hàng loạt không đè, riêng lẻ phải xác nhận.
+B0_MERGE_METHOD = "ghép từ ảnh B0"
 B0_UPLOAD_MAX = 4 * 1024 * 1024  # ảnh tay gửi base64 qua event, để message từ component không phình vô hạn
 REF_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 # B4 video: mục native phía trên lưới vẫn nhận tới 200 MB vì st.file_uploader đưa bytes thẳng
@@ -315,6 +318,16 @@ def audio_setup(root: Path) -> dict:
             "seconds": stored["seconds"], "files": files, "missing": missing}
 
 
+def audio_ok(setup: dict) -> bool:
+    """Phần ÂM THANH của việc ghép đã sẵn sàng chưa (ffmpeg + bộ sưu tập + có file).
+
+    Tách khỏi `audio_label` để modal B4 biết ô chọn ảnh B0 có dùng được không KỂ CẢ khi bài chưa
+    có ảnh B2 — nhãn cũ gộp "chưa có ảnh B2" vào cùng một cờ nên không nói được điều đó.
+    """
+    return bool(setup["ffmpeg"]["found"] and setup["collection"]
+                and not setup["missing"] and setup["files"])
+
+
 def audio_label(setup: dict, sid: str, has_image: bool) -> tuple[str, bool]:
     """Chữ trên nút 🎬 + nó CÓ chạy được không — nhãn phải đọc đúng trạng thái thật, không hứa suông."""
     if not setup["ffmpeg"]["found"]:
@@ -330,13 +343,18 @@ def audio_label(setup: dict, sid: str, has_image: bool) -> tuple[str, bool]:
     return f"{audio.pick(setup['collection'], sid, setup['files']).name} · {setup['seconds']} s", True
 
 
-def merge_b4(ctx: Ctx, sid: str, force: bool = False, audio_name: str = "", seconds: int = 0) -> list[str]:
-    """Ghép `image.png` của chính bài này + một file tiếng trong bộ của workspace thành `video.mp4`.
+def merge_b4(ctx: Ctx, sid: str, force: bool = False, audio_name: str = "", seconds: int = 0,
+             image_from: str = "") -> list[str]:
+    """Ghép ảnh của chính bài này + một file tiếng trong bộ của workspace thành `video.mp4`.
 
     Event CHỈ mang id bài (kèm cùng lắm TÊN FILE + số giây để modal B4 chọn riêng từng bài — tên
     phải có thật trong bộ, giây bị kẹp trong AUDIO_SECONDS_MIN..MAX): bộ nào lấy từ prefs workspace,
     file mặc định lấy theo id bài (`audio.pick`, tất định), đường dẫn ffmpeg lấy từ PATH hoặc Cấu
     hình ▸ Âm thanh. Không có chỗ nào để trình duyệt gửi một đường dẫn xuống đây.
+
+    P45a: `image_from == "b0"` thì ảnh nguồn là ẢNH THAM CHIẾU ĐẦU TIÊN trong `refs/` (đúng ảnh tab
+    B0 đang hiện), không phải `image.png` của B2. Video làm ra mang `B0_MERGE_METHOD` để ⚡/▶ coi nó
+    như video anh tự chọn nguồn — hàng loạt không đè, riêng lẻ phải bấm xác nhận.
     """
     setup = audio_setup(ctx.root)
     info = setup["ffmpeg"]
@@ -372,22 +390,33 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False, audio_name: str = "", seco
     elif not secs:
         secs = int(setup["seconds"])
     secs = min(AUDIO_SECONDS_MAX, max(AUDIO_SECONDS_MIN, secs))
-    image = stories.image_of(ctx.root, sid)
-    if image is None:
-        return [f"{sid}: chưa ghép được — bài này chưa có ảnh B2 (`image.png` trong folder bài)."]
+    from_b0 = str(image_from or "") == "b0"
+    if from_b0:
+        # P45a: ẢNH ĐẦU TIÊN trong refs/ — đúng ảnh tab B0 đang hiện, và là ảnh sẽ vào video.
+        refs = stories.refs_of(ctx.root, sid)
+        if not refs:
+            return [f"{sid}: chưa ghép được — bài này chưa có ảnh tham chiếu B0 (`refs/ref_*`). "
+                    "Chạy B0 trích từ link hoặc thêm ảnh tham chiếu trước."]
+        image = refs[0]
+    else:
+        image = stories.image_of(ctx.root, sid)
+        if image is None:
+            return [f"{sid}: chưa ghép được — bài này chưa có ảnh B2 (`image.png` trong folder bài)."]
     clip = next(f for f in setup["files"] if f.name == clip_name)
     old = stories.video_file(_folder(story, ctx.root, sid))
     method = str((story.get("b4") or {}).get("method") or "")
-    if old is not None and method == MANUAL_METHOD and not force:
-        # Video anh TẢI TAY là thứ không suy ra lại được, còn bản ghép thì làm lại được trong 5 giây:
-        # nên đè nó phải là một cú bấm có chủ ý, không phải cái click đơn tình cờ.
-        return [f"{sid}: đã có video ANH TẢI TAY (`{old.name}`, "
+    if old is not None and method in (MANUAL_METHOD, B0_MERGE_METHOD) and not force:
+        # Video anh TẢI TAY (hoặc tự chọn nguồn ảnh B0) là thứ không suy ra lại được, còn bản ghép thì
+        # làm lại được trong 5 giây: nên đè nó phải là một cú bấm có chủ ý, không phải click tình cờ.
+        what = ("video ANH TẢI TAY" if method == MANUAL_METHOD else "video GHÉP TỪ ẢNH B0")
+        return [f"{sid}: đã có {what} (`{old.name}`, "
                 f"{round(old.stat().st_size / 1048576, 1)} MB) — bản ghép sẽ GHI ĐÉ. Bấm lại lần nữa để xác nhận."]
     tmp = audio.merge_tmp_dir() / f"{Path(str(sid)).name}-{int(time.time())}.mp4"
     try:
         spent = audio.merge(image, clip, tmp, secs)
         with open(tmp, "rb") as fh:
-            stories.save_video(ctx.root, sid, fh, suffix=".mp4", method=audio.MERGE_METHOD)
+            stories.save_video(ctx.root, sid, fh, suffix=".mp4",
+                               method=B0_MERGE_METHOD if from_b0 else audio.MERGE_METHOD)
     except (audio.AudioError, OSError, stories.WorkspaceError) as exc:
         return [f"{sid}: ghép hỏng — {exc}"]
     finally:
@@ -402,10 +431,16 @@ def merge_b4(ctx: Ctx, sid: str, force: bool = False, audio_name: str = "", seco
     block.update({"audio": clip_name, "audio_collection": setup["collection"],
                   "audio_seconds": secs, "audio_from": str(image.name)})
     stories.update_story(ctx.root, sid, b4=block)
-    over = f" · đã ghi đè video tải tay `{old.name}`" if old is not None and force else ""
+    if old is not None and force:
+        over = (f" · đã ghi đè video tải tay `{old.name}`" if method == MANUAL_METHOD
+                else f" · đã ghi đè video ghép từ ảnh B0 `{old.name}`")
+    else:
+        over = ""
+    src_note = f" (từ ảnh B0 `refs/{image.name}`)" if from_b0 else ""
     return [f"{sid}: 🎬 đã ghép `{image.name}` + “{clip_name}” ({secs} s, bộ "
             f"“{setup['collection']}”) → `{block.get('file')}` · "
-            f"{round(float(block.get('bytes') or 0) / 1048576, 1)} MB · ffmpeg {round(spent, 1)} s{over}"]
+            f"{round(float(block.get('bytes') or 0) / 1048576, 1)} MB · ffmpeg {round(spent, 1)} s"
+            f"{src_note}{over}"]
 
 
 def b4_queue_audio(ctx: Ctx, audio_name: str, seconds: int) -> list[str]:
@@ -483,8 +518,11 @@ def b4_skip_reason(root: Path, sid: str, setup: dict | None = None) -> str:
     old = stories.video_file(_folder(story, root, sid))
     if old is None:
         return ""
-    if str((story.get("b4") or {}).get("method") or "") == MANUAL_METHOD:
+    method = str((story.get("b4") or {}).get("method") or "")
+    if method == MANUAL_METHOD:
         return f"bài đã có video ANH TẢI TAY `{old.name}` — hàng loạt không đè"
+    if method == B0_MERGE_METHOD:
+        return f"video ghép từ ảnh B0 `{old.name}` — hàng loạt không đè"
     return f"bài đã có video `{old.name}` (xanh lá)"
 
 
@@ -2289,9 +2327,11 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
                 secs = int(event.get("seconds") or 0)
             except (TypeError, ValueError):
                 secs = 0
+            # P45a: `image_from == "b0"` = ghép từ ảnh tham chiếu B0 đầu tiên thay vì ảnh B2.
             out.lines, out.touched = merge_b4(ctx, sid, force=bool(event.get("force")),
                                               audio_name=str(event.get("audio") or ""),
-                                              seconds=secs), [sid]
+                                              seconds=secs,
+                                              image_from=str(event.get("image_from") or "")), [sid]
         elif source == "b4_link_save":
             # P18d: tab B4 trong modal chỉ NHẬP LINK — bytes video vẫn đi widget native, không qua iframe.
             url = clean_url(event.get("value"))
@@ -2351,6 +2391,7 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             import news_runner as nr
             import web_publisher as wp
             site = str(event.get("site") or wp.DEFAULT_SITE)
+            headed = bool(event.get("headed"))
             raw = [str(i) for i in (event.get("ids") or []) if str(i)]
             queued = set(_queued_ids(ctx.root))
             ids = [i for i in raw if i in queued]
@@ -2358,7 +2399,7 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             if not ids:
                 out.lines = ["Không có bài nào ĐANG TRONG HÀNG ĐỢI để đăng."]
             else:
-                line = nr.RUNNER.submit(ids, ctx.root, site, kind="publish")
+                line = nr.RUNNER.submit(ids, ctx.root, site, kind="publish", headed=headed)
                 out.lines = [line]
                 if dropped:
                     out.lines.append(f"Bỏ {dropped} bài không còn trong hàng đợi.")
@@ -2368,11 +2409,12 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             import news_runner as nr
             import web_publisher as wp
             site = str(event.get("site") or wp.DEFAULT_SITE)
+            headed = bool(event.get("headed"))
             pub_id = str(event.get("id") or sid)
             if pub_id not in set(_queued_ids(ctx.root)):
                 out.lines = [f"{pub_id}: không còn trong hàng đợi — không đăng lại."]
             else:
-                line = nr.RUNNER.submit([pub_id], ctx.root, site, kind="republish")
+                line = nr.RUNNER.submit([pub_id], ctx.root, site, kind="republish", headed=headed)
                 out.lines = [line]
                 out.news = {"notice": line}
         elif source in ("webpub_retry", "webpub_reconcile", "webpub_new_post"):
@@ -2380,6 +2422,7 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             import news_runner as nr
             import web_publisher as wp
             site = str(event.get("site") or wp.DEFAULT_SITE)
+            headed = bool(event.get("headed"))
             raw = [str(i) for i in (event.get("ids") or []) if str(i)]
             queued = set(_queued_ids(ctx.root))
             ids = [i for i in raw if i in queued]
@@ -2390,7 +2433,7 @@ def apply_event(ctx: Ctx, event, on_batch=None) -> Outcome:
             if not ids:
                 out.lines = [f"Không có bài nào ĐANG TRONG HÀNG ĐỢI để {label}."]
             else:
-                line = nr.RUNNER.submit(ids, ctx.root, site, kind=kind)
+                line = nr.RUNNER.submit(ids, ctx.root, site, kind=kind, headed=headed)
                 out.lines = [line]
                 out.news = {"notice": line}
         elif source == "webpub_link":

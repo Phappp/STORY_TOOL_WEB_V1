@@ -517,7 +517,8 @@ def _ids_text(ids: list[str], cap: int = 6) -> str:
 
 
 def b4_notes(job: Job) -> list[str]:
-    """B4 bị bỏ ở bài nào và VÌ SAO — nhất là video anh tải tay, thứ hàng loạt không được đè.
+    """B4 bị bỏ ở bài nào và VÌ SAO — nhất là video anh tải tay hoặc tự chọn nguồn ảnh B0,
+    thứ hàng loạt không được đè.
 
     In sau dòng "Đã giao cho luồng nền" của chính việc đó, gộp theo lý do để 150 bài cũng chỉ
     vài dòng. Bài ghép được (lý do "") không nhắc tới.
@@ -525,11 +526,14 @@ def b4_notes(job: Job) -> list[str]:
     skip = {sid: why for sid, why in (job.b4 or {}).items() if why}
     if not skip:
         return []
-    manual = [sid for sid, why in skip.items() if "TẢI TAY" in why]
+    # P45a: video ghép từ ảnh B0 cũng là lựa chọn CỐ Ý của anh -> cùng nhóm "không đụng" với video
+    # tải tay, cùng lời khuyên (mở bài, bấm ghép hai lần).
+    manual = [sid for sid, why in skip.items()
+              if "TẢI TAY" in why or "ghép từ ảnh B0" in why]
     lines = []
     if manual:
-        lines.append(f"🎬 B4 không đụng video tải tay ({len(manual)} bài): {_ids_text(manual)} "
-                     "— muốn ghép đè thì mở bài, bấm 🎬 hai lần.")
+        lines.append(f"🎬 B4 không đụng video tải tay / ghép từ ảnh B0 ({len(manual)} bài): "
+                     f"{_ids_text(manual)} — muốn ghép đè thì mở bài, bấm 🎬 hai lần.")
     groups: dict[str, list[str]] = {}
     for sid, why in skip.items():
         if sid not in manual:

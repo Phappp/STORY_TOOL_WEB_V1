@@ -30,6 +30,17 @@
   .bar { display:flex; gap:6px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border); background:var(--header); flex-wrap:wrap; }
   .bar .count { color:var(--muted); margin-left:auto; font-size:12px; }
   .bar-sep { width:1px; height:18px; background:var(--border); margin:0 4px; flex-shrink:0; align-self:center; opacity:.7; }
+  /* P44b: nút workspace trên thanh lưới — icon + TÊN folder (đang mở cái gì phải đọc được, không chỉ
+     một icon câm); bấm là mở danh sách workspace gần đây. */
+  .bar .wsbtn { display:inline-flex; align-items:center; gap:6px; max-width:250px; }
+  .bar .wsbtn svg.ic { width:14px; height:14px; flex:0 0 auto; }
+  .bar .wsname { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; max-width:210px; }
+  .menu button.on { color:var(--accent); }
+  .menu .wshead { font-size:11px; color:var(--muted); padding:2px 8px 5px; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; }
+  .menu .wsnote { font-size:11px; color:var(--missing-t); padding:2px 8px 5px; white-space:normal; max-width:420px; }
+  .menu .wspath { font-size:10px; color:var(--text-3); padding:0 8px 4px; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; max-width:420px; }
   .stat { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:650;
     background:var(--pending); color:var(--pending-t); border:1px solid var(--pending-b); }
   .stat.waiting { background:var(--pending); color:var(--pending-t); border-color:var(--pending-b); }
@@ -146,6 +157,10 @@
   .nbad { color:var(--error-t); font-size:11px; }
   .nconfirm { padding:7px 9px; border-radius:6px; background:#3a3116; border:1px solid #c9a24a;
     color:#ffd98a; font-size:11px; display:flex; flex-direction:column; gap:6px; }
+  /* P44c: tùy chọn hiện/ẩn trình duyệt trong modal News */
+  .nopt { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--muted);
+    cursor:pointer; padding:2px 0; }
+  .nopt input[type=checkbox] { width:13px; height:13px; accent-color:var(--accent); flex:0 0 auto; }
   .scroll { max-height:520px; overflow:auto; scrollbar-color:#3b4c63 var(--bg); }
   /* chế độ mở rộng: iframe được xin cao bằng vùng đọc của trang nên fixed = kín cửa sổ */
   .wrap.expanded { position:fixed; inset:0; border-radius:0; z-index:20; display:flex; flex-direction:column; }
@@ -2084,6 +2099,11 @@ function mergeBox(row) {
   const label = String(row.b4audio || "—");
   const ready = !!row.b4ready;
   const over = !!row.b4over;
+  // P45a: nguồn ảnh cho ô ghép — B2 có ảnh chưa, B0 có ảnh tham chiếu chưa (ảnh 1 trong refs/).
+  const refName = String(row.b0ref || "");
+  const hasB0 = Number(row.b0refs || 0) > 0 && !!refName;
+  const hasB2 = !!row.image;
+  const audOk = row.b4setup === undefined ? ready : !!row.b4setup;  // server cũ chưa có b4setup -> như trước
   const flow = flowNote(row, "b4");
   const b = button("🎬 Ghép ảnh + tiếng · " + label,
     ready ? ("Làm `video.mp4` từ `image.png` của " + row.id + " + “" + label
@@ -2096,8 +2116,8 @@ function mergeBox(row) {
         // Cú thứ nhất CHỈ arms: video tải tay là thứ không suy ra lại được nên nó phải chết vì một
         // cú bấm CÓ CHỦ Ý. Arm tại chỗ, không xin Python làm gì — và repaint là mất arm (an toàn).
         bb.dataset.arm = "1";
-        bb.textContent = "⚠ Bấm lần nữa để ghi đè video bạn đã tải tay";
-        bb.title = "Bài này đã có “" + String(row.b4meta) + "” do bạn tải lên. Bấm lại để xác nhận ghi đè.";
+        bb.textContent = "⚠ Bấm lần nữa để ghi đè video hiện có";
+        bb.title = "Bài này đã có “" + String(row.b4meta) + "” (bạn tải tay hoặc ghép từ ảnh B0). Bấm lại để xác nhận ghi đè.";
         return;
       }
       bb.disabled = true;  // nút trong modal không bị markSent khóa -> tự khóa tới khi vẽ lại
@@ -2111,16 +2131,37 @@ function mergeBox(row) {
   box.appendChild(b);
   // P26c: MỘT nút mở ô chọn RIÊNG cho bài này — file nào + bao nhiêu giây, chọn xong bấm GHÉP ngay
   // trong ô. Event chỉ gửi TÊN FILE + con số (server ghép đường dẫn), chưa bao giờ là đường dẫn.
+  const chooserOk = audOk && (hasB2 || hasB0);
   const chooser = button("🎧 Chọn file + giây",
-    ready ? ("Chọn file tiếng KHÁC cho riêng " + row.id + " và số giây (thay vì file theo id bài) — "
-      + "chọn xong bấm GHÉP trong ô mở ra; chọn này được nhớ cho các lần ⚡/▶ sau của bài")
-      : "Không ghép được: " + label + " — xem Cấu hình ▸ Âm thanh",
+    chooserOk ? ("Chọn ẢNH nguồn (B2 `image.png` hoặc B0 `refs/`) + file tiếng + số giây cho riêng "
+      + row.id + " — chọn xong bấm GHÉP trong ô mở ra; chọn file tiếng được nhớ cho các lần ⚡/▶ sau của bài")
+      : (!audOk ? ("Không ghép được: " + label + " — xem Cấu hình ▸ Âm thanh")
+        : ("Không ghép được: bài này chưa có ảnh B2 lẫn ảnh tham chiếu B0")),
     () => {
       const old = box.querySelector(".audpick");
       if (old) { old.remove(); return; }
       const panel = el("div", "audpick");
       panel.appendChild(el("div", "muted", "Riêng " + row.id + " — không đổi cài đặt của workspace."));
       const files = Array.isArray(MODEL.audio.files) ? MODEL.audio.files : [];
+      // P45a: nguồn ẢNH — B2 (`image.png`, mặc định) hoặc B0 (ảnh tham chiếu ĐẦU TIÊN trong refs/,
+      // đúng ảnh tab B0 đang hiện). Chọn B0 ghi video bằng method riêng -> hàng loạt không đè.
+      const srcRow = el("div", "audrow");
+      srcRow.appendChild(el("span", "muted", "Ảnh"));
+      const imgSel = document.createElement("select");
+      imgSel.className = "prov";
+      const b2opt = el("option", null, hasB2 ? "B2 · image.png" : "B2 · (bài này chưa có ảnh B2)");
+      b2opt.value = "b2";
+      if (!hasB2) b2opt.disabled = true;
+      imgSel.appendChild(b2opt);
+      const b0opt = el("option", null, hasB0
+        ? ("B0 · refs/" + refName + (Number(row.b0refs) > 1 ? " (ảnh 1/" + Number(row.b0refs) + ")" : ""))
+        : "B0 · (bài này chưa có ảnh tham chiếu)");
+      b0opt.value = "b0";
+      if (!hasB0) b0opt.disabled = true;
+      imgSel.appendChild(b0opt);
+      imgSel.value = hasB2 ? "b2" : (hasB0 ? "b0" : "b2");
+      srcRow.appendChild(imgSel);
+      panel.appendChild(srcRow);
       const sel = document.createElement("select");
       sel.className = "prov";
       files.forEach(name => { const o = el("option", null, name); o.value = name; sel.appendChild(o); });
@@ -2137,25 +2178,37 @@ function mergeBox(row) {
       rowSecs.appendChild(secs);
       rowSecs.appendChild(el("span", "muted", " giây (1–600)"));
       panel.appendChild(rowSecs);
-      const go = button("🎬 Ghép với chọn này",
-        "Ghép `image.png` của " + row.id + " + “" + sel.value + "” trong " + secs.value + " giây"
-          + (over ? " — bài này ĐANG có video bạn tải tay nên phải bấm HAI lần" : ""),
-        bb => {
-          if (over && bb.dataset.arm !== "1") {
-            bb.dataset.arm = "1";
-            bb.textContent = "⚠ Bấm lần nữa để ghi đè video bạn đã tải tay";
-            return;
-          }
-          bb.disabled = true;
-          const n = Number(secs.value);
-          send({ source: "b4_merge", id: row.id, audio: sel.value,
-                 seconds: (Number.isFinite(n) && n > 0) ? Math.round(n) : 0, force: over });
-        }, "act");
-      if (!files.length) { sel.disabled = true; go.disabled = true; }
+      const go = button("🎬 Ghép với chọn này", "", bb => {
+        if (over && bb.dataset.arm !== "1") {
+          bb.dataset.arm = "1";
+          bb.textContent = "⚠ Bấm lần nữa để ghi đè video hiện có";
+          return;
+        }
+        bb.disabled = true;
+        const n = Number(secs.value);
+        send({ source: "b4_merge", id: row.id, audio: sel.value,
+               seconds: (Number.isFinite(n) && n > 0) ? Math.round(n) : 0,
+               image_from: imgSel.value, force: over });
+      }, "act");
+      const syncGo = () => {
+        const srcLabel = imgSel.value === "b0"
+          ? ("ảnh B0 `refs/" + refName + "`") : "ảnh B2 `image.png`";
+        go.textContent = imgSel.value === "b0" ? "🎬 Ghép từ ảnh B0" : "🎬 Ghép với chọn này";
+        go.title = "Ghép " + srcLabel + " của " + row.id + " + “" + sel.value + "” trong "
+          + secs.value + " giây"
+          + (imgSel.value === "b0" ? " — video này mang dấu “ghép từ ảnh B0”: hàng loạt sẽ KHÔNG đè" : "")
+          + (over ? " — bài này ĐANG có video cần xác nhận nên phải bấm HAI lần" : "");
+        go.disabled = (imgSel.value === "b0" ? !hasB0 : !hasB2) || !files.length;
+      };
+      imgSel.addEventListener("change", syncGo);
+      sel.addEventListener("change", syncGo);
+      secs.addEventListener("input", syncGo);
+      syncGo();
+      if (!files.length) { sel.disabled = true; }
       panel.appendChild(go);
       box.appendChild(panel);
     }, "act");
-  if (!ready || flow) chooser.disabled = true;
+  if (!chooserOk || flow) chooser.disabled = true;
   box.appendChild(chooser);
   return box;
 }
@@ -2181,12 +2234,15 @@ function videoCard(row) {
       + "và ▶ Chạy hàng đợi (cả loạt) thì ghép B4 cho mọi bài ghép được, ngay sau B3 của bài đó.",
       "Nút GHÉP lấy: ảnh `image.png` của bài + MỘT file tiếng trong bộ sưu tập của workspace "
       + "(Cấu hình ▸ Âm thanh) + số giây đã nhập. Nhãn ngay trên nút nói đủ ba thứ đó; tiếng dài hơn "
-      + "số giây thì bị CẮT, video dựng theo đúng KHỔ ảnh B2, không cắt ảnh.",
+      + "số giây thì bị CẮT, video dựng theo đúng KHỔ ảnh nguồn, không cắt ảnh.",
       "Bài nào cũng lấy file tiếng theo id của nó, không xoay vòng: chạy lại cùng một bài ra cùng một tiếng. "
       + "Bộ sưu tập THÊM hay BỚT file thì bài có thể đổi sang file khác.",
       "Muốn bài này dùng file tiếng KHÁC hoặc số giây khác: bấm “🎧 Chọn file + giây” rồi chọn trong ô mở ra "
       + "và bấm “🎬 Ghép với chọn này”. Chọn này ghi vào story.json của bài (chỉ tên file + con số, không phải "
       + "đường dẫn) nên các lần ⚡/▶ sau của bài cũng ghép theo đúng chọn đó; bỏ chọn thì lại theo id bài.",
+      "P45a: trong ô “🎧 Chọn file + giây” có thêm dòng “Ảnh” — chọn B2 (`image.png`, mặc định) hoặc B0 "
+      + "(ảnh tham chiếu ĐẦU TIÊN trong `refs/`, đúng ảnh tab B0 đang hiện). Video ghép từ ảnh B0 mang dấu "
+      + "riêng: hàng loạt (▶) KHÔNG đè, còn nút ghép tay thì phải bấm HAI lần để ghi đè — giống video bạn tải tay.",
       "Ghép chạy bằng ffmpeg trên máy: video 60 s khổ 1024 hết ~10 giây, 30 s hết ~5 giây "
       + "(nút trên chỉ làm MỘT bài ngay tại chỗ, không chờ hàng đợi; ⚡/▶ thì xếp B4 vào đúng lượt của bài). "
       + "Bài đã có video do bạn tải tay phải bấm HAI lần để ghi đè; video do chính nút này ghép thì bấm một lần.",
@@ -2548,6 +2604,7 @@ function repaint() {
            io: MODEL.io, io_response: {}, video_response: {},  // response đã nạp rồi: vẽ lại cục bộ không được nạp lại lần hai
            video_modal_max: MODEL.video_modal_max, video_play_max: MODEL.video_play_max,
            video_chunk: MODEL.video_chunk,
+           spaces: MODEL.spaces, other_ws: MODEL.other_ws,  // P44b/P43a: giữ danh sách workspace khi vẽ lại cục bộ
            video_types: MODEL.video_types }, true);
 }
 
@@ -3826,6 +3883,8 @@ let NEWS_NOTICE = "";     // thông báo một lần (đã nhận việc / đã 
 const NEWS_DRAFT = {};    // sid -> link anh đang gõ tay (repaint 2s không xóa)
 let NEWS_CONFIRM_NEW = false;  // hộp xác nhận "Cho đăng mới" cho bài needs_review
 let NEWS_CONFIRM_IDS = [];     // đúng những bài sẽ đăng mới nếu anh xác nhận
+let NEWS_HEADED = false;       // P44c: tùy chọn hiện trình duyệt khi đăng
+function headedChecked() { return NEWS_HEADED; }
 function closeNews() {
   NEWS_OPEN = false; NEWS_TARGET_IDS = []; NEWS_CONFIRM_NEW = false; NEWS_CONFIRM_IDS = []; NEWS_NOTICE = "";
   paintNews();
@@ -4086,23 +4145,34 @@ function newsModalNode() {
       function() {
         if (!publishableIds.length) return;
         NEWS_TARGET_IDS = ids.slice();
-        send({ source: "webpub_start", site: siteSel.value, ids: publishableIds });
+        send({ source: "webpub_start", site: siteSel.value, ids: publishableIds, headed: headedChecked() });
       }, "act");
     pubBtn.disabled = !publishableIds.length;
     left.appendChild(pubBtn);
   }
 
+  // ---- P44c: tùy chọn hiện/ẩn trình duyệt khi đăng ----
+  const headedWrap = el("label", "nopt");
+  const headedChk = document.createElement("input");
+  headedChk.type = "checkbox";
+  headedChk.id = "newsheaded";
+  headedChk.checked = headedChecked();
+  headedChk.addEventListener("change", () => { NEWS_HEADED = headedChk.checked; });
+  headedWrap.appendChild(headedChk);
+  headedWrap.appendChild(el("span", null, "Hiện trình duyệt khi đăng (chậm hơn, để debug)"));
+  left.appendChild(headedWrap);
+
   // Việc sửa lỗi — cũng chỉ cho bài đang ở trong hàng đợi.
   if (!newsBusy() && counts.retry.length) {
     const rb = button("↻ Thử lại " + counts.retry.length + " lỗi",
       "Đưa các bài lỗi về ready rồi đăng lại tuần tự",
-      function() { send({ source: "webpub_retry", site: siteSel.value, ids: counts.retry }); }, "act");
+      function() { send({ source: "webpub_retry", site: siteSel.value, ids: counts.retry, headed: headedChecked() }); }, "act");
     left.appendChild(rb);
   }
   if (!newsBusy() && counts.reconcile.length) {
     const cb = button("🔎 Đối soát " + counts.reconcile.length + " bài",
       "Mở Posts, tìm lại link của bài đã Save nhưng chưa lấy được URL — KHÔNG tạo bài mới",
-      function() { send({ source: "webpub_reconcile", site: siteSel.value, ids: counts.reconcile }); }, "act");
+      function() { send({ source: "webpub_reconcile", site: siteSel.value, ids: counts.reconcile, headed: headedChecked() }); }, "act");
     left.appendChild(cb);
   }
   if (!newsBusy() && counts.reviewIds.length) {
@@ -4121,7 +4191,7 @@ function newsModalNode() {
       function() {
         const picked = NEWS_CONFIRM_IDS.slice();
         NEWS_CONFIRM_NEW = false; NEWS_CONFIRM_IDS = [];
-        send({ source: "webpub_new_post", site: siteSel.value, ids: picked });
+        send({ source: "webpub_new_post", site: siteSel.value, ids: picked, headed: headedChecked() });
       }, "act"));
     acts.appendChild(button("Hủy", "Không làm gì", function() { NEWS_CONFIRM_NEW = false; NEWS_CONFIRM_IDS = []; paintNews(); }, "act"));
     confirm.appendChild(acts);
@@ -4218,17 +4288,17 @@ function newsModalNode() {
     if (s.publish && idle) {
       acts.appendChild(button("🚀 Đăng", "Đăng riêng bài này", function() {
         NEWS_TARGET_IDS = [sid];
-        send({ source: "webpub_start", site: siteSel.value, ids: [sid] });
+        send({ source: "webpub_start", site: siteSel.value, ids: [sid], headed: headedChecked() });
       }, "nbtn"));
     }
     if (s.retry && idle) {
       acts.appendChild(button("↻ Thử lại", "Đưa bài về ready và đăng lại", function() {
-        send({ source: "webpub_retry", site: siteSel.value, ids: [sid] });
+        send({ source: "webpub_retry", site: siteSel.value, ids: [sid], headed: headedChecked() });
       }, "nbtn"));
     }
     if (s.reconcile && idle) {
       acts.appendChild(button("🔎 Đối soát", "Tìm lại link trên Posts, không tạo bài mới", function() {
-        send({ source: "webpub_reconcile", site: siteSel.value, ids: [sid] });
+        send({ source: "webpub_reconcile", site: siteSel.value, ids: [sid], headed: headedChecked() });
       }, "nbtn"));
     }
     if (s.review && idle) {
@@ -4251,7 +4321,7 @@ function newsModalNode() {
     }
     if (s.republish && idle) {
       acts.appendChild(button("↻ Đăng lại", "Tạo bài MỚI trên website — link cũ được lưu vào history", function() {
-        send({ source: "webpub_republish", id: sid, site: siteSel.value });
+        send({ source: "webpub_republish", id: sid, site: siteSel.value, headed: headedChecked() });
       }, "nbtn"));
     }
     if (acts.childNodes.length) box.appendChild(acts);
@@ -4448,6 +4518,104 @@ function syncOtherWs() {
       + " — đưa chuột vào để xem tiến độ (chỉ xem)" + (n ? " · còn " + n + " việc chờ" : "");
     b.setAttribute("aria-label", b.title);
   }
+}
+
+// ---- P44b: đổi workspace NGAY trong lưới ------------------------------------------------------
+// Trước đây chỉ có một đường: rời lưới sang Cấu hình ▸ Workspace rồi gõ/kiểm đường dẫn. Nút này
+// mở danh sách workspace ĐÃ DÙNG (mới nhất trước) để nhảy qua lại giữa các workspace đang làm.
+// Workspace mới / đường dẫn lạ vẫn phải qua Cấu hình — đây là bảng chọn nhanh, không phải chỗ khai báo.
+// Đổi workspace KHÔNG dừng việc đang chạy: runner giữ root của từng job, việc của workspace cũ chạy
+// tiếp (xem nút hover P43a), nên menu nói thẳng điều đó khi workspace đang mở còn việc.
+let WS_MENU = null;
+function spacesModel() {
+  const s = (MODEL.spaces && typeof MODEL.spaces === "object") ? MODEL.spaces : {};
+  const items = Array.isArray(s.items) ? s.items.filter(w => w && typeof w === "object" && w.path) : [];
+  return { current: String(s.current || MODEL.workspace || ""), busy: s.busy === true, items: items };
+}
+function wsBaseName(p) {
+  return String(p || "").split(/[\\\/]/).filter(Boolean).pop() || String(p || "?");
+}
+function wsCurrentName() {
+  const sp = spacesModel();
+  const me = sp.items.filter(w => w.current || String(w.path) === sp.current)[0];
+  return String((me && me.name) || wsBaseName(sp.current));
+}
+function closeWsMenu() {
+  if (!WS_MENU) return;
+  WS_MENU.remove();
+  WS_MENU = null;
+  document.removeEventListener("mousedown", onWsDocDown, true);
+  document.removeEventListener("scroll", closeWsMenu, true);
+}
+function onWsDocDown(e) {
+  if (WS_MENU && !WS_MENU.contains(e.target)) closeWsMenu();
+}
+function openWsMenu(anchor) {
+  const wasOpen = !!WS_MENU;
+  closeWsMenu();
+  if (wasOpen) return;  // bấm nút lần nữa là đóng
+  const sp = spacesModel();
+  const menu = el("div", "menu");
+  menu.id = "wsmenu";
+  menu.style.minWidth = "260px";
+  menu.appendChild(el("div", "wshead", "Workspace đang mở: " + wsCurrentName()));
+  if (sp.busy) {
+    menu.appendChild(el("div", "wsnote", "Workspace này đang có việc chạy — đổi workspace KHÔNG dừng "
+      + "việc đó: nó chạy tiếp và hiện ở nút workspace khác trên thanh."));
+  }
+  sp.items.forEach(w => {
+    const cur = w.current === true || String(w.path) === sp.current;
+    const it = menuItem(cur ? "check" : "layout", String(w.name || wsBaseName(w.path)), () => {
+      closeWsMenu();
+      if (!cur) send({ source: "ws_switch", path: String(w.path) });  // Python: stories.set_current + vẽ lại cả trang
+    });
+    it.node.dataset.wspath = String(w.path);
+    it.node.title = (cur ? "Đang mở: " : "Mở workspace này: ") + String(w.path);
+    if (cur) it.node.classList.add("on");
+    menu.appendChild(it.node);
+    if (cur) menu.appendChild(el("div", "wspath", String(w.path)));
+  });
+  if (!sp.items.length) {
+    menu.appendChild(el("div", "wsnote", "Chưa có workspace nào trong danh sách gần đây — "
+      + "thêm bằng Cấu hình ▸ Workspace."));
+  }
+  const r = anchor.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.left = Math.max(4, r.left) + "px";
+  document.body.appendChild(menu);
+  // Mở xuống dưới như menu ⋮; hết chỗ thì lật lên trên để danh sách dài vẫn đọc được.
+  const top = (r.bottom + 4 + menu.offsetHeight > innerHeight - 8)
+    ? Math.max(8, r.top - 4 - menu.offsetHeight) : (r.bottom + 4);
+  menu.style.top = top + "px";
+  WS_MENU = menu;
+  document.addEventListener("mousedown", onWsDocDown, true);
+  document.addEventListener("scroll", closeWsMenu, true);
+}
+function wsTitle() {
+  const sp = spacesModel();
+  return "Workspace đang mở: " + sp.current
+    + (sp.items.length > 1 ? " — bấm để đổi (" + (sp.items.length - 1) + " workspace khác trong danh sách gần đây)"
+                           : " — bấm để xem danh sách (chưa có workspace nào khác; thêm ở Cấu hình ▸ Workspace)");
+}
+function wsSwitchButton() {
+  const b = button("", wsTitle(), () => openWsMenu(b), "i wsbtn");
+  b.id = "wsbtn";
+  b.appendChild(iconNode("layout"));
+  const name = el("span", "wsname", wsCurrentName());
+  name.id = "wsname";
+  b.appendChild(name);
+  b.setAttribute("aria-haspopup", "menu");
+  b.setAttribute("aria-label", b.title);
+  return b;
+}
+function syncWsButton() {
+  // Chạy ở CẢ HAI nhánh vẽ: tên workspace phải đổi ngay khi vừa chuyển, kể cả lượt chỉ vá từng ô.
+  const b = document.getElementById("wsbtn");
+  if (!b) return;
+  const name = document.getElementById("wsname");
+  if (name) name.textContent = wsCurrentName();
+  b.title = wsTitle();
+  b.setAttribute("aria-label", b.title);
 }
 
 function queueButton() {
@@ -4705,6 +4873,8 @@ function updateBar() {
   if (nb) nb.disabled = !newsEnabled();
   // P43a: workspace khác vừa bắt đầu/kết thúc -> nút hiện/ẩn ngay ở nhánh vá từng ô
   syncOtherWs();
+  // P44b: tên workspace trên nút đổi ngay khi vừa chuyển
+  syncWsButton();
 }
 
 let drag = null;
@@ -4778,6 +4948,7 @@ function render(args, force) {
     news_rows: Array.isArray(args.news_rows) ? args.news_rows : [],
     codex_usage: args.codex_usage && typeof args.codex_usage === "object" ? args.codex_usage : {},
     other_ws: Array.isArray(args.other_ws) ? args.other_ws : [],
+    spaces: args.spaces && typeof args.spaces === "object" ? args.spaces : {},
   };
   if (MODEL.workspace !== wasWorkspace) { REFRESH_PENDING = null; SHOWN = PAGE_ROWS; }  // đổi workspace: không có cú bấm nào đang chờ nữa, cửa sổ vẽ về 20
   ingestResponse();  // phải nạp trước khi vẽ: modal cần thấy chữ/ảnh vừa về ngay lần render này
@@ -4814,6 +4985,7 @@ function render(args, force) {
     return;
   }
   closeMenu();  // menu ⋮ gắn ngoài cây lưới; hàng chủ của nó vừa bị vẽ lại nên để nó treo là sai
+  closeWsMenu();  // P44b: menu workspace cũng gắn ngoài cây lưới — nút vừa bị dựng lại thì đóng
 
   let tbody = null;
   let table = null;
@@ -4824,6 +4996,8 @@ function render(args, force) {
   const bar = el("div", "bar");
   // Phase-B: helper tạo separator giữa các nhóm nút
   function barSep() { return el("span", "bar-sep"); }
+  bar.appendChild(wsSwitchButton());  // P44b: đổi workspace ngay trong lưới (đứng đầu: đang mở cái gì)
+  bar.appendChild(barSep());
   bar.appendChild(searchBox());
   bar.appendChild(filterButton());  // P35a: lọc trạng thái cạnh ô tìm (P41h: hiện lại — chỉ ẩn selectbox ngoài grid)
   bar.appendChild(refreshButton());  // P21h: nút nhịp đọc folder — trước đây là st.toggle đứng NGOÀI lưới

@@ -37,17 +37,17 @@ ITEM_CANCEL = "cancelled"
 TERMINAL = (ITEM_DONE, ITEM_REVIEW, ITEM_ERROR, ITEM_SKIP, ITEM_CANCEL)
 
 
-def _default_executor(root: Path, sid: str, site: str, kind: str, on_stage) -> str:
-    """Chạy một bài bằng `web_publisher` — luôn ẩn Chromium, chỉ login mới mở cửa sổ."""
+def _default_executor(root: Path, sid: str, site: str, kind: str, on_stage, headed: bool = False) -> str:
+    """Chạy một bài bằng `web_publisher` — mặc định ẩn Chromium, chỉ login mới mở cửa sổ."""
     import web_publisher as wp
 
     if kind == "republish":
-        return wp.republish(root, sid, site=site, on_stage=on_stage)
+        return wp.republish(root, sid, site=site, on_stage=on_stage, headed=headed)
     if kind == "reconcile":
-        return wp.reconcile_auto(root, sid, site=site, on_stage=on_stage)
+        return wp.reconcile_auto(root, sid, site=site, on_stage=on_stage, headed=headed)
     if kind == "new_post":
         wp.reset_needs_review_for_new_post(root, sid, site=site)
-        return wp.publish_one(root, sid, site=site, on_stage=on_stage)
+        return wp.publish_one(root, sid, site=site, on_stage=on_stage, headed=headed)
     if kind == "retry":
         story = stories.load_story(root, sid)
         pub = dict(story.get("web_publish") or {})
@@ -55,8 +55,8 @@ def _default_executor(root: Path, sid: str, site: str, kind: str, on_stage) -> s
             # đưa về ready để publish_one không coi đây là lượt đăng dở; link vẫn trống.
             stories.update_story(root, sid, web_publish={"state": "ready", "site": site,
                                                           "at": time.time()})
-        return wp.publish_one(root, sid, site=site, on_stage=on_stage)
-    return wp.publish_one(root, sid, site=site, on_stage=on_stage)
+        return wp.publish_one(root, sid, site=site, on_stage=on_stage, headed=headed)
+    return wp.publish_one(root, sid, site=site, on_stage=on_stage, headed=headed)
 
 
 @dataclass
@@ -67,6 +67,7 @@ class Job:
     root: Path
     site: str
     kind: str
+    headed: bool = False
     started_at: float = field(default_factory=time.time)
     finished_at: float = 0.0
     cancel_requested: bool = False
@@ -95,7 +96,7 @@ class NewsRunner:
         self._login_thread: threading.Thread | None = None
 
     # ---------- grid gọi, luôn ở thread chính ----------
-    def submit(self, ids, root: Path, site: str, kind: str = "publish") -> str:
+    def submit(self, ids, root: Path, site: str, kind: str = "publish", headed: bool = False) -> str:
         """Nhận một lô đăng; trả dòng nói rõ đã nhận hay từ chối."""
         want = [str(i) for i in (ids or []) if str(i)]
         kind = kind if kind in KINDS else "publish"
@@ -113,7 +114,7 @@ class NewsRunner:
             for sid in want:
                 items[sid] = {"state": ITEM_IDLE, "stage": "Chờ tới lượt", "pct": 0,
                               "elapsed": 0.0, "started": 0.0, "url": "", "error": ""}
-            self._job = Job(ids=want, root=Path(root), site=site, kind=kind, items=items)
+            self._job = Job(ids=want, root=Path(root), site=site, kind=kind, headed=headed, items=items)
             self._message = f"Đã nhận {len(want)} bài — đăng tuần tự trên {site}."
             self._ensure_worker()
             self._cv.notify_all()
@@ -304,7 +305,7 @@ class NewsRunner:
                     item["pct"] = max(0, min(100, int(pct or 0)))
 
             try:
-                url = self.executor(job.root, sid, job.site, job.kind, on_stage) or ""
+                url = self.executor(job.root, sid, job.site, job.kind, on_stage, job.headed) or ""
                 with self._cv:
                     it = job.items[sid]
                     it.update({"state": ITEM_DONE, "stage": "Xong", "pct": 100,

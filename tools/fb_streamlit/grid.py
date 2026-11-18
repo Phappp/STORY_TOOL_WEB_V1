@@ -454,9 +454,12 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
         # P26d: ô B0 suy từ file chứ không tin chữ 'done' trong story.json — vàng thì ghi thẳng
         # LÝ DO vào ghi chú để thẻ hover và modal không phải đoán.
         b0st = ga.b0_state(ctx.root, sid, story=story)
+        # P45a: danh sách ảnh B0 đọc MỘT lần — dùng cho ghi chú B0 (khi vàng) và cho lựa chọn
+        # nguồn ảnh trong ô ghép của modal B4 (ảnh đầu tiên là ảnh sẽ vào video).
+        b0refs = stories.refs_of(ctx.root, sid)
         if b0st == stories.MISSING:
             has_cap = bool(stories.input_text(ctx.root, sid).strip())
-            has_refs = bool(stories.refs_of(ctx.root, sid))
+            has_refs = bool(b0refs)
             why = ("thiếu caption" if not has_cap else "") if has_refs else (
                 "thiếu ảnh tham chiếu" if has_cap else "thiếu caption lẫn ảnh tham chiếu")
             note = "B0 vàng vì " + why + " — bấm B0 trích lại hoặc nhập tay trong modal"
@@ -471,6 +474,7 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
         # P25b: nhãn nút 🎬 Ghép — TÍNH MỘT LẦN cho cả chữ lẫn cờ, hai thứ lệch nhau là nút hứa một
         # việc mà bấm vào sẽ bị từ chối
         aud_label, aud_ready = ga.audio_label(aud, sid, bool(summary["image"]))
+        aud_ok = ga.audio_ok(aud)  # P45a: âm thanh sẵn sàng — ô ghép B0 dùng được cả khi thiếu ảnh B2
         # P25b: "có gì để ghi đè" = folder THẬT SỰ còn file video VÀ nó do anh tải tay.
         # `video_meta` rỗng đúng khi file không còn nên dùng nó làm cờ — đừng bắt JS thuộc lại chữ
         # "thủ công" hay đoán trạng thái file; Python gate vẫn y hệt, JS chỉ hiển thị.
@@ -495,7 +499,12 @@ def rows_for(ctx: ga.Ctx) -> list[dict]:
             # P25b: chữ trên nút 🎬 Ghép + nó có chạy được thật không (nhãn nói thẳng lý do khi không)
             "b4audio": aud_label,
             "b4ready": aud_ready,
-            "b4over": bool(b4meta) and str((story.get("b4") or {}).get("method") or "") == ga.MANUAL_METHOD,
+            "b4setup": aud_ok,  # P45a: ffmpeg + bộ tiếng OK (không xét ảnh B2) — ô ghép B0 dùng cờ này
+            "b4over": bool(b4meta) and str((story.get("b4") or {}).get("method") or "")
+                      in (ga.MANUAL_METHOD, ga.B0_MERGE_METHOD),
+            # P45a: ảnh B0 dùng được cho ô ghép — tên ảnh ĐẦU TIÊN (đúng ảnh tab B0 hiện) + tổng số.
+            "b0ref": b0refs[0].name if b0refs else "",
+            "b0refs": len(b0refs),
             # P26c: chọn riêng của bài này (nếu đã ghép với chọn tay) — modal B4 hiện sẵn đúng chọn.
             "b4rec": {"audio": str((story.get("b4") or {}).get("audio") or ""),
                       "seconds": int((story.get("b4") or {}).get("audio_seconds") or 0)},
@@ -642,8 +651,41 @@ def _cancel_targets(event: dict) -> list[str]:
     return []
 
 
+def switch_workspace(ctx: ga.Ctx, path: str) -> ga.Outcome:
+    """P44b: đổi workspace ngay trong lưới — chỉ nhận đường dẫn đã có trong danh sách gần đây.
+
+    Vì sao KHÔNG dừng việc đang chạy: runner là singleton cấp process và mỗi Job mang root của
+    chính nó, nên đổi workspace chỉ đổi thứ đang NHÌN, không đổi thứ đang CHẠY. Việc của workspace
+    cũ chạy tiếp và hiện ở nút hover P43a (badge = số workspace khác đang bận).
+
+    Đường dẫn lạ (gõ tay, folder mới) vẫn phải đi qua Cấu hình ▸ Workspace: ở đây chỉ là bảng chọn
+    nhanh giữa những workspace đã dùng, không phải chỗ tạo/khai báo workspace mới.
+    """
+    raw = str(path or "").strip()
+    known = [str(w["path"]) for w in stories.recents()]
+    if not raw:
+        return ga.Outcome(lines=["Chưa chọn workspace nào để đổi."])
+    if raw == str(ctx.root):
+        return ga.Outcome(lines=[f"Đang ở workspace này rồi: {raw}"])
+    if raw not in known:
+        return ga.Outcome(lines=[f"Không đổi được workspace: `{raw}` không có trong danh sách gần đây — "
+                                 "mở Cấu hình ▸ Workspace để thêm folder này."])
+    try:
+        picked = stories.set_current(raw)
+    except (stories.WorkspaceError, OSError, ValueError) as exc:
+        return ga.Outcome(lines=[f"Không mở được workspace `{raw}`: {exc}"])
+    # Bản đọc folder đang nhớ là của workspace CŨ: giữ lại là lưới mới hiện bài của workspace cũ.
+    st.session_state.pop(PAYLOAD_KEY, None)
+    # nav -> _body gọi st.rerun(scope="app"): cả trang (sidebar, thanh trên, Cấu hình) cùng đổi theo.
+    return ga.Outcome(lines=[f"Đã mở workspace: {picked}"], nav="workspace")
+
+
 def _after(ctx: ga.Ctx, event: dict) -> ga.Outcome:
     src = str(event.get("source") or "")
+    if src == "ws_switch":  # P44b: đổi workspace ngay trong lưới (không qua Cấu hình)
+        out = switch_workspace(ctx, str(event.get("path") or ""))
+        _collect(out, event)
+        return out
     if src in IO_SOURCES:  # Import/Export có file đi kèm trong event -> xử lý ở _io, không qua dispatcher
         return _io(ctx, event)
     if src in VIDEO_SOURCES:  # P21c: mẩu video cũng mang bytes, buffer ở session chứ không ở dispatcher
@@ -940,6 +982,20 @@ def other_workspaces(snap: dict, root) -> list[dict]:
     return out
 
 
+def workspace_choices(ctx: ga.Ctx, snap: dict | None = None) -> dict:
+    """P44b: dữ liệu cho bảng chọn workspace trong lưới — chỉ workspace ĐÃ DÙNG, mới nhất trước.
+
+    Không kèm số bài: đếm bài là quét folder từng workspace, mà hàm này chạy mỗi tick 2 giây.
+    Đường dẫn gõ tay / folder mới vẫn đi qua Cấu hình ▸ Workspace.
+    `busy` là của workspace ĐANG MỞ: menu cần nói rõ đổi workspace không dừng việc đang chạy.
+    """
+    me = str(ctx.root)
+    info = ((snap or {}).get("workspaces") or {}).get(me) or {}
+    items = [{"path": str(w["path"]), "name": str(w.get("name") or Path(w["path"]).name),
+              "current": str(w["path"]) == me} for w in stories.recents()]
+    return {"current": me, "busy": bool(info.get("busy")), "items": items}
+
+
 def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict], snap: dict | None = None) -> bool:
     """Vẽ grid bằng component; trả False nếu component không dùng được.
 
@@ -992,6 +1048,8 @@ def render_component(ctx: ga.Ctx, rows: list[dict], all_rows: list[dict], snap: 
                     news_job=news.RUNNER.snapshot(),
                     # P43a: workspace khác đang chạy gì — nút hover trên thanh lưới (chỉ đọc)
                     other_ws=other_workspaces(snap or {}, ctx.root),
+                    # P44b: đổi workspace ngay trong lưới (danh sách gần đây, không quét folder)
+                    spaces=workspace_choices(ctx),
                     # P41c: hàng đợi đầy đủ (kể cả bài bị bộ lọc lưới che) — modal chỉ thao tác trên đây
                     news_rows=_news_rows(all_rows),
                     # P29a: icon usage Codex góc phải — bản CACHED CLI tự ghi, ~mươi ms/tick
